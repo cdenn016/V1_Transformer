@@ -42,6 +42,17 @@ from transformer.vfe.attention import (
     compute_kl_attention,
     compute_gauge_transport,
 )
+from transformer.vfe.non_flat import (
+    VFENonFlatConnection,
+    compute_pairwise_omega_with_delta,
+    compute_kl_attention_pairwise,
+)
+from transformer.vfe.omega_direct import (
+    compute_pairwise_omega_from_endpoints,
+    omega_natural_grad_step,
+    project_omega_to_slk,
+    _build_killing_matrix_per_block,
+)
 
 
 class VFEEStep(nn.Module):
@@ -115,6 +126,39 @@ class VFEEStep(nn.Module):
         if not isinstance(generators, torch.Tensor):
             generators = torch.from_numpy(generators).float()
         self.register_buffer('generators', generators)
+
+        # Non-flat parallel transport (opt-in). When enabled, transport
+        # becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G) per block.
+        # Init at zero ⇒ flat path bitwise-equivalent at step 0.
+        self.use_non_flat_transport = cfg.use_non_flat_transport
+        self.non_flat_tile_size = cfg.non_flat_tile_size
+        if cfg.use_non_flat_transport:
+            self.non_flat_connection = VFENonFlatConnection(
+                generators=generators,
+                irrep_dims=cfg.irrep_dims,
+                max_strength=cfg.non_flat_max_strength,
+                per_edge_delta_max=cfg.non_flat_per_edge_delta_max,
+            )
+        else:
+            self.non_flat_connection = None
+
+        # Omega-direct gauge parameterization (opt-in). When enabled, Ω per
+        # token is itself the state; the E-step updates Ω via right-invariant
+        # natural gradient on GL+(K) per block. φ is held fixed at its
+        # encode-time value.
+        self.gauge_parameterization = cfg.gauge_parameterization
+        self.omega_normalize_every = cfg.omega_normalize_every
+        self.omega_project_slk = cfg.omega_project_slk
+        if cfg.gauge_parameterization == 'omega_direct':
+            # Cache the per-block Killing/Frobenius Gram-inverse used to
+            # project the unconstrained Ω-direction back onto span(G^a). The
+            # cache is data-independent; computing it once at construction
+            # saves a small constant per E-step iteration.
+            self._omega_killing_cache = _build_killing_matrix_per_block(
+                generators, cfg.irrep_dims,
+            )
+        else:
+            self._omega_killing_cache = None
 
         # Build phi preconditioner (Killing metric or Cartan projector)
         _phi_prec = None
@@ -204,6 +248,13 @@ class VFEEStep(nn.Module):
         Returns:
             Updated BeliefState after E-step convergence.
         """
+        # Dispatch to the omega-direct iteration when the gauge state is
+        # group-level. Keeps the φ-mode loop below unchanged.
+        if self.gauge_parameterization == 'omega_direct':
+            return self._forward_omega_direct(
+                beliefs, priors, mask, active_inference_fn,
+            )
+
         mu = beliefs.mu
         sigma = beliefs.sigma
         phi = beliefs.phi
@@ -242,7 +293,10 @@ class VFEEStep(nn.Module):
         f_monotone_abs_tol = 1e-2
 
         for t in range(self.n_e_steps):
-            # 1. Compute transport and KL attention
+            # 1. Compute transport and KL attention.
+            # The "flat" cache (block_exp_pairs) is built unconditionally
+            # because both the flat path and the non-flat path need it as a
+            # pre-stage: non-flat uses it as input to compute_pairwise_omega.
             block_exp_pairs = compute_gauge_transport(
                 phi, self.generators, self.irrep_dims,
                 enforce_orthogonal=self.enforce_orthogonal,
@@ -259,10 +313,26 @@ class VFEEStep(nn.Module):
             if self.E_learnable_alpha:
                 alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
 
+            # Non-flat transport branch: precomputes pairwise (Ω_ij, Ω_ij^{-1})
+            # per block from the bilinear connection + φ-exp cache, then drives
+            # KL attention + autograd gradient computation through the pairwise
+            # tensor. Config validation guarantees we never reach here with
+            # rope_full_gauge != 'off' or diagonal_covariance == False.
+            if self.use_non_flat_transport:
+                grad_mu, grad_sigma, beta, kl_matrix, omega_pairs_nf = self._iter_nonflat(
+                    mu=mu, sigma=sigma, phi=phi,
+                    mu_p=mu_p, sigma_p=sigma_p,
+                    mask=mask,
+                    eps=eps,
+                    kappa=_kappa,
+                    alpha_eff=alpha_eff,
+                    alpha_c0_full=alpha_c0_full,
+                    block_exp_pairs=block_exp_pairs,
+                )
             # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ.
             # NOTE: vfe currently treats 'vfe_only' and 'both' identically;
             # differentiating them requires splitting this branch.
-            if (
+            elif (
                 self.rope_full_gauge != 'off'
                 and self.use_rope
                 and not torch.is_inference_mode_enabled()
@@ -534,8 +604,18 @@ class VFEEStep(nn.Module):
                 isotropic_covariance=self.isotropic_covariance,
             )
 
-            # 7. Phi update with preconditioning
-            phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, block_exp_pairs, _kappa)
+            # 7. Phi update with preconditioning.
+            # Non-flat path threads the pairwise Omega builder so autograd
+            # captures dF/dφ through both the φ-exp pair AND the φ-dependent
+            # δ pre/post multiplication. δ itself doesn't depend on φ (it's a
+            # function of μ + connection params), but the φ-exp factors flank
+            # exp(δ·G) and so the gradient w.r.t. φ runs through them.
+            if self.use_non_flat_transport:
+                phi = self._update_phi_nonflat(
+                    phi, mu, sigma, is_diagonal, mask, eps, _kappa,
+                )
+            else:
+                phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, block_exp_pairs, _kappa)
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi)
 
@@ -760,3 +840,484 @@ class VFEEStep(nn.Module):
             )
 
         return grad_mu, grad_sigma
+
+    # -- non-flat transport methods ------------------------------------------
+
+    def _iter_nonflat(
+        self,
+        mu: torch.Tensor,
+        sigma: torch.Tensor,
+        phi: torch.Tensor,
+        mu_p: torch.Tensor,
+        sigma_p: torch.Tensor,
+        mask: Optional[torch.Tensor],
+        eps: float,
+        kappa,
+        alpha_eff,
+        alpha_c0_full,
+        block_exp_pairs: list,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list]:
+        r"""One E-step iteration with non-flat transport.
+
+        Drives the autograd path through:
+            connection(μ) → δ → pairwise Ω = exp(φ·G) · exp(δ·G) · exp(-φ·G)
+                → pairwise KL → β → F.
+
+        Returns ``(grad_mu, grad_sigma, beta, kl_matrix, omega_pairs)``.
+        ``omega_pairs`` is returned for diagnostic reuse (e.g., triangle
+        holonomy probe) — it is detached from the autograd graph in the
+        caller's downstream consumers.
+        """
+        is_diagonal = sigma.dim() == 3
+        if not is_diagonal:
+            raise NotImplementedError(
+                "use_non_flat_transport=True requires diagonal_covariance=True; "
+                "this should have been rejected at config __post_init__."
+            )
+
+        # Compute β + KL for the F-monotone monitor (no autograd needed here,
+        # detached). The same KL is then recomputed inside the autograd
+        # subgraph for the (μ, σ) gradient — duplicated compute but isolates
+        # the gradient path from the monitor's bookkeeping.
+        with torch.no_grad():
+            delta_det = self.non_flat_connection(mu.detach(), mask=mask).detach()
+            omega_pairs_det = compute_pairwise_omega_with_delta(
+                phi.detach(), delta_det,
+                self.generators, self.irrep_dims,
+                cached_block_exp_pairs=block_exp_pairs,
+            )
+            beta_det, kl_det = compute_kl_attention_pairwise(
+                mu.detach(), sigma.detach(), omega_pairs_det,
+                self.irrep_dims, kappa,
+                mask=mask, mask_self_attention=self.mask_self_attention,
+                eps=1e-8,
+                use_rope=self.use_rope, rope_base=self.rope_base,
+            )
+
+        # Autograd path for dF/d(μ, σ) over the full F functional. The
+        # connection inputs μ here as a leaf so autograd captures the
+        # "δ moves with μ" contribution.
+        with torch.enable_grad():
+            mu_g = mu.detach().requires_grad_(True)
+            sigma_g = sigma.detach().requires_grad_(True)
+            phi_d = phi.detach()
+            mu_p_d = mu_p.detach()
+            sigma_p_d = sigma_p.detach()
+            _kappa_d = kappa.detach() if isinstance(kappa, torch.Tensor) else kappa
+
+            # Self-coupling α · KL(q || p), per-dim diagonal.
+            _sp = sigma_p_d.clamp(min=eps)
+            _sq = sigma_g.clamp(min=eps)
+            kl_qp_per_dim = 0.5 * (
+                _sq / _sp + (mu_g - mu_p_d) ** 2 / _sp
+                - 1.0 + _sp.log() - _sq.log()
+            )
+            if self.E_learnable_alpha:
+                alpha_in_graph = self.get_bayesian_alpha(
+                    mu_g, mu_p_d, sigma_g, sigma_p_d,
+                )
+                self_kl_term = (alpha_in_graph * kl_qp_per_dim).sum()
+            elif isinstance(alpha_eff, torch.Tensor):
+                self_kl_term = (alpha_eff.detach() * kl_qp_per_dim).sum()
+            else:
+                self_kl_term = float(alpha_eff) * kl_qp_per_dim.sum()
+
+            # Re-evaluate δ and pairwise Ω inside the graph so dF/dμ captures
+            # the connection's μ-dependence.
+            delta_g = self.non_flat_connection(mu_g, mask=mask)
+            omega_pairs_g = compute_pairwise_omega_with_delta(
+                phi_d, delta_g,
+                self.generators, self.irrep_dims,
+                cached_block_exp_pairs=block_exp_pairs,
+            )
+            beta_g, kl_g = compute_kl_attention_pairwise(
+                mu_g, sigma_g, omega_pairs_g, self.irrep_dims, _kappa_d,
+                mask=mask, mask_self_attention=self.mask_self_attention, eps=1e-8,
+                use_rope=self.use_rope, rope_base=self.rope_base,
+            )
+            beta_d_in_graph = beta_g.detach()  # envelope at softmax fixed pt
+
+            if self.include_attention_entropy:
+                alignment_term = self.lambda_align * (beta_d_in_graph * kl_g).sum()
+            else:
+                alignment_term = (
+                    self.lambda_align * (beta_g.detach() * kl_g).sum()
+                    + self.lambda_soft * (beta_g * kl_g.detach()).sum()
+                )
+
+            F_total = self_kl_term + alignment_term
+            grad_mu, grad_sigma = torch.autograd.grad(
+                F_total, [mu_g, sigma_g],
+                create_graph=False, retain_graph=False,
+            )
+
+        return grad_mu, grad_sigma, beta_det, kl_det, omega_pairs_det
+
+    def _update_phi_nonflat(
+        self,
+        phi: torch.Tensor,
+        mu: torch.Tensor,
+        sigma: torch.Tensor,
+        is_diagonal: bool,
+        mask: Optional[torch.Tensor],
+        eps: float,
+        kappa,
+    ) -> torch.Tensor:
+        r"""φ retraction step with non-flat transport.
+
+        Mirrors :meth:`_update_phi` but routes the KL functional through the
+        pairwise Omega kernel. δ is computed from detached μ — the φ-update
+        treats the connection as a function of the current belief snapshot,
+        not a moving target inside the iteration.
+        """
+        with torch.enable_grad():
+            phi_for_grad = phi.detach().requires_grad_(True)
+            _kappa = kappa if kappa is not None else self.effective_kappa
+
+            # δ from detached μ. The connection is a function of μ + params,
+            # so for the φ-update we freeze μ to isolate the dF/dφ direction.
+            with torch.no_grad():
+                delta = self.non_flat_connection(mu.detach(), mask=mask).detach()
+
+            # Pairwise Omega built from phi_for_grad (no cache forwarded —
+            # the cache was built from `phi` which is detached, and forwarding
+            # it would sever the autograd subgraph through phi_for_grad).
+            omega_pairs = compute_pairwise_omega_with_delta(
+                phi_for_grad, delta,
+                self.generators, self.irrep_dims,
+                cached_block_exp_pairs=None,
+            )
+            beta_phi, kl_h = compute_kl_attention_pairwise(
+                mu.detach(),
+                sigma.detach() if sigma is not None else None,
+                omega_pairs, self.irrep_dims, _kappa,
+                mask=mask, mask_self_attention=self.mask_self_attention, eps=1e-8,
+                use_rope=self.use_rope, rope_base=self.rope_base,
+            )
+
+            if self.include_attention_entropy:
+                beta_safe = beta_phi.clamp(min=1e-30)
+                _dim_scale = math.sqrt(max(self.embed_dim, 1))
+                _F = (
+                    (beta_phi * kl_h).sum()
+                    + _kappa * _dim_scale * (beta_safe * beta_safe.log()).sum()
+                )
+                alignment_loss = self.lambda_align * _F
+            else:
+                alignment_loss = (
+                    self.lambda_align * (beta_phi.detach() * kl_h).sum()
+                    + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
+                )
+
+            if alignment_loss.grad_fn is not None:
+                grad_phi = torch.autograd.grad(
+                    alignment_loss, phi_for_grad,
+                    create_graph=False, retain_graph=False,
+                )[0]
+                grad_phi = precondition_phi_gradient(
+                    grad_phi, phi,
+                    mode=self.phi_preconditioner_mode,
+                    preconditioner=self._phi_preconditioner,
+                    generators=self.generators,
+                )
+                phi = _retract_phi(
+                    phi, grad_phi, self.generators,
+                    step_size=self.e_phi_lr,
+                    gauge_group=self.gauge_group,
+                    project_slk=self.phi_project_slk,
+                    trace_clamp=self.phi_trace_clamp,
+                    irrep_dims=self.irrep_dims,
+                )
+
+        return phi
+
+    # -- omega-direct forward path -------------------------------------------
+
+    def _forward_omega_direct(
+        self,
+        beliefs: BeliefState,
+        priors: BeliefState,
+        mask: Optional[torch.Tensor],
+        active_inference_fn: Optional[Callable],
+    ) -> BeliefState:
+        r"""E-step inner loop with :math:`\Omega \in G` as the gauge state.
+
+        Iterates :math:`(\mu, \sigma, \Omega)` instead of :math:`(\mu, \sigma,
+        \phi)`. φ is held at its encode-time value (used only by RoPE / mass_φ
+        / diagnostics). The transport is built from the stored per-token
+        :math:`(\Omega_i, \Omega_i^{-1})` pair via
+        :func:`compute_pairwise_omega_from_endpoints`.
+
+        Update rule (per block, right-invariant Riemannian step):
+            :math:`\Omega \mapsto \Omega \cdot \exp(-\eta\, X_{\text{proj}})`,
+            :math:`X = \mathrm{proj}_{\mathrm{span}(G^a)}(\Omega^{-1} dF/d\Omega)`.
+
+        :func:`project_omega_to_slk` rescales each block to det=1 every
+        :attr:`omega_normalize_every` iterations when the flag is on (controls
+        Killing-degenerate trace drift on :math:`\mathbb{R}\cdot I \subset
+        \mathfrak{gl}(K)`).
+        """
+        if beliefs.omega is None:
+            raise RuntimeError(
+                "gauge_parameterization='omega_direct' requires "
+                "beliefs.omega to be populated. This should happen in "
+                "VFEModel.forward right after the positional BCH step. If "
+                "you're calling VFEEStep directly, build the omega pair via "
+                "transformer.vfe.omega_direct.init_omega_from_phi."
+            )
+
+        mu = beliefs.mu
+        sigma = beliefs.sigma
+        phi = beliefs.phi
+        omega = list(beliefs.omega)        # list of (Ω_h, Ω_h_inv)
+        mu_p = priors.mu
+        sigma_p = priors.sigma
+
+        is_diagonal = self.diagonal_covariance
+        eps = 1e-6
+        self._last_diagnostics = {}
+
+        if not is_diagonal:
+            # Caught at config; defensive guard.
+            raise RuntimeError(
+                "omega-direct + diagonal_covariance=False reached the runtime "
+                "but should have been blocked at __post_init__."
+            )
+
+        _kappa = self.effective_kappa
+        alpha_c0_full_hoisted: Optional[torch.Tensor] = None
+        if self.E_learnable_alpha:
+            import torch.nn.functional as F_fn
+            alpha_c0_full_hoisted = F_fn.softplus(self.raw_c0)
+
+        f_history: List[float] = []
+        f_prev: Optional[float] = None
+        f_monotone_rel_tol = 0.05
+        f_monotone_abs_tol = 1e-2
+
+        for t in range(self.n_e_steps):
+            alpha_eff = self.alpha
+            if self.E_learnable_alpha:
+                alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
+
+            # 1. Build pairwise Omega from current per-token Ω, optionally with
+            # non-flat δ. The delta dependence on μ is captured by autograd
+            # when we re-enter the graph below for the (μ, σ) gradient.
+            if self.use_non_flat_transport:
+                with torch.no_grad():
+                    delta_det = self.non_flat_connection(mu.detach(), mask=mask).detach()
+                omega_pairs_det = compute_pairwise_omega_from_endpoints(
+                    [(o.detach(), oi.detach()) for (o, oi) in omega],
+                    self.irrep_dims,
+                    delta=delta_det,
+                    generators=self.generators,
+                )
+            else:
+                omega_pairs_det = compute_pairwise_omega_from_endpoints(
+                    [(o.detach(), oi.detach()) for (o, oi) in omega],
+                    self.irrep_dims,
+                )
+
+            with torch.no_grad():
+                beta_det, kl_det = compute_kl_attention_pairwise(
+                    mu.detach(), sigma.detach(), omega_pairs_det,
+                    self.irrep_dims, _kappa,
+                    mask=mask, mask_self_attention=self.mask_self_attention,
+                    eps=1e-8,
+                )
+
+            # 2. Compute dF/dΩ + dF/dμ + dF/dσ via autograd over the pairwise-Ω F functional.
+            #    Each Ω_h is treated as a leaf; we collect gradients per block.
+            with torch.enable_grad():
+                mu_g = mu.detach().requires_grad_(True)
+                sigma_g = sigma.detach().requires_grad_(True)
+                omega_g: List[Tuple[torch.Tensor, torch.Tensor]] = []
+                grad_target_Om: List[torch.Tensor] = []
+                for o, oi in omega:
+                    o_g = o.detach().requires_grad_(True)
+                    # Pair inverse with the SAME leaf so it tracks Ω_h_new
+                    # via the matrix-exp retraction; we do NOT make the inverse
+                    # an independent leaf, since that would let it drift out of
+                    # consistency with Ω_h.
+                    omega_g.append((o_g, oi.detach()))
+                    grad_target_Om.append(o_g)
+                mu_p_d = mu_p.detach()
+                sigma_p_d = sigma_p.detach()
+                _kappa_d = _kappa.detach() if isinstance(_kappa, torch.Tensor) else _kappa
+
+                # Self-coupling α · KL(q || p) — independent of Ω.
+                _sp = sigma_p_d.clamp(min=eps)
+                _sq = sigma_g.clamp(min=eps)
+                kl_qp_per_dim = 0.5 * (
+                    _sq / _sp + (mu_g - mu_p_d) ** 2 / _sp
+                    - 1.0 + _sp.log() - _sq.log()
+                )
+                if self.E_learnable_alpha:
+                    alpha_in_graph = self.get_bayesian_alpha(
+                        mu_g, mu_p_d, sigma_g, sigma_p_d,
+                    )
+                    self_kl_term = (alpha_in_graph * kl_qp_per_dim).sum()
+                elif isinstance(alpha_eff, torch.Tensor):
+                    self_kl_term = (alpha_eff.detach() * kl_qp_per_dim).sum()
+                else:
+                    self_kl_term = float(alpha_eff) * kl_qp_per_dim.sum()
+
+                # Non-flat δ inside the graph (so dF/dμ captures it).
+                if self.use_non_flat_transport:
+                    delta_g = self.non_flat_connection(mu_g, mask=mask)
+                else:
+                    delta_g = None
+
+                pairwise_g = compute_pairwise_omega_from_endpoints(
+                    omega_g, self.irrep_dims,
+                    delta=delta_g,
+                    generators=self.generators if delta_g is not None else None,
+                )
+                beta_g, kl_g = compute_kl_attention_pairwise(
+                    mu_g, sigma_g, pairwise_g, self.irrep_dims, _kappa_d,
+                    mask=mask, mask_self_attention=self.mask_self_attention, eps=1e-8,
+                )
+                beta_d_in_graph = beta_g.detach()
+
+                if self.include_attention_entropy:
+                    alignment_term = self.lambda_align * (beta_d_in_graph * kl_g).sum()
+                else:
+                    alignment_term = (
+                        self.lambda_align * (beta_g.detach() * kl_g).sum()
+                        + self.lambda_soft * (beta_g * kl_g.detach()).sum()
+                    )
+
+                F_total = self_kl_term + alignment_term
+                grads = torch.autograd.grad(
+                    F_total, [mu_g, sigma_g, *grad_target_Om],
+                    create_graph=False, retain_graph=False,
+                    allow_unused=True,
+                )
+                grad_mu = grads[0]
+                grad_sigma = grads[1]
+                grad_omega: List[torch.Tensor] = []
+                for h, _d_h in enumerate(self.irrep_dims):
+                    g_h = grads[2 + h]
+                    if g_h is None:
+                        g_h = torch.zeros_like(omega[h][0])
+                    grad_omega.append(g_h)
+
+            # 3. F-monotone monitor (detached, scalar).
+            with torch.no_grad():
+                kl_qp_sum = 0.5 * (
+                    sigma.clamp(min=eps) / sigma_p.clamp(min=eps)
+                    + (mu - mu_p) ** 2 / sigma_p.clamp(min=eps)
+                    - 1.0
+                    + sigma_p.clamp(min=eps).log()
+                    - sigma.clamp(min=eps).log()
+                ).sum()
+                _alpha_scalar = (
+                    float(alpha_eff.detach().mean().item())
+                    if isinstance(alpha_eff, torch.Tensor)
+                    else float(alpha_eff)
+                )
+                f_align_sum = (beta_det * kl_det).sum()
+                if self.include_attention_entropy:
+                    _kappa_scalar = (
+                        float(_kappa.detach().item())
+                        if isinstance(_kappa, torch.Tensor)
+                        else float(_kappa)
+                    )
+                    _dim_scale = math.sqrt(max(self.embed_dim, 1))
+                    _beta_safe = beta_det.clamp(min=1e-30)
+                    f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
+                    f_align_total = (
+                        float(f_align_sum.item())
+                        + _kappa_scalar * _dim_scale * float(f_ent_sum.item())
+                    )
+                else:
+                    f_align_total = float(f_align_sum.item())
+                f_t = (
+                    _alpha_scalar * float(kl_qp_sum.item())
+                    + float(self.lambda_align) * f_align_total
+                )
+                f_history.append(f_t)
+                if f_prev is not None:
+                    _tol = max(f_monotone_abs_tol, f_monotone_rel_tol * abs(f_prev))
+                    if f_t > f_prev + _tol:
+                        warnings.warn(
+                            f"E-step (omega-direct) iter {t}: F increased "
+                            f"{f_prev:.6f} -> {f_t:.6f} (delta={f_t - f_prev:.2e}).",
+                            RuntimeWarning, stacklevel=2,
+                        )
+                f_prev = f_t
+
+            # 4. Active inference (callback returns Euclidean grads on μ, σ).
+            if active_inference_fn is not None:
+                ai_grad_mu, ai_grad_sigma = active_inference_fn(mu, sigma)
+                if ai_grad_mu is not None:
+                    grad_mu = grad_mu + ai_grad_mu
+                if ai_grad_sigma is not None:
+                    grad_sigma = grad_sigma + ai_grad_sigma
+
+            # 5. Natural gradient projection for (μ, σ).
+            nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
+                grad_mu, grad_sigma, sigma, eps=eps,
+            )
+
+            # Diagnostics (last iter only).
+            if t == self.n_e_steps - 1:
+                self._last_attention = beta_det
+                self._last_kl_matrix = kl_det
+                if self.track_layer_diagnostics:
+                    with torch.no_grad():
+                        # Sample (1st batch element, 1st block) of Ω for log.
+                        Om0 = omega[0][0]
+                        self._last_diagnostics = {
+                            'nat_grad_mu_norm': nat_grad_mu.norm().item(),
+                            'nat_grad_sigma_norm': nat_grad_sigma.norm().item(),
+                            'grad_mu_norm': grad_mu.norm().item(),
+                            'grad_sigma_norm': grad_sigma.norm().item(),
+                            'beta_mean': beta_det.mean().item(),
+                            'beta_std': beta_det.std().item(),
+                            'kl_mean': kl_det.mean().item(),
+                            'kl_max': kl_det.max().item(),
+                            'sigma_q_mean': sigma.mean().item(),
+                            'sigma_q_min': sigma.min().item(),
+                            'sigma_q_max': sigma.max().item(),
+                            # Group state norms (per-block first-block summary).
+                            'omega_fro_mean': Om0.norm(dim=(-2, -1)).mean().item(),
+                            'omega_fro_max': Om0.norm(dim=(-2, -1)).max().item(),
+                            'omega_det_mean': torch.linalg.det(Om0.float()).mean().item(),
+                        }
+                        if f_history:
+                            self._last_diagnostics['f_history'] = list(f_history)
+                            self._last_diagnostics['f_final'] = f_history[-1]
+
+            # 6. Mean and covariance updates.
+            mu = mu - self.e_mu_lr * nat_grad_mu
+            sigma = retract_sigma_e_step(
+                sigma_current=sigma,
+                nat_grad_sigma=nat_grad_sigma,
+                effective_lr=self.e_sigma_lr,
+                is_diagonal=is_diagonal,
+                eps=eps,
+                update_sigma=True,
+                sigma_trust=self.e_sigma_q_trust,
+                sigma_max=self.sigma_max,
+                isotropic_covariance=self.isotropic_covariance,
+            )
+
+            # 7. Omega update via right-invariant natural gradient.
+            omega = omega_natural_grad_step(
+                omega, grad_omega,
+                generators=self.generators,
+                irrep_dims=self.irrep_dims,
+                killing_cache=self._omega_killing_cache,
+                lr=self.e_phi_lr,    # reuse φ-step LR as the algebra-step LR
+            )
+
+            # 8. Periodic det renormalization (controls Killing-degenerate drift).
+            if (
+                self.omega_project_slk
+                and self.omega_normalize_every > 0
+                and (t + 1) % self.omega_normalize_every == 0
+            ):
+                omega = project_omega_to_slk(omega, self.irrep_dims)
+
+        return BeliefState(mu=mu, sigma=sigma, phi=phi, omega=omega)

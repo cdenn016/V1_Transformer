@@ -1,0 +1,718 @@
+r"""
+Non-flat parallel transport for the /vfe path.
+
+Built from scratch (no reference to ``transformer/core/connection.py``). The
+default behavior at initialization is **exactly flat**, so a fresh model with
+the feature enabled is numerically identical to one with the feature disabled.
+All gates that activate non-flatness (the learnable strength scalar, the
+per-generator bilinear forms :math:`W^a`) start at zero.
+
+# Mathematical setup
+
+Flat transport in /vfe (see :mod:`transformer.vfe.attention`):
+
+.. math::
+    \Omega_{ij}^{\text{flat}} = \exp(\phi_i \cdot G) \exp(-\phi_j \cdot G)
+
+Holonomy around any closed loop is identity. The non-flat extension introduces
+a per-edge Lie-algebra element :math:`\delta_{ij} \in R^{n_\text{gen}}` and the
+transport becomes
+
+.. math::
+    \Omega_{ij}^{\text{nf}} = \exp(\phi_i \cdot G) \exp(\delta_{ij} \cdot G) \exp(-\phi_j \cdot G)
+
+so that the triangle holonomy
+
+.. math::
+    H_{ijk} = \exp(\phi_i \cdot G) C_{ijk} \exp(-\phi_i \cdot G), \quad
+    C_{ijk} = \exp(\delta_{ij} \cdot G) \exp(\delta_{jk} \cdot G) \exp(\delta_{ki} \cdot G)
+
+is non-trivial whenever :math:`\delta_{ij} + \delta_{jk} + \delta_{ki} \neq 0`
+(to linear order in :math:`\delta`).
+
+# Parameterization
+
+:math:`\delta_{ij}^a` is a bilinear in :math:`(\mu_i, \mu_j)`. The component
+along generator :math:`G^a` is
+
+.. math::
+    \delta_{ij}^a = s \cdot \frac{1}{d_h} \cdot \mu_i^\top B^a \mu_j
+
+where:
+
+* :math:`s = s_{\max} \tanh(\rho)` is a scalar strength gate with learnable
+  pre-activation :math:`\rho`, initialized at :math:`\rho = 0` so :math:`s = 0`
+  (flat) at init.
+
+* :math:`B^a = (W^a - {W^a}^\top)/2` is the **antisymmetric** part of a
+  per-generator bilinear form :math:`W^a \in R^{K \times K}`. Antisymmetry in
+  the (i, j) indices (which here equals antisymmetry of :math:`B^a` as a matrix)
+  gives :math:`\delta_{ji} = -\delta_{ij}`, so the reverse transport
+  :math:`\Omega_{ji}^{\text{nf}}` is the algebraic inverse of
+  :math:`\Omega_{ij}^{\text{nf}}` to leading order in :math:`\delta`.
+
+* :math:`W^a` is restricted to the block where generator :math:`G^a` has
+  support (per-generator block-mask). This preserves the block-diagonal gauge
+  structure: under a tied block-diagonal gauge transformation
+  :math:`h = \mathrm{diag}(h_1, \ldots, h_H)`, the bilinear transforms as
+  :math:`h^\top W^a h` restricted to block :math:`h(a)` — within that block it's
+  the standard adjoint action, preserving the antisymmetric orbit of
+  :math:`B^a` for SO(d_h) gauges and remaining a sound approximation for
+  GL(d_h) gauges (the same approximation the rest of /vfe already makes for
+  non-orthogonal gauges; see CLAUDE.md "diagonal-of-sandwich" notes).
+
+* :math:`1/d_h` per-block scaling keeps :math:`\delta_{ij}^a` bounded as the
+  irrep dimension grows.
+
+# Robustness controls
+
+The implementation enforces two independent bounds on :math:`\delta`:
+
+1. **Global tanh gate** :math:`s = s_{\max} \tanh(\rho)`. This caps the
+   amplitude of every :math:`\delta` uniformly. At initialization :math:`\rho =
+   0` so :math:`s = 0` and the path is bitwise flat.
+
+2. **Per-edge Frobenius clamp**: :math:`\delta_{ij}` is clamped so that
+   :math:`\| \delta_{ij} \cdot G \|_F \le \delta_{\max}` at every edge after
+   the bilinear is evaluated. The legacy MLP-mode connection's failure mode was
+   exactly that the per-edge norm blew up while the global scale stayed small
+   (compensating-amplitude pathology). Both bounds are required, not redundant.
+
+# Memory
+
+The per-pair :math:`(\Omega_{ij}, \Omega_{ij}^{-1})` tensor has shape
+``(B, N, N, d_h, d_h)`` per irrep block. For the user's preset config
+(B=32, N=64, K=20 with 2 blocks of d=10) this is ~104 MB at fp32 per
+forward, ~3× that with the autograd graph for ``torch.linalg.matrix_exp``.
+Acceptable for short sequences; longer N is OOM-prone. A tile-size knob is
+exposed via :class:`VFEConfig.non_flat_tile_size` for chunked aggregation;
+``0`` means no tiling (full pairwise materialization).
+"""
+
+from __future__ import annotations
+
+import math
+from typing import List, Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class VFENonFlatConnection(nn.Module):
+    r"""Per-edge Lie-algebra connection :math:`\delta_{ij}`.
+
+    Parameters:
+
+    * ``W`` — bilinear form, shape ``(n_gen, K, K)``. Used antisymmetrized as
+      ``(W - W^T)/2`` at every forward. Initialized at zero (flat). The block
+      mask ``register_buffer('W_block_mask', ...)`` zeros out entries outside
+      generator :math:`a`'s support block.
+
+    * ``raw_strength`` — scalar pre-activation for the global gate
+      :math:`s = s_{\max} \tanh(\rho)`. Initialized at zero so the entire
+      delta vanishes at init.
+
+    Args:
+        generators: ``(n_gen, K, K)`` Lie algebra generators.
+        irrep_dims: List of per-block dimensions (matches
+            :attr:`VFEConfig.irrep_dims`).
+        max_strength: :math:`s_{\max}`, upper bound on the global gate.
+        per_edge_delta_max: Per-edge clamp :math:`\delta_{\max}` on
+            :math:`\| \delta_{ij} \cdot G \|_F`.
+
+    Forward computes ``(B, N, N, n_gen)`` delta tensor. Constructed lazily —
+    pre-allocating ``(B, N, N, n_gen)`` for every E-step iteration would peak
+    memory unnecessarily; the bilinear is evaluated in-place each call.
+    """
+
+    def __init__(
+        self,
+        generators: torch.Tensor,
+        irrep_dims: List[int],
+        max_strength: float = 1.0,
+        per_edge_delta_max: float = 1.0,
+    ) -> None:
+        super().__init__()
+
+        if not isinstance(generators, torch.Tensor):
+            generators = torch.from_numpy(generators).float()
+        n_gen, K, _ = generators.shape
+        self.n_gen = n_gen
+        self.K = K
+        self.irrep_dims = list(irrep_dims)
+        self.max_strength = float(max_strength)
+        self.per_edge_delta_max = float(per_edge_delta_max)
+
+        # Build a per-generator block mask. Generator a is identified with the
+        # smallest block containing all of its non-zero entries. For
+        # well-formed block-diagonal generators (the /vfe convention) this is
+        # a single contiguous block. The mask is a binary (n_gen, K, K) buffer
+        # that zeros out W^a entries outside generator a's support block. We
+        # build it from generator support, not from a hardcoded mapping, so
+        # any future generator layout still works without touching this code.
+        with torch.no_grad():
+            block_mask = torch.zeros_like(generators)
+            block_starts = []
+            cursor = 0
+            for d_h in irrep_dims:
+                block_starts.append((cursor, cursor + d_h))
+                cursor += d_h
+            for a in range(n_gen):
+                G_a = generators[a]
+                # Identify smallest block containing G_a's support.
+                nz_rows = (G_a.abs().sum(dim=-1) > 1e-12).nonzero(as_tuple=True)[0]
+                nz_cols = (G_a.abs().sum(dim=-2) > 1e-12).nonzero(as_tuple=True)[0]
+                if nz_rows.numel() == 0:
+                    continue  # zero generator — leave mask zero
+                row_lo, row_hi = int(nz_rows.min()), int(nz_rows.max()) + 1
+                col_lo, col_hi = int(nz_cols.min()), int(nz_cols.max()) + 1
+                # Find the irrep block that covers this support.
+                chosen = None
+                for (bs, be) in block_starts:
+                    if bs <= row_lo and row_hi <= be and bs <= col_lo and col_hi <= be:
+                        chosen = (bs, be)
+                        break
+                if chosen is None:
+                    # Generator spans multiple blocks (e.g., off-block-diagonal
+                    # mixing). Mask remains zero — δ_ij^a will then evaluate
+                    # to zero for this generator. This is safer than silently
+                    # allowing a non-block-respecting bilinear: an off-block
+                    # generator is not consistent with /vfe's block-diagonal
+                    # gauge structure and should be a no-op until designed for.
+                    continue
+                bs, be = chosen
+                block_mask[a, bs:be, bs:be] = 1.0
+        self.register_buffer('W_block_mask', block_mask)
+
+        # Per-generator irrep dim — for the 1/d_h scaling.
+        # d_h_per_gen[a] is the dim of the block containing generator a; 1 if
+        # the generator has empty support (degenerate).
+        with torch.no_grad():
+            d_h_per_gen = torch.ones(n_gen, dtype=generators.dtype)
+            for a in range(n_gen):
+                mask_a = block_mask[a]
+                if mask_a.sum() > 0:
+                    # Block size = sqrt(nonzero entries in mask).
+                    d_h_per_gen[a] = float(int(mask_a.sum().sqrt().round().item()))
+            inv_d_h = 1.0 / d_h_per_gen.clamp(min=1.0)
+        self.register_buffer('inv_d_h_per_gen', inv_d_h)  # (n_gen,)
+
+        # Generators buffer (frozen).
+        self.register_buffer('generators', generators)
+
+        # W: bilinear forms. Init zero ⇒ δ ≡ 0 ⇒ flat path at step 0.
+        self.W_raw = nn.Parameter(torch.zeros(n_gen, K, K))
+
+        # Strength gate ρ. tanh(0) = 0 ⇒ s = 0 ⇒ δ ≡ 0 even if W learns
+        # non-zero. Two-stage safety: a fresh model with the feature on emits
+        # the flat path exactly; the optimizer has to move BOTH ρ and W away
+        # from zero to introduce non-flatness.
+        self.raw_strength = nn.Parameter(torch.zeros(()))
+
+        # Precompute per-generator Frobenius norm of G_a, used for the
+        # per-edge clamp ‖δ_ij · G‖_F ≤ δ_max.
+        # ‖δ_ij · G‖_F² = δ_ij[a] · δ_ij[b] · <G_a, G_b>_F. To avoid materializing
+        # the full Gram matrix at every call, we use the diagonal upper bound
+        # ‖δ · G‖_F² ≤ Σ_a |δ[a]|² · ‖G_a‖_F²  (Cauchy–Schwarz). Conservative
+        # but cheap and never under-clamps. Tighter bound (full Gram) is
+        # available behind a config knob if profiling shows real over-clamping.
+        with torch.no_grad():
+            g_fro_sq = (generators ** 2).sum(dim=(-2, -1)).clamp(min=1e-12)  # (n_gen,)
+        self.register_buffer('g_fro_sq', g_fro_sq)
+
+    # -- properties -----------------------------------------------------------
+
+    @property
+    def strength(self) -> torch.Tensor:
+        r"""Current scalar gate :math:`s = s_{\max} \tanh(\rho) \in (-s_{\max}, s_{\max})`."""
+        return self.max_strength * torch.tanh(self.raw_strength)
+
+    def W(self) -> torch.Tensor:
+        r"""Antisymmetric, block-masked bilinear forms ``(n_gen, K, K)``.
+
+        Computed at every call so :class:`torch.optim` sees gradients flowing
+        through the antisymmetrization + masking. Both are linear operations,
+        so no autograd subtlety.
+        """
+        # Block mask first (zeros out cross-block entries), then antisymmetrize.
+        # The order doesn't matter mathematically — both are linear and the
+        # block mask preserves the (transpose ↔ matrix) action within blocks.
+        W_masked = self.W_raw * self.W_block_mask
+        return 0.5 * (W_masked - W_masked.transpose(-1, -2))
+
+    # -- forward --------------------------------------------------------------
+
+    def forward(
+        self,
+        mu: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        r"""Compute :math:`\delta_{ij}^a` for every (i, j, a).
+
+        Args:
+            mu: ``(B, N, K)`` belief means. **Not detached** — autograd flows
+                through the bilinear, which is the correct behavior: when the
+                E-step inner loop updates :math:`\mu`, the connection updates
+                with it (the Plan agent's "δ moves with μ for free" property).
+            mask: ``(B, N, N)`` causal mask (0 = masked). Used only to zero
+                out masked edges so the per-edge clamp doesn't observe noise
+                from positions that won't contribute to attention anyway.
+
+        Returns:
+            ``delta``: ``(B, N, N, n_gen)``. Antisymmetric in the (i, j) axes
+            up to numerical precision: ``delta[b, i, j, a] = -delta[b, j, i, a]``.
+        """
+        # Bilinear: δ_raw[b, i, j, a] = μ_i^T B^a μ_j, B^a = (W^a)_antisym
+        # einsum over the (K, K) bilinear axes; n_gen index is preserved.
+        # B has shape (n_gen, K, K), μ has (B, N, K).
+        B_anti = self.W()  # (n_gen, K, K)
+        delta_raw = torch.einsum('bik,akl,bjl->bija', mu, B_anti, mu)
+
+        # Per-generator 1/d_h scaling and global strength gate.
+        delta = delta_raw * self.inv_d_h_per_gen.view(1, 1, 1, -1)
+        delta = self.strength * delta
+
+        # Per-edge Frobenius clamp on ‖δ_ij · G‖_F.
+        # Upper bound (Cauchy–Schwarz on the Lie-algebra norm):
+        #   ‖δ · G‖_F² ≤ Σ_a |δ_a|² · ‖G_a‖_F²
+        # Compute this bound and rescale per-edge if it exceeds δ_max².
+        # Use the bound rather than the exact norm to avoid materializing the
+        # generator Gram matrix. Conservative ⇒ never over-clamps.
+        with torch.no_grad():
+            fro_bound_sq = (delta ** 2 * self.g_fro_sq.view(1, 1, 1, -1)).sum(dim=-1)
+            # (B, N, N). 0 means the edge currently has δ = 0; no rescale needed.
+            scale = torch.ones_like(fro_bound_sq)
+            over = fro_bound_sq > self.per_edge_delta_max ** 2
+            if over.any():
+                scale = torch.where(
+                    over,
+                    self.per_edge_delta_max / fro_bound_sq.clamp(min=1e-30).sqrt(),
+                    scale,
+                )
+        # scale is detached (no_grad); applied multiplicatively. Treating it as
+        # a constant w.r.t. autograd matches the standard gradient-clip pattern.
+        delta = delta * scale.unsqueeze(-1)
+
+        # Mask: zero out masked edges. They wouldn't appear in attention anyway
+        # (the softmax masks them), but zeroing keeps the per-pair Omega tensor
+        # tidy and downstream diagnostics meaningful.
+        if mask is not None:
+            delta = delta * mask.unsqueeze(-1)
+
+        return delta
+
+
+# -----------------------------------------------------------------------------
+# Pairwise Omega construction
+# -----------------------------------------------------------------------------
+
+
+def compute_pairwise_omega_with_delta(
+    phi: torch.Tensor,
+    delta: torch.Tensor,
+    generators: torch.Tensor,
+    irrep_dims: List[int],
+    cached_block_exp_pairs: Optional[List[Tuple[torch.Tensor, Optional[torch.Tensor]]]] = None,
+) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    r"""Build per-block pairwise Omega and its inverse from :math:`\phi` and
+    :math:`\delta`.
+
+    For each irrep block :math:`h`:
+
+    .. math::
+        \Omega^{(h)}_{ij} = \exp(\phi_i \cdot G^{(h)}) \exp(\delta_{ij} \cdot G^{(h)}) \exp(-\phi_j \cdot G^{(h)})
+
+    .. math::
+        \Omega^{(h)-1}_{ij} = \exp(\phi_j \cdot G^{(h)}) \exp(-\delta_{ij} \cdot G^{(h)}) \exp(-\phi_i \cdot G^{(h)})
+
+    The inverse is computed via three additional matrix exponentials, not via
+    an explicit ``torch.linalg.inv`` — same FLOP cost, no condition-number
+    worry, matches the legacy ``(exp_h, exp_neg_h)`` pair contract.
+
+    Args:
+        phi: ``(B, N, n_gen)`` gauge frame coordinates.
+        delta: ``(B, N, N, n_gen)`` non-flat connection.
+        generators: ``(n_gen, K, K)`` Lie algebra generators.
+        irrep_dims: Block dimensions.
+        cached_block_exp_pairs: Optional precomputed ``(exp(φ·G^(h)), exp(-φ·G^(h)))``
+            pairs from :func:`transformer.vfe.attention.compute_gauge_transport`.
+            If provided and ``phi`` is the same tensor that was used to build it,
+            we reuse it; otherwise we rebuild. Caller is responsible for the
+            ``phi`` ↔ cache identity (see :mod:`transformer.vfe.e_step`'s phi
+            update path for the cache-discipline rationale).
+
+    Returns:
+        List of length ``len(irrep_dims)``. Each element is a pair
+        ``(Omega_h, Omega_inv_h)`` with shape ``(B, N, N, d_h, d_h)``.
+    """
+    from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
+
+    if cached_block_exp_pairs is not None:
+        phi_pairs = cached_block_exp_pairs
+    else:
+        # skew_symmetric=None ⇒ detect from generators; cheap once. The /vfe
+        # attention helper already implements this and caches by generator id.
+        phi_pairs = fused_block_matrix_exp_pairs(
+            phi, generators, irrep_dims,
+            enforce_orthogonal=False, skew_symmetric=None,
+        )
+
+    out = []
+    block_start = 0
+    for h, d_h in enumerate(irrep_dims):
+        block_end = block_start + d_h
+        # Generators restricted to block h.
+        G_h = generators[:, block_start:block_end, block_start:block_end]  # (n_gen, d_h, d_h)
+
+        # algebra_ij[b, i, j, k, l] = sum_a delta[b, i, j, a] * G_h[a, k, l]
+        algebra = torch.einsum('bija,akl->bijkl', delta, G_h)
+
+        # exp(δ_ij · G^(h)) — autograd through matrix_exp is supported as of
+        # PyTorch 1.7. Float32 path; AMP off for stability (matrix_exp is
+        # sensitive to overflow at fp16).
+        with torch.amp.autocast('cuda', enabled=False):
+            exp_delta = torch.linalg.matrix_exp(algebra.float())             # (B, N, N, d_h, d_h)
+            exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())        # (B, N, N, d_h, d_h)
+
+        exp_phi_h = phi_pairs[h][0].to(exp_delta.dtype)            # (B, N, d_h, d_h)
+        exp_neg_phi_h = phi_pairs[h][1].to(exp_delta.dtype) if phi_pairs[h][1] is not None else None
+
+        if exp_neg_phi_h is None:
+            # Skew-symmetric generators (SO(N)): the cache only stores exp(+φ·G);
+            # the inverse is exp(-φ·G) = exp(+φ·G)^T because G is antisymmetric
+            # and exp of antisymmetric is orthogonal. We compute the transpose
+            # in a way that's autograd-friendly.
+            exp_neg_phi_h = exp_phi_h.transpose(-1, -2)
+
+        # Omega_ij = exp_phi_i @ exp_delta_ij @ exp_neg_phi_j
+        # exp_phi_h has shape (B, N, d, d). Insert a new j-axis: (B, N, 1, d, d).
+        # exp_neg_phi_h same: (B, 1, N, d, d).
+        Omega = (
+            exp_phi_h.unsqueeze(2)
+            @ exp_delta
+            @ exp_neg_phi_h.unsqueeze(1)
+        )  # (B, N, N, d_h, d_h)
+
+        # Omega_inv_ij = exp_phi_j @ exp_neg_delta_ij @ exp_neg_phi_i
+        Omega_inv = (
+            exp_phi_h.unsqueeze(1)            # (B, 1, N, d, d)
+            @ exp_neg_delta
+            @ exp_neg_phi_h.unsqueeze(2)      # (B, N, 1, d, d)
+        )  # (B, N, N, d_h, d_h)
+
+        out.append((Omega, Omega_inv))
+        block_start = block_end
+    return out
+
+
+# -----------------------------------------------------------------------------
+# KL attention with pairwise Omega
+# -----------------------------------------------------------------------------
+
+
+def compute_kl_attention_pairwise(
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    omega_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+    irrep_dims: List[int],
+    kappa,
+    mask: Optional[torch.Tensor] = None,
+    mask_self_attention: bool = True,
+    eps: float = 1e-8,
+    use_rope: bool = False,
+    rope_base: float = 10000.0,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""Compute KL-attention weights from per-pair Omega tensors.
+
+    Computes :math:`\beta_{ij} = \mathrm{softmax}_j\bigl(-D_{ij}/\kappa\bigr)` where
+    :math:`D_{ij} = \sum_h \mathrm{KL}\bigl(q_i^{(h)} \,\|\, \Omega^{(h)}_{ij} \cdot q_j^{(h)}\bigr)`
+    summed over irrep blocks. The KL between diagonal-Σ source and full-Σ
+    target uses the **diagonal-of-sandwich** approximation that the rest of
+    /vfe already commits to when ``exact_diagonal_transport=False``.
+
+    Args:
+        mu: ``(B, N, K)`` belief means.
+        sigma: ``(B, N, K)`` diagonal variances. Full-cov is NOT supported in
+            this entry point — non-flat + full-cov needs a logdet-aware
+            per-pair KL that's deferred until/unless someone needs it.
+        omega_pairs: Output of :func:`compute_pairwise_omega_with_delta`.
+        irrep_dims: Per-block dimensions.
+        kappa: Attention temperature (scalar or 0-dim tensor).
+        mask: ``(B, N, N)`` causal mask (0 = mask out).
+        mask_self_attention: When True, zeros the diagonal of β. Mirrors
+            :func:`transformer.vfe.attention.compute_kl_attention`.
+        eps: Variance clamp floor.
+
+    Returns:
+        ``(beta, kl_matrix)``: both ``(B, N, N)``.
+    """
+    if sigma.dim() != 3:
+        raise NotImplementedError(
+            "compute_kl_attention_pairwise currently supports only diagonal "
+            "covariance (sigma.dim()==3). Full-cov non-flat attention needs a "
+            "per-pair logdet path; not yet wired."
+        )
+
+    # RoPE — apply to mu BEFORE the KL is built so non-flat matches the
+    # baseline flat path at delta=0. Σ is untouched per
+    # rope_full_gauge='off' (validated at VFEConfig.__post_init__ when
+    # use_non_flat_transport is True).
+    if use_rope:
+        from transformer.core.transport_ops import _apply_rope
+        mu = _apply_rope(mu, base=rope_base)
+
+    B, N, K = mu.shape
+    kl_total = torch.zeros(B, N, N, device=mu.device, dtype=mu.dtype)
+    block_start = 0
+
+    for h, d_h in enumerate(irrep_dims):
+        block_end = block_start + d_h
+        Omega_h, _ = omega_pairs[h]   # (B, N, N, d_h, d_h)
+        mu_h = mu[..., block_start:block_end]            # (B, N, d_h)
+        sigma_h = sigma[..., block_start:block_end].clamp(min=eps)  # (B, N, d_h)
+
+        # μ_target_ij[b, i, j, k] = Σ_l Omega_ij[b, i, j, k, l] · μ_j[b, j, l]
+        mu_target = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)  # (B, N, N, d_h)
+
+        # σ_target_ij[b, i, j, k] = Σ_l Omega_ij[b, i, j, k, l]² · σ_j[b, j, l]
+        # (diagonal-of-sandwich approx)
+        sigma_target = torch.einsum(
+            'bijkl,bjl->bijk', Omega_h ** 2, sigma_h,
+        ).clamp(min=eps)
+
+        # KL(N(μ_i, diag σ_i) || N(μ_target, diag σ_target)) summed over k.
+        sigma_i = sigma_h.unsqueeze(2)                  # (B, N, 1, d_h)
+        mu_i = mu_h.unsqueeze(2)                        # (B, N, 1, d_h)
+        diff = mu_i - mu_target                         # (B, N, N, d_h)
+        trace_term = sigma_i / sigma_target             # (B, N, N, d_h)
+        mahal_term = diff ** 2 / sigma_target           # (B, N, N, d_h)
+        logdet_term = sigma_target.log() - sigma_i.log()  # (B, N, N, d_h)
+        kl_h = 0.5 * (trace_term + mahal_term - 1.0 + logdet_term).sum(dim=-1)
+        # (B, N, N)
+        kl_total = kl_total + kl_h
+        block_start = block_end
+
+    # Effective temperature: τ = κ · √K. Matches the canonical F functional
+    # (see CLAUDE.md and the manuscript's free-energy form). The compute path
+    # in /vfe's compute_attention_weights also bakes in this √K factor when it
+    # calls into the core kernel; we replicate it here.
+    if isinstance(kappa, torch.Tensor):
+        tau = kappa * math.sqrt(max(K, 1))
+    else:
+        tau = float(kappa) * math.sqrt(max(K, 1))
+
+    logits = -kl_total / tau                            # (B, N, N)
+
+    # Mask handling mirrors transformer/core/attention.py:compute_attention_weights
+    # so that row-i=0 + causal mask + mask_self_attention does NOT zero out the
+    # one valid target (j=0) — the flat-path keeps the self-attention escape
+    # hatch when no other target is available, and we follow that convention.
+    if mask is not None:
+        logits = logits.masked_fill(mask == 0, float('-inf'))
+
+    if mask_self_attention:
+        diag_idx = torch.arange(N, device=logits.device)
+        # A row "has other targets" if MORE than one of its positions is finite
+        # (i.e. it could attend to something other than itself after the causal
+        # mask). Only those rows get their diagonal -inf'd. Without this guard,
+        # row 0 of a causally-masked sequence would become all -inf and the
+        # softmax produces NaN.
+        has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1   # (B, N)
+        diag_vals = logits[:, diag_idx, diag_idx]
+        masked_diag_vals = torch.where(
+            has_other_targets,
+            torch.full_like(diag_vals, float('-inf')),
+            diag_vals,
+        )
+        logits[:, diag_idx, diag_idx] = masked_diag_vals
+
+    beta = F.softmax(logits, dim=-1)
+    # Clamp only non-masked positions to ε for numerical stability, preserving
+    # exact zeros at masked positions (causal mask).
+    masked_positions = (logits == float('-inf'))
+    beta = torch.where(masked_positions, beta, beta.clamp(min=eps))
+    beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=eps)
+    beta = beta / beta_sum
+    return beta, kl_total
+
+
+# -----------------------------------------------------------------------------
+# Aggregation with pairwise Omega
+# -----------------------------------------------------------------------------
+
+
+def aggregate_beliefs_pairwise(
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    beta: torch.Tensor,
+    omega_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+    irrep_dims: List[int],
+    mode: str = 'mixture',
+    tile_size: int = 0,
+    eps: float = 1e-6,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""Aggregate transported beliefs using pairwise Omega.
+
+    Same semantics as :func:`transformer.vfe.attention.aggregate_beliefs` but
+    consumes per-pair Omega tensors:
+
+    .. math::
+        \bar{\mu}_i^{(h)} = \sum_j \beta_{ij} \Omega^{(h)}_{ij} \mu_j^{(h)}
+
+    .. math::
+        \bar{\Sigma}_i^{(h)} = \begin{cases}
+            \sum_j \beta_{ij} \bigl[\mathrm{diag}(\Omega \Sigma_j \Omega^\top)
+                + (\Omega \mu_j - \bar{\mu})^2 \bigr]  & \text{mixture}\\[4pt]
+            \bigl[\sum_j \beta_{ij} \mathrm{diag}(\Omega \Sigma_j \Omega^\top)^{-1}\bigr]^{-1}
+                                                       & \text{precision}
+        \end{cases}
+
+    Args:
+        mu: ``(B, N, K)``.
+        sigma: ``(B, N, K)`` diagonal.
+        beta: ``(B, N, N)`` attention weights from
+            :func:`compute_kl_attention_pairwise`.
+        omega_pairs: ``[(Omega_h, Omega_inv_h)] × len(irrep_dims)``.
+        irrep_dims: Per-block dims.
+        mode: ``'mixture'`` or ``'precision'``.
+        tile_size: If positive, aggregate over the j-axis in chunks of this
+            many positions. Reduces peak memory at the cost of a Python loop.
+            Default 0 (no tiling).
+        eps: Variance floor.
+
+    Returns:
+        ``(mu_agg, sigma_agg)``, both ``(B, N, K)``.
+    """
+    if sigma.dim() != 3:
+        raise NotImplementedError(
+            "aggregate_beliefs_pairwise: full-cov path not wired yet; use "
+            "diagonal sigma or fall back to flat aggregate_beliefs."
+        )
+
+    B, N, K = mu.shape
+    mu_parts = []
+    sigma_parts = []
+    block_start = 0
+
+    for h, d_h in enumerate(irrep_dims):
+        block_end = block_start + d_h
+        Omega_h, _ = omega_pairs[h]   # (B, N, N, d_h, d_h)
+        mu_h = mu[..., block_start:block_end]
+        sigma_h = sigma[..., block_start:block_end].clamp(min=eps)
+
+        if tile_size <= 0:
+            # Full pairwise aggregation.
+            transported_mu = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)
+            transported_sigma = torch.einsum('bijkl,bjl->bijk', Omega_h ** 2, sigma_h)
+            mu_agg_h = torch.einsum('bij,bijd->bid', beta, transported_mu)
+
+            if mode == 'precision':
+                precision_ij = 1.0 / transported_sigma.clamp(min=eps)
+                precision_agg = torch.einsum('bij,bijd->bid', beta, precision_ij)
+                sigma_agg_h = 1.0 / precision_agg.clamp(min=eps)
+            else:
+                sigma_within = torch.einsum('bij,bijd->bid', beta, transported_sigma)
+                mu_dev = transported_mu - mu_agg_h.unsqueeze(2)
+                sigma_between = torch.einsum('bij,bijd->bid', beta, mu_dev ** 2)
+                sigma_agg_h = (sigma_within + sigma_between).clamp(min=eps)
+        else:
+            # Tiled j-axis aggregation: streams j in chunks of `tile_size`.
+            # Peak memory in the bottleneck (the (B, N, N, d_h, d_h) Omega)
+            # is unaffected here because Omega is already materialized by the
+            # caller, but the (B, N, N, d_h) per-tile message stays small,
+            # which matters when `mode='mixture'` would otherwise allocate
+            # mu_dev² at full (B, N, N, d_h). For real memory savings the
+            # *caller* should build Omega tile-by-tile too — exposed but not
+            # the primary win yet.
+            mu_agg_h = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype)
+            sigma_within = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype)
+            precision_acc = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype) if mode == 'precision' else None
+            # First pass: accumulate mean and (mode-specific) within-component term.
+            for jstart in range(0, N, tile_size):
+                jend = min(jstart + tile_size, N)
+                Om = Omega_h[:, :, jstart:jend]                       # (B, N, t, d_h, d_h)
+                mu_j = mu_h[:, jstart:jend]                           # (B, t, d_h)
+                sigma_j = sigma_h[:, jstart:jend]                     # (B, t, d_h)
+                trans_mu_t = torch.einsum('bijkl,bjl->bijk', Om, mu_j)
+                trans_sigma_t = torch.einsum('bijkl,bjl->bijk', Om ** 2, sigma_j)
+                beta_t = beta[:, :, jstart:jend]                      # (B, N, t)
+                mu_agg_h = mu_agg_h + torch.einsum('bij,bijd->bid', beta_t, trans_mu_t)
+                if mode == 'precision':
+                    precision_acc = precision_acc + torch.einsum(
+                        'bij,bijd->bid', beta_t, 1.0 / trans_sigma_t.clamp(min=eps)
+                    )
+                else:
+                    sigma_within = sigma_within + torch.einsum('bij,bijd->bid', beta_t, trans_sigma_t)
+            # Second pass for mixture mode: between-component variance.
+            if mode == 'precision':
+                sigma_agg_h = 1.0 / precision_acc.clamp(min=eps)
+            else:
+                sigma_between = torch.zeros_like(sigma_within)
+                for jstart in range(0, N, tile_size):
+                    jend = min(jstart + tile_size, N)
+                    Om = Omega_h[:, :, jstart:jend]
+                    mu_j = mu_h[:, jstart:jend]
+                    trans_mu_t = torch.einsum('bijkl,bjl->bijk', Om, mu_j)
+                    mu_dev_t = trans_mu_t - mu_agg_h.unsqueeze(2)
+                    beta_t = beta[:, :, jstart:jend]
+                    sigma_between = sigma_between + torch.einsum(
+                        'bij,bijd->bid', beta_t, mu_dev_t ** 2,
+                    )
+                sigma_agg_h = (sigma_within + sigma_between).clamp(min=eps)
+
+        mu_parts.append(mu_agg_h)
+        sigma_parts.append(sigma_agg_h)
+        block_start = block_end
+
+    return torch.cat(mu_parts, dim=-1), torch.cat(sigma_parts, dim=-1)
+
+
+# -----------------------------------------------------------------------------
+# Diagnostics
+# -----------------------------------------------------------------------------
+
+
+def triangle_holonomy_norm(
+    omega_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+    irrep_dims: List[int],
+    n_samples: int = 32,
+    eps: float = 1e-12,
+) -> float:
+    r"""Empirical proxy for the per-block triangle holonomy magnitude.
+
+    For random index triples :math:`(i, j, k)`, computes the deviation
+    :math:`\| \Omega_{ij} \Omega_{jk} \Omega_{ki} - I \|_F` per block,
+    averaged across samples and blocks. Returns 0 (up to numerical noise)
+    for flat transport.
+
+    Useful as a sanity-check diagnostic: assert this is ~0 when the strength
+    gate is at init, and grows as the connection learns.
+
+    Args:
+        omega_pairs: From :func:`compute_pairwise_omega_with_delta`.
+        irrep_dims: Per-block dims.
+        n_samples: Number of random triples to average.
+        eps: Variance floor (unused but kept for signature uniformity).
+
+    Returns:
+        Scalar float — the mean Frobenius-norm holonomy across blocks/samples.
+    """
+    total = 0.0
+    n_blocks = len(irrep_dims)
+    for h, d_h in enumerate(irrep_dims):
+        Omega_h, _ = omega_pairs[h]
+        B_, N_, _, _, _ = Omega_h.shape
+        # Sample random triples (i, j, k) per batch.
+        idx_i = torch.randint(0, N_, (n_samples,), device=Omega_h.device)
+        idx_j = torch.randint(0, N_, (n_samples,), device=Omega_h.device)
+        idx_k = torch.randint(0, N_, (n_samples,), device=Omega_h.device)
+        # Take first batch element (cheap diagnostic; batch loop unnecessary).
+        Om_ij = Omega_h[0, idx_i, idx_j]    # (n_samples, d_h, d_h)
+        Om_jk = Omega_h[0, idx_j, idx_k]
+        Om_ki = Omega_h[0, idx_k, idx_i]
+        prod = Om_ij @ Om_jk @ Om_ki
+        eye = torch.eye(d_h, device=Omega_h.device, dtype=prod.dtype).unsqueeze(0)
+        dev = (prod - eye).reshape(n_samples, -1).norm(dim=-1).mean()
+        total += float(dev.item())
+    return total / max(n_blocks, 1)
