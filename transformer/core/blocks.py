@@ -593,6 +593,19 @@ class GaugeTransformerBlock(nn.Module):
         self.ffn._rope_full_gauge_vfe = _rope_mode
         self.attention.rope_full_gauge_mode = _rope_mode
 
+        # Optional block-level gauge-equivariant mixer (post-FFN, pre-residual).
+        # Same Schur-commutant math as IrrepMultiHeadAttention's in-attention
+        # mixer; different insertion point. Available when skip_attention=True.
+        self.block_mixer = None
+        if getattr(cfg, 'use_block_equivariant_mixer', False):
+            from transformer.core.block_equivariant_mixer import BlockEquivariantMixer
+            self.block_mixer = BlockEquivariantMixer(
+                irrep_spec=cfg.irrep_spec,
+                embed_dim=cfg.embed_dim,
+                diagonal_covariance=cfg.diagonal_covariance,
+                gauge_group=gauge_group,
+            )
+
         # Active inference / EFE plumbing — delegated to active_inference.py.
         # Sets the 13 _ai_* instance attributes and initialises _prior_bank_ref.
         # The PriorBank reference itself is wired in later by the model via
@@ -991,6 +1004,13 @@ class GaugeTransformerBlock(nn.Module):
             cocycle_relaxation=self.cocycle_relaxation,
             precomputed_block_exp_pairs=_shared_bep,
         )
+
+        # Block-level gauge-equivariant mixer (post-FFN, pre-residual). Applies
+        # M = ⊕_t kron(A_t, I_{d_t}) symmetrically to (μ_ffn, σ_ffn). Lies in
+        # the Schur commutant of the gauge action — equivariant under tied
+        # gauges within each irrep type. See block_equivariant_mixer.py.
+        if self.block_mixer is not None:
+            mu_ffn, sigma_ffn = self.block_mixer(mu_ffn, sigma_ffn)
 
         # Update covariances from FFN if evolving.
         # Delta extraction (analogous to mu residual at line 516):
