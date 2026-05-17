@@ -92,6 +92,21 @@ class BlockConfig:
                                               # applied symmetrically to μ and Σ
                                               # (Σ → M·Σ·Mᵀ). Preserves gauge
                                               # equivariance by Schur's lemma.
+
+    use_block_equivariant_mixer: bool = False  # Same Schur-commutant mixer math as
+                                               # use_equivariant_head_mixer, but
+                                               # applied post-FFN (inside
+                                               # GaugeTransformerBlock.forward,
+                                               # before the residual) rather than
+                                               # post-attention-concat. Available
+                                               # when skip_attention=True (the
+                                               # attention-side mixer is bypassed
+                                               # in that case). Mutually exclusive
+                                               # with use_equivariant_head_mixer
+                                               # and use_output_projection — both
+                                               # are different insertion points
+                                               # for the same K→K mixing
+                                               # operation.
                                               
     # === 3. E-STEP DYNAMICS (belief evolution) ===
     E_learnable_lr: bool =     True    # Learn step size η for variational descent
@@ -350,6 +365,31 @@ class BlockConfig:
                 "use_equivariant_head_mixer for the Schur-commutant principled "
                 "replacement."
             )
+        # use_block_equivariant_mixer is a different insertion point for the
+        # same Schur-commutant operation as use_equivariant_head_mixer.
+        # Setting both stacks the same mixing operation twice — almost
+        # certainly user error. Fail fast.
+        if self.use_block_equivariant_mixer and self.use_equivariant_head_mixer:
+            raise ValueError(
+                "use_block_equivariant_mixer=True and use_equivariant_head_mixer=True "
+                "are mutually exclusive: both apply the same Schur-commutant mixer, "
+                "differing only in location (post-FFN vs post-attention-concat). "
+                "Choose one — use_block_equivariant_mixer when skip_attention=True "
+                "or when you want the mixing to occur after the VFE E-step; "
+                "use_equivariant_head_mixer when the attention sublayer is active "
+                "and head-concat-side mixing is intended."
+            )
+        # use_output_projection is the gauge-breaking K→K linear that
+        # use_block_equivariant_mixer is the principled replacement for —
+        # setting both reproduces the silent-dead-weight pattern we explicitly
+        # rejected above for the attention-side pair.
+        if self.use_block_equivariant_mixer and self.use_output_projection:
+            raise ValueError(
+                "use_block_equivariant_mixer=True and use_output_projection=True "
+                "are mutually exclusive: W_O breaks gauge equivariance "
+                "(K→K linear on μ only, ignores Σ and the gauge action) and the "
+                "block mixer is the principled commutant replacement. Choose one."
+            )
 
     # The old 5-flag system (amortized_inference / amortize_sigma /
     # exact_phi_grad / em_phi_mode / implicit_em) is fully internalized.
@@ -506,6 +546,7 @@ class BlockConfig:
             mask_self_attention=config.get('mask_self_attention', True),
             use_output_projection=config.get('use_output_projection', False),
             use_equivariant_head_mixer=config.get('use_equivariant_head_mixer', False),
+            use_block_equivariant_mixer=config.get('use_block_equivariant_mixer', False),
             # Belief evolution
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
