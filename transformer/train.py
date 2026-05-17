@@ -33,6 +33,11 @@ from transformer.core.attention import compute_attention_weights
 # =============================================================================
 # Gaussian KL Divergence (Proper Implementation)
 # =============================================================================
+# NOTE: parallel implementation of `transformer.core.kl_computation._kl_kernel_*`.
+# The canonical version (with Rényi-alpha, SPD eigfloor, Cholesky stability) is
+# in `transformer.core.kl_computation.compute_kl_matrix`. This local version is
+# tied to the legacy `train.py` loss-composition contract; any numerical drift
+# between the two should be resolved in favour of `kl_computation`.
 
 def gaussian_kl_divergence(
     mu_q: torch.Tensor,      # (B, N, K)

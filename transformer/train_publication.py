@@ -232,9 +232,9 @@ EM_CONFIG = {
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.12,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
-    'M_phi_lr':                   0.0025,    # M-step gauge frame embeddings (φ) 0.002
+    'M_mu_p_lr':                  0.1,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':               0.025,     # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_phi_lr':                   0.002,    # M-step gauge frame embeddings (φ) 0.002
     
     # === M-step Other LR's (AdamW parameter groups) ===
     'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
