@@ -253,7 +253,6 @@ class FastTrainer:
                 pad_token_id=self.pad_token_id,
                 mass_phi=getattr(self.config, 'mass_phi', 0.05),
                 omega_det_penalty=getattr(self.config, 'omega_det_penalty', 0.0),
-                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
                 normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
                 ce_label_smoothing=getattr(self.config, 'ce_label_smoothing', 0.0),
@@ -532,37 +531,6 @@ class FastTrainer:
         if self.scaler.is_enabled():
             checkpoint['scaler_state_dict'] = self.scaler.state_dict()
 
-        # Implicit-EM state: the per-block VFE FFN stores the last E-step
-        # fixed-point quantities (alpha_i, beta_for_implicit, IFT mu/sigma
-        # scales) as transient attributes, not as registered buffers.  On
-        # resume, forward() will re-populate them, but the optimizer momentum
-        # restored from this checkpoint was accumulated against the PRE-save
-        # E-step state.  Mixing restored momentum with a freshly-computed
-        # IFT scale creates a state mismatch, so we save the per-block
-        # state here and restore it in load_checkpoint below.
-        _ffn_state = []
-        if hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'blocks'):
-            for _block in self.model.transformer.blocks:
-                _ffn = getattr(_block, 'ffn', None)
-                if _ffn is None:
-                    _ffn_state.append(None)
-                    continue
-                _entry = {
-                    '_last_alpha_i': getattr(_ffn, '_last_alpha_i', None),
-                    '_last_beta_for_implicit': getattr(_ffn, '_last_beta_for_implicit', None),
-                    '_last_implicit_mu_scale': getattr(_ffn, '_last_implicit_mu_scale', None),
-                    '_last_implicit_sigma_scale': getattr(_ffn, '_last_implicit_sigma_scale', None),
-                    '_last_omega': getattr(_ffn, '_last_omega', None),
-                }
-                # Detach + CPU move to keep checkpoint loadable on CPU-only
-                # environments and to avoid saving any autograd graph.
-                _entry = {
-                    k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
-                    for k, v in _entry.items()
-                }
-                _ffn_state.append(_entry)
-        checkpoint['_ffn_implicit_em_state'] = _ffn_state
-
         if is_best:
             path = self.config.checkpoint_dir / 'best_model.pt'
             print(f"  💾 Saving best model: {path}\n")
@@ -627,36 +595,6 @@ class FastTrainer:
                 self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
             except Exception as e:
                 print(f"  Warning: Could not restore scaler state: {e}")
-
-        # Restore per-block implicit-EM state (see save_checkpoint for
-        # rationale).  Only applies to checkpoints saved after the fix;
-        # older checkpoints silently skip this restore and rely on the next
-        # forward pass to re-populate the _last_* attributes.
-        _ffn_state = checkpoint.get('_ffn_implicit_em_state', None)
-        if (_ffn_state is not None
-                and hasattr(self.model, 'transformer')
-                and hasattr(self.model.transformer, 'blocks')):
-            try:
-                _blocks = self.model.transformer.blocks
-                if len(_ffn_state) != len(_blocks):
-                    print(
-                        f"  Warning: checkpoint has {len(_ffn_state)} block "
-                        f"states but model has {len(_blocks)} blocks; "
-                        f"skipping implicit-EM state restore."
-                    )
-                else:
-                    for _block, _entry in zip(_blocks, _ffn_state):
-                        if _entry is None:
-                            continue
-                        _ffn = getattr(_block, 'ffn', None)
-                        if _ffn is None:
-                            continue
-                        for _k, _v in _entry.items():
-                            if isinstance(_v, torch.Tensor):
-                                _v = _v.to(self.device)
-                            setattr(_ffn, _k, _v)
-            except Exception as e:
-                print(f"  Warning: Could not restore implicit-EM FFN state: {e}")
 
         print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 

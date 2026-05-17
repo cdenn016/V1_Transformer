@@ -63,7 +63,6 @@ from pathlib import Path
 # Primary modes:
 #   'standard'   - Dot-product attention + MLP baseline (backprop)
 #   'em'         - Gauge VFE + IFT implicit differentiation M-step (backprop)
-#   'em' + amortized_inference=True  - Gauge VFE + straight-through gradient (no E/M separation)
 #   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
 #   'pure_vfe'   - Pure natural gradient E/M (no autograd)
 #   'hybrid'
@@ -143,14 +142,13 @@ EM_CONFIG = {
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
-    'hierarchical_priors':        True,
     
     'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
   
 
     'kappa_beta':                 1,
-    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
+    'kappa_warmup_steps':         2000,  # freeze kappa for first n steps
     'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
     'include_attention_entropy':  True,
     
@@ -184,6 +182,7 @@ EM_CONFIG = {
 
     'use_layernorm':              True,  #breaks gauge equivariance unless mahal
     'use_residual':               False,  #set False if skip-attention=True
+    
     'use_output_projection':      True,
     'use_equivariant_head_mixer': False,  # Opt-in principled replacement for W_o
     
@@ -212,7 +211,7 @@ EM_CONFIG = {
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
-    'E_lambda_belief':            15,    # E-step belief alignment weight
+    'E_lambda_belief':            9,    # E-step belief alignment weight
     'E_lambda_softmax':           0,
        
     # === E-step Learning Rates ===
@@ -233,9 +232,9 @@ EM_CONFIG = {
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.05,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':               0.025,     # M-step prior covariance embeddings (log σ_p) 0.015
-    'M_phi_lr':                   0.0036,    # M-step gauge frame embeddings (φ) 0.0075
+    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_phi_lr':                   0.003,    # M-step gauge frame embeddings (φ) 0.0075
     
     # === M-step Other LR's (AdamW parameter groups) ===
     'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
@@ -307,8 +306,8 @@ EM_CONFIG = {
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     
     # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     False,
-    'track_iteration_diagnostics': False,
+    'track_layer_diagnostics':     True,
+    'track_iteration_diagnostics': True,
     'diagnostics_interval':        25,
     
     
@@ -318,9 +317,6 @@ EM_CONFIG = {
     'debug_vfe_grads':             False,
     'verbose_diagnostics':         False,
     
-    # === Multi-layer depth signal ===
-    'aux_layer_loss':              True,   # Enable for multi-layer: per-layer M-step CE loss
-    'aux_loss_weight':             0.3,     # Weight for auxiliary per-layer CE losses
 
     # === Regularization ===
     'sigma_ce_scale':              0.7,
@@ -838,10 +834,6 @@ def main():
                         ],
                         help='Training mode: standard, em, amortized, hebbian, pure_vfe')
 
-    # Legacy alias for backwards compatibility
-    parser.add_argument('--ffn_mode', type=str, default=None,
-                        choices=['VFE_dynamic', 'standard'],
-                        help='DEPRECATED: Use --mode instead')
     # System
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--checkpoint_dir', type=str,
@@ -857,12 +849,6 @@ def main():
                         help='Run gauge frame semantic analysis every N steps (0 to disable)')
 
     args = parser.parse_args()
-
-    # Handle legacy --ffn_mode argument
-    if args.ffn_mode is not None:
-        print("WARNING: --ffn_mode is deprecated. Use --mode instead.")
-        # Map legacy names to current mode names
-        args.mode = 'em' if args.ffn_mode == 'VFE_dynamic' else args.ffn_mode
 
     # Set random seed for reproducibility
     seed = args.seed if args.seed is not None else SEED

@@ -135,9 +135,6 @@ class TrainingConfig:
     normalize_ce_by_dim: bool = True  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
     ce_label_smoothing: float = 0.0   # Label smoothing on CE loss only; ce_loss_raw stays un-smoothed for PPL
 
-    # Multi-layer depth signal
-    aux_layer_loss: bool =   False     # Per-layer auxiliary CE loss
-    aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
     
     # ==========================================================================
     # Training Loop

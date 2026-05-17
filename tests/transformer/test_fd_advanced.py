@@ -3,10 +3,9 @@ Advanced Finite-Difference Tests (Phase 6 Audit)
 =================================================
 
 Tests for mathematical correctness of:
-1. Implicit-EM IFT scale factors (compute_implicit_em_scales)
-2. DEQ Neumann backward (linear contraction test)
-3. Sandwich product derivative ∂(Ω·Σ·Ω^T)/∂φ
-4. Connection MLP gauge equivariance (negative test)
+1. DEQ Neumann backward (linear contraction test)
+2. Sandwich product derivative ∂(Ω·Σ·Ω^T)/∂φ
+3. Connection MLP gauge equivariance (negative test)
 
 All FD tests use float64 central differences with eps=1e-5.
 """
@@ -18,151 +17,7 @@ import torch
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Implicit-EM IFT Scale Factors
-# ---------------------------------------------------------------------------
-
-class TestImplicitEMScales:
-    """Verify compute_implicit_em_scales formula correctness."""
-
-    def test_mu_scale_formula(self):
-        r"""Verify s_k^{(μ)} = (α/σ_p) / (α/σ_p + Σ_j β_ij/σ_qj)."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        torch.manual_seed(42)
-        B, N, K = 2, 4, 5
-        alpha_i = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        sigma_p = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        sigma_q = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        # Random attention weights summing to ~1 per row
-        beta_raw = torch.rand(B, N, N, dtype=torch.float64)
-        beta = beta_raw / beta_raw.sum(dim=-1, keepdim=True)
-
-        mu_scale, sigma_scale = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta, sigma_q
-        )
-
-        # Manual computation of mu scale
-        prior_prec = alpha_i / sigma_p  # (B, N, K)
-        inv_sq = 1.0 / sigma_q  # (B, N, K)
-        attn_prec = torch.einsum('bij,bjk->bik', beta, inv_sq)  # (B, N, K)
-        expected_mu_scale = prior_prec / (prior_prec + attn_prec)
-
-        assert torch.allclose(mu_scale, expected_mu_scale, atol=1e-10), \
-            f"mu_scale mismatch: max err {(mu_scale - expected_mu_scale).abs().max():.2e}"
-
-    def test_sigma_scale_formula(self):
-        r"""Verify s_k^{(σ)} = (α/σ_p²) / (α/σ_p² + Σ_j β_ij/σ_qj²)."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        torch.manual_seed(43)
-        B, N, K = 2, 3, 4
-        alpha_i = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        sigma_p = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        sigma_q = torch.rand(B, N, K, dtype=torch.float64) * 2.0 + 0.1
-        beta_raw = torch.rand(B, N, N, dtype=torch.float64)
-        beta = beta_raw / beta_raw.sum(dim=-1, keepdim=True)
-
-        _, sigma_scale = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta, sigma_q
-        )
-
-        # Manual computation
-        prior_prec_sq = alpha_i / (sigma_p ** 2)
-        inv_sq_sq = 1.0 / (sigma_q ** 2)
-        attn_prec_sq = torch.einsum('bij,bjk->bik', beta, inv_sq_sq)
-        expected = prior_prec_sq / (prior_prec_sq + attn_prec_sq)
-
-        assert torch.allclose(sigma_scale, expected, atol=1e-10), \
-            f"sigma_scale mismatch: max err {(sigma_scale - expected).abs().max():.2e}"
-
-    def test_boundary_no_attention(self):
-        """When β→0, scale should approach 1 (straight-through)."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        B, N, K = 1, 3, 4
-        alpha_i = torch.ones(B, N, K, dtype=torch.float64)
-        sigma_p = torch.ones(B, N, K, dtype=torch.float64)
-        sigma_q = torch.ones(B, N, K, dtype=torch.float64)
-        beta = torch.zeros(B, N, N, dtype=torch.float64)  # No attention
-
-        mu_scale, sigma_scale = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta, sigma_q
-        )
-
-        assert torch.allclose(mu_scale, torch.ones_like(mu_scale), atol=1e-5), \
-            "mu_scale should be ~1 when beta=0"
-        assert torch.allclose(sigma_scale, torch.ones_like(sigma_scale), atol=1e-5), \
-            "sigma_scale should be ~1 when beta=0"
-
-    def test_boundary_no_prior(self):
-        """When α→0, scale should approach 0 (pure EM)."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        B, N, K = 1, 3, 4
-        alpha_i = torch.full((B, N, K), 1e-10, dtype=torch.float64)
-        sigma_p = torch.ones(B, N, K, dtype=torch.float64)
-        sigma_q = torch.ones(B, N, K, dtype=torch.float64)
-        beta = torch.ones(B, N, N, dtype=torch.float64) / N
-
-        mu_scale, sigma_scale = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta, sigma_q
-        )
-
-        assert (mu_scale < 1e-5).all(), \
-            f"mu_scale should be ~0 when alpha→0, got max {mu_scale.max():.2e}"
-        assert (sigma_scale < 1e-5).all(), \
-            f"sigma_scale should be ~0 when alpha→0, got max {sigma_scale.max():.2e}"
-
-    def test_scales_in_unit_interval(self):
-        """Scales must be in [0, 1] for all random inputs."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        torch.manual_seed(44)
-        for _ in range(5):
-            B, N, K = 2, 5, 6
-            alpha_i = torch.rand(B, N, K, dtype=torch.float64) * 5.0 + 0.01
-            sigma_p = torch.rand(B, N, K, dtype=torch.float64) * 3.0 + 0.01
-            sigma_q = torch.rand(B, N, K, dtype=torch.float64) * 3.0 + 0.01
-            beta_raw = torch.rand(B, N, N, dtype=torch.float64)
-            beta = beta_raw / beta_raw.sum(dim=-1, keepdim=True)
-
-            mu_scale, sigma_scale = compute_implicit_em_scales(
-                alpha_i, sigma_p, beta, sigma_q
-            )
-
-            assert (mu_scale >= -1e-7).all() and (mu_scale <= 1.0 + 1e-7).all(), \
-                f"mu_scale out of [0,1]: [{mu_scale.min():.4f}, {mu_scale.max():.4f}]"
-            assert (sigma_scale >= -1e-7).all() and (sigma_scale <= 1.0 + 1e-7).all(), \
-                f"sigma_scale out of [0,1]: [{sigma_scale.min():.4f}, {sigma_scale.max():.4f}]"
-
-    def test_multihead_beta(self):
-        """Test with 4D beta (B, H, N, N) — should average over heads."""
-        from transformer.core.vfe_implicit_em import compute_implicit_em_scales
-
-        torch.manual_seed(45)
-        B, H, N, K = 1, 4, 3, 5
-        alpha_i = torch.ones(B, N, K, dtype=torch.float64)
-        sigma_p = torch.ones(B, N, K, dtype=torch.float64) * 2.0
-        sigma_q = torch.ones(B, N, K, dtype=torch.float64)
-        beta_4d = torch.rand(B, H, N, N, dtype=torch.float64)
-        beta_4d = beta_4d / beta_4d.sum(dim=-1, keepdim=True)
-
-        mu_scale, sigma_scale = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta_4d, sigma_q
-        )
-
-        # Verify it internally averages heads
-        beta_2d = beta_4d.mean(dim=1)
-        mu_scale_2d, sigma_scale_2d = compute_implicit_em_scales(
-            alpha_i, sigma_p, beta_2d, sigma_q
-        )
-
-        assert torch.allclose(mu_scale, mu_scale_2d, atol=1e-10), \
-            "Multihead beta should be averaged before computing scales"
-
-
-# ---------------------------------------------------------------------------
-# Test 2: DEQ Neumann Backward (Linear Contraction)
+# Test 1: DEQ Neumann Backward (Linear Contraction)
 # ---------------------------------------------------------------------------
 
 class TestDEQNeumannBackward:
@@ -254,7 +109,7 @@ class TestDEQNeumannBackward:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Sandwich Product Derivative ∂(Ω·Σ·Ω^T)/∂φ
+# Test 2: Sandwich Product Derivative ∂(Ω·Σ·Ω^T)/∂φ
 # ---------------------------------------------------------------------------
 
 class TestSandwichProductDerivative:
@@ -388,7 +243,7 @@ class TestSandwichProductDerivative:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Connection Gauge Equivariance
+# Test 3: Connection Gauge Equivariance
 # ---------------------------------------------------------------------------
 
 class TestConnectionGaugeEquivariance:
@@ -515,7 +370,7 @@ class TestConnectionGaugeEquivariance:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Fiber Trajectory Oscillation Detection
+# Test 4: Fiber Trajectory Oscillation Detection
 # ---------------------------------------------------------------------------
 
 class TestFitConvergenceRate:
@@ -560,7 +415,7 @@ class TestFitConvergenceRate:
 
 
 # ---------------------------------------------------------------------------
-# Test 6: Fisher-Rao Geodesic Distance
+# Test 5: Fisher-Rao Geodesic Distance
 # ---------------------------------------------------------------------------
 
 class TestFisherRaoDistance:
@@ -659,7 +514,7 @@ class TestFisherRaoDistance:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Rényi α-divergence Alignment Gradient
+# Test 6: Rényi α-divergence Alignment Gradient
 # ---------------------------------------------------------------------------
 
 class TestRenyiAlignmentGradient:

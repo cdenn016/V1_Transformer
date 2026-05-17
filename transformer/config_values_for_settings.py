@@ -28,9 +28,8 @@ em_phi_p_CONFIG = {
     'irrep_spec':       [('fund', 2, 10)],
 
     'use_prior_bank':             False,
-    'gauge_fixed_priors':         False,    
-    'hierarchical_priors':        True,
-    
+    'gauge_fixed_priors':         False,
+
     'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
   
@@ -190,9 +189,6 @@ em_phi_p_CONFIG = {
     'debug_vfe_grads':             False,
     'verbose_diagnostics':         False,
     
-    # === Multi-layer depth signal ===
-    'aux_layer_loss':              False,   # Enable for multi-layer: per-layer M-step CE loss
-    'aux_loss_weight':             0.3,     # Weight for auxiliary per-layer CE losses
 
     # === Regularization ===
     'sigma_ce_scale':              0.7,

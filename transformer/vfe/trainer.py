@@ -540,7 +540,7 @@ class VFETrainer:
             return
 
         # VFE decomposed loss components (belief_align, self_consistency,
-        # model_coupling, aux_layer_ce) are not recovered in this training
+        # model_coupling) are not recovered in this training
         # path — the VFE objective is minimized implicitly via the E-step
         # inner loop, so those columns are omitted rather than logged as
         # misleading zeros.

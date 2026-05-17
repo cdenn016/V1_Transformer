@@ -16,7 +16,7 @@ See CLAUDE.md for the em_mode table and semantics.
 
 
 EM_MODE_TABLE = {
-    'ift_phi':  dict(amortized_inference=True, amortize_sigma=True,  exact_phi_grad=True,  implicit_em=False, em_phi_mode='amortized'),
-    'em_phi_q': dict(amortized_inference=True, amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='E_phi_q'),
-    'em_phi_p': dict(amortized_inference=True, amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='M_phi_p'),
+    'ift_phi':  dict(amortized_inference=True, amortize_sigma=True,  exact_phi_grad=True,  em_phi_mode='amortized'),
+    'em_phi_q': dict(amortized_inference=True, amortize_sigma=False, exact_phi_grad=False, em_phi_mode='E_phi_q'),
+    'em_phi_p': dict(amortized_inference=True, amortize_sigma=False, exact_phi_grad=False, em_phi_mode='M_phi_p'),
 }

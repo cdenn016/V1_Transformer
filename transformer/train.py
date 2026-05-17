@@ -269,7 +269,6 @@ def compute_free_energy_loss(
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     omega_det_penalty: float = 0.0,  # λ · mean_{i,h}(log|det Ω_{i,h}|)² regularizer (gauge_param='omega' only)
-    aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior
     include_attention_entropy: bool = True,  # Add κ·Σβ·log(β/π) to F (manuscript eq:free_energy_functional_final). (grad through softmax)
     normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
@@ -329,9 +328,7 @@ def compute_free_energy_loss(
     # Forward pass with attention weights and KL matrices
     # =================================================================
     # The E-step does not see target tokens — CE below is the outer M-step
-    # observation likelihood term of the free energy. `targets=` here is only
-    # forwarded for the outer auxiliary per-layer CE loss (aux_layer_loss),
-    # which is computed after the E-step and never enters the belief inference.
+    # observation likelihood term of the free energy.
     logits, attn_info = model.forward_with_attention(token_ids, targets=targets)
 
     beta = attn_info['beta']    # (n_layers, B, n_heads, N, N)
@@ -465,8 +462,8 @@ def compute_free_energy_loss(
         # Detach E-step covariances: backprop through the E-step sigma evolution
         # produces NaN from numerically unstable second derivatives (matrix_exp
         # backward through Omega @ Sigma @ Omega.T). Sigma learning is handled by
-        # the E-step dynamics and ImplicitEMGradient — same EM principle as beta/gamma.
-        # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
+        # the E-step dynamics — same EM principle as beta/gamma.
+        # mu_q keeps gradient (flows through the IFT-scaled path to mu_embed).
         sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
         # sigma_p kept LIVE: the M-step KL(q||p) is the correct gradient source
         # for sigma_p when M_alpha > 0. The positive feedback concern (smaller σ_p →
@@ -598,19 +595,6 @@ def compute_free_energy_loss(
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 7. Auxiliary Per-Layer CE Loss (M-step task signal for non-final layers)
-    # =================================================================
-    # Computed AFTER each non-final layer's E-step on its output μ. Enters
-    # through standard backprop (M-step), NOT through the E-step. Gives
-    # non-final layers a task-relevant gradient signal for feature composition.
-    aux_losses = attn_info.get('aux_losses', [])
-    if aux_losses and aux_loss_weight > 0:
-        aux_layer_ce = sum(aux_losses) / len(aux_losses)
-        aux_loss = aux_loss_weight * aux_layer_ce
-    else:
-        aux_loss = torch.tensor(0.0, device=ce_loss.device)
-
-    # =================================================================
     # 8. Holonomy Penalty: λ_H · E[‖C_ijk − I‖²_F]
     # =================================================================
     # Non-flat transport regulariser.  When any block has non_flat_transport
@@ -674,7 +658,7 @@ def compute_free_energy_loss(
     # =================================================================
     total_loss = (ce_loss + belief_align_loss + belief_entropy_loss + self_consistency_loss
                   + model_align_loss + hyper_prior_loss + gauge_prior_loss
-                  + aux_loss + holonomy_loss + omega_det_loss)
+                  + holonomy_loss + omega_det_loss)
 
     # Compute attention metrics outside the computation graph
     # When skip_attention=True, beta/kl from the attention sublayer are None.
@@ -689,12 +673,9 @@ def compute_free_energy_loss(
             _vfe_beta = None
             if hasattr(model, 'transformer'):
                 last_ffn = model.transformer.blocks[-1].ffn
-                _vfe_beta = getattr(last_ffn, '_last_beta_for_implicit', None)
-                if _vfe_beta is None:
-                    # Try beta_history from last forward
-                    _bh = getattr(last_ffn, '_last_beta_history', None)
-                    if _bh and len(_bh) > 0:
-                        _vfe_beta = _bh[-1]
+                _bh = getattr(last_ffn, '_last_beta_history', None)
+                if _bh and len(_bh) > 0:
+                    _vfe_beta = _bh[-1]
             if _vfe_beta is not None:
                 beta_avg = _vfe_beta.mean(dim=1) if _vfe_beta.dim() == 4 else _vfe_beta
                 _beta_mean = _vfe_beta.mean().item()
@@ -720,7 +701,6 @@ def compute_free_energy_loss(
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
         'loss/gauge_prior': gauge_prior_loss.item() if mass_phi > 0 else 0.0,
-        'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
         'loss/holonomy': holonomy_loss.item() if isinstance(holonomy_loss, torch.Tensor) else float(holonomy_loss),
         'loss/omega_det': omega_det_loss.item() if omega_det_penalty > 0 else 0.0,
         'attention/beta_mean': _beta_mean,
