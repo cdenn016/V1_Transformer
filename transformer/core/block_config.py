@@ -267,6 +267,25 @@ class BlockConfig:
                 UserWarning,
                 stacklevel=2,
             )
+        # use_equivariant_head_mixer requires the attention sublayer to run —
+        # the mixer lives inside IrrepMultiHeadAttention.forward (attention.py:2018).
+        # With skip_attention=True the attention forward is bypassed
+        # (blocks.py:774), so mixer_params get allocated, registered in the
+        # state_dict, counted as trainable, but never receive gradient. We
+        # force-disable the flag at block construction (blocks.py:501 reads
+        # the flag through a `not self.skip_attention` guard) and warn here so
+        # the user can correct their config.
+        if getattr(self, 'skip_attention', False) and self.use_equivariant_head_mixer:
+            import warnings as _warnings
+            _warnings.warn(
+                "use_equivariant_head_mixer=True combined with skip_attention=True "
+                "has no effect: the mixer lives inside IrrepMultiHeadAttention.forward, "
+                "which is bypassed when skip_attention=True. mixer_params will be "
+                "force-disabled at block construction. Set use_equivariant_head_mixer=False "
+                "to silence this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
         # Constant/trivial gauge: phi is not used for transport
         if self.gauge_mode in ('constant', 'trivial'):
             self.evolve_phi = False
@@ -314,6 +333,22 @@ class BlockConfig:
                 f"after the closed-form fixed point; without closed-form, "
                 f"this field is silently ignored). Either set "
                 f"closed_form_e_step=True or set n_picard_steps=0."
+            )
+        # use_output_projection and use_equivariant_head_mixer are mutually
+        # exclusive: IrrepMultiHeadAttention.forward dispatches W_O over the
+        # mixer when both are set (attention.py:2016-2022), leaving the
+        # commutant mixer's mixer_params as dead state_dict weight. Fail fast
+        # on the same "allocated but silently ignored" principle the
+        # n_picard_steps check above enforces.
+        if self.use_output_projection and self.use_equivariant_head_mixer:
+            raise ValueError(
+                "use_output_projection=True and use_equivariant_head_mixer=True "
+                "are mutually exclusive: IrrepMultiHeadAttention.forward dispatches "
+                "to W_O when both are set, leaving the commutant mixer's "
+                "mixer_params as dead state_dict weight. Choose one — "
+                "use_output_projection for the legacy W_O linear mixer, or "
+                "use_equivariant_head_mixer for the Schur-commutant principled "
+                "replacement."
             )
 
     # The old 5-flag system (amortized_inference / amortize_sigma /
