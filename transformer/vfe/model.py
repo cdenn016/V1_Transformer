@@ -17,6 +17,7 @@ import torch.nn.functional as F
 
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, RMSNorm
+from transformer.vfe.block import _resolve_vfe_norm
 from transformer.vfe.config import VFEConfig
 from transformer.vfe.prior_bank import VFEPriorBank
 from transformer.vfe.positional import VFEPositionalEncoding
@@ -64,18 +65,13 @@ class VFEModel(nn.Module):
         )
         self.stack = VFEStack(cfg, generators)
 
-        # Final normalization (applied after last layer, before decode)
-        if cfg.norm_type == 'mahalnorm':
-            self.final_norm = MahalanobisNorm(cfg.embed_dim)
-        elif cfg.norm_type == 'rmsnorm':
-            self.final_norm = RMSNorm(cfg.embed_dim)
-        elif cfg.norm_type == 'none':
-            self.final_norm = None
-        else:
-            raise ValueError(
-                f"VFEConfig.norm_type={cfg.norm_type!r} not recognized; "
-                "expected 'mahalnorm', 'rmsnorm', or 'none'."
-            )
+        # Final normalization (applied after last layer, before decode).
+        # For 'centered_mahalnorm' there is no natural prior at the model
+        # output, so we omit mu_prior at the call site (line ~141) and the
+        # centered norm degenerates to MahalanobisNorm. The centered
+        # variant's effect is delivered at the per-block sites where the
+        # layer prior is the natural reference. See VFEBlock.forward.
+        self.final_norm = _resolve_vfe_norm(cfg.norm_type, cfg.embed_dim)
 
         # Active inference callback (Section 10)
         self._active_inference_fn = None
@@ -88,7 +84,7 @@ class VFEModel(nn.Module):
         self,
         token_ids: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         r"""Full forward pass: encode → positional → stack → norm → decode.
 
         The E-step infers beliefs from context only. Targets are used
@@ -97,11 +93,16 @@ class VFEModel(nn.Module):
         Args:
             token_ids: ``(B, N)`` input token IDs.
             targets: ``(B, N)`` target token IDs for loss computation.
-                If provided, returns ``(logits, loss)``. If None, returns ``logits``.
+                If provided, returns ``(logits, loss, ce_for_log)``. If None,
+                returns ``logits``.
 
         Returns:
             logits: ``(B, N, V)`` token logit predictions.
-            loss: Cross-entropy loss (only if targets provided).
+            loss: Optimizer scalar (CE plus any active regularizers); only
+                returned when ``targets`` is provided.
+            ce_for_log: Unscaled, regularizer-free cross-entropy detached
+                for reporting (``PPL = exp(ce_for_log)``,
+                ``BPC = ce_for_log / ln 2``); only returned with ``targets``.
         """
         B, N = token_ids.shape
 
@@ -149,6 +150,13 @@ class VFEModel(nn.Module):
                 targets.view(-1),
                 ignore_index=-100,
             )
+            # Capture the unscaled, regularizer-free CE for reporting BEFORE
+            # any optional 1/sqrt(K) scaling or mass_phi penalty is applied.
+            # PPL = exp(ce_for_log) and BPC = ce_for_log / ln(2) are the
+            # only correct derivations regardless of how the optimizer's
+            # combined `loss` is composed.
+            ce_for_log = ce_loss.detach()
+
             # Normalize CE by sqrt(K) to match VFE dim_scale normalization
             if self.cfg.normalize_ce_by_dim:
                 ce_loss = ce_loss / (self.cfg.embed_dim ** 0.5)
@@ -162,7 +170,7 @@ class VFEModel(nn.Module):
                 phi_norm_sq = (beliefs.phi ** 2).sum() / (beliefs.phi.shape[0] * beliefs.phi.shape[1])
                 loss = loss + 0.5 * self.cfg.mass_phi * phi_norm_sq
 
-            return logits, loss
+            return logits, loss, ce_for_log
 
         return logits
 

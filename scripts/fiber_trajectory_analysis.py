@@ -49,6 +49,10 @@ CONFIG = {
     'output_dir':           'analysis/fiber_trajectory_output',
     'device':               'cuda' if torch.cuda.is_available() else 'cpu',
     'seed':                 42,
+    # Set False to refuse pickle-based checkpoint loads (rejects unknown
+    # objects in the saved config; only set when loading a checkpoint
+    # from an untrusted source).
+    'trusted_checkpoint':   True,
 }
 
 # If no checkpoint, use a matching EM_CONFIG for fresh init
@@ -108,7 +112,7 @@ def main() -> None:
         # Load weights
         ckpt_files = sorted(ckpt_dir.glob('*.pt'))
         if ckpt_files:
-            ckpt = torch.load(ckpt_files[-1], map_location=device, weights_only=False)
+            ckpt = torch.load(ckpt_files[-1], map_location=device, weights_only=not CONFIG['trusted_checkpoint'])
             state = ckpt.get('model_state_dict', ckpt)
             model.load_state_dict(state, strict=False)
             print(f"Loaded checkpoint: {ckpt_files[-1].name}")

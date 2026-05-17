@@ -1177,27 +1177,26 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry point — click-to-run (no CLI args per CLAUDE.md)
 # ---------------------------------------------------------------------------
+CONFIG = {
+    'models':     None,             # tuple of model names, or None for all
+    'save_dir':   str(SAVE_DIR),    # output directory for figures and results
+    'n_clusters': 4,                # number of spectral clusters
+    'synthetic':  False,            # set True to run synthetic validation
+}
+
+
+def main() -> None:
+    """T8: Gauge Frame Spectral Analysis Across Trained Transformers."""
+    save_path = Path(CONFIG['save_dir'])
+    save_path.mkdir(parents=True, exist_ok=True)
+    if CONFIG['synthetic']:
+        run_synthetic_validation(save_dir=save_path)
+    else:
+        model_list = list(CONFIG['models']) if CONFIG['models'] else None
+        run_analysis(model_names=model_list, save_dir=save_path)
+
+
 if __name__ == "__main__":
-    import click
-
-    @click.command()
-    @click.option("--models", "-m", multiple=True, default=None,
-                  help="Model names to analyze (default: all)")
-    @click.option("--save-dir", "-o", default=str(SAVE_DIR),
-                  help="Output directory for figures and results")
-    @click.option("--n-clusters", "-k", default=4, help="Number of spectral clusters")
-    @click.option("--synthetic", is_flag=True, default=False,
-                  help="Run synthetic validation with known ground truth")
-    def main(models, save_dir, n_clusters, synthetic):
-        """T8: Gauge Frame Spectral Analysis Across Trained Transformers."""
-        save_path = Path(save_dir)
-        save_path.mkdir(parents=True, exist_ok=True)
-        if synthetic:
-            run_synthetic_validation(save_dir=save_path)
-        else:
-            model_list = list(models) if models else None
-            run_analysis(model_names=model_list, save_dir=save_path)
-
     main()

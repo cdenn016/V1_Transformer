@@ -480,11 +480,36 @@ def run_closed_form_e_step(
 
             for _picard_iter in range(ffn.n_picard_steps):
                 grad_softmax_full = torch.zeros_like(mu_current)
+                beta_heads_new: list = []
                 block_start = 0
 
                 for h, d_h in enumerate(ffn.irrep_dims or [ffn.embed_dim]):
                     block_end = block_start + d_h
-                    beta_h = beta_heads[h]
+                    # Refresh β with the latest μ so the Picard step
+                    # iterates the joint (μ, β) fixed point rather than the
+                    # frozen-β linearisation.  σ stays at the pre-loop value
+                    # (σ_0) — full-cov Picard does not update σ inside the
+                    # loop, so β is refreshed using (μ_current, σ_0).
+                    mu_h_refresh = mu_current[:, :, block_start:block_end].detach().contiguous()
+                    sigma_h_refresh = sigma_0[:, :, block_start:block_end, block_start:block_end].detach().contiguous()
+                    gen_h = ffn.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h_refresh = ffn._get_kappa_h(h, d_h) if ffn.irrep_dims else ffn.kappa
+                    _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
+
+                    beta_h = compute_attention_weights(
+                        mu_q=mu_h_refresh, sigma_q=sigma_h_refresh,
+                        phi=phi_current, generators=gen_h,
+                        kappa=kappa_h_refresh, epsilon=eps, mask=mask,
+                        return_kl=False,
+                        diagonal_covariance=False,
+                        irrep_dims=[d_h] if ffn.irrep_dims else None,
+                        cached_block_exp_pairs=_head_bep,
+                        mask_self_attention=ffn.mask_self_attention,
+                        gauge_mode=ffn.gauge_mode,
+                        use_rope=ffn._use_rope_vfe,
+                        rope_base=ffn._rope_base_vfe,
+                    )
+                    beta_heads_new.append(beta_h)
                     exp_phi_h, exp_neg_phi_h = _cf_bep[h]
 
                     mu_h = mu_current[:, :, block_start:block_end]
@@ -518,7 +543,8 @@ def run_closed_form_e_step(
                     kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
 
                     kappa_h = ffn._get_kappa_h(h, d_h) if ffn.irrep_dims else ffn.kappa
-                    kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
+                    kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
+                    kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
                     avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
                     grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair
                     d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
@@ -580,6 +606,9 @@ def run_closed_form_e_step(
 
                 scale = (ffn.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
                 mu_current = mu_0 - scale * correction
+                # Rebind β so subsequent iterations (and the post-loop
+                # beta_history return) see the refreshed weights.
+                beta_heads = beta_heads_new
 
     # ── Beta history for return ───────────────────────────────────────
     beta_history_out: Optional[list] = None
@@ -606,15 +635,15 @@ def run_closed_form_e_step(
                     trust_region=getattr(ffn, 'omega_trust_region', 0.3),
                 )
         else:
-            _phi_bep_cf = (fused_block_matrix_exp_pairs(
-                phi_current, ffn.generators, ffn.irrep_dims,
-                enforce_orthogonal=getattr(ffn, 'enforce_orthogonal', False),
-                skew_symmetric=ffn._generators_are_skew,
-            ) if ffn.irrep_dims is not None and ffn.gauge_mode == 'learned' else None)
+            # `_cf_bep` was computed at the top of the function from the
+            # same `phi_current` (phi has not been retracted yet — that
+            # happens below at `_retract_phi`), so it is identical to the
+            # pairs we would otherwise rebuild here. Reuse it to avoid a
+            # second per-head matrix-exponential pass.
             grad_phi = ffn._compute_phi_grad(
                 phi_current, mu_current, sigma_current,
                 is_diagonal, mask, eps,
-                cached_block_exp_pairs=_phi_bep_cf,
+                cached_block_exp_pairs=_cf_bep,
             )
             if grad_phi is not None:
                 phi_current = _retract_phi(

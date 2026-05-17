@@ -404,7 +404,9 @@ def compute_ai_gradients(
                     if grad_efe_sigma is not None:
                         _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_sigma_grad'] = (
                             _vfe_utils_mod._grad_norm(grad_efe_sigma))
-            except Exception:
+            except (ImportError, AttributeError):
+                # Debug dict module not present or _VFE_GRAD_DEBUG not exposed:
+                # this hook is best-effort instrumentation, so silent skip is OK.
                 pass
 
     return grad_efe_mu, grad_efe_sigma

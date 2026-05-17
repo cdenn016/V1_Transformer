@@ -87,10 +87,6 @@ from transformer.core.active_inference import compute_ai_gradients
 
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights
-from transformer.core.transport_ops import compute_transport_operators, compute_transport_operators_direct
-
-# Numerical event monitor (shared with attention.py)
-from math_utils.numerical_monitor import record as _nr
 
 
 

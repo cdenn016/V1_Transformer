@@ -12,13 +12,10 @@ optional per-component VFE terms.
 Usage:
     python scripts/generate_publication_figures.py --metrics_file <path> --output_dir <path>
 
-Example:
-    python scripts/generate_publication_figures.py \\
-        --metrics_file 230_K=100_N=128_so20_200k_3batch_ffn_VFE_dynamic/metrics.csv \\
-        --output_dir figures/
+Click-to-run: edit ``CONFIG`` near the bottom of this file, then press Run.
+No CLI arguments (per CLAUDE.md).
 """
 
-import argparse
 import csv
 import numpy as np
 from pathlib import Path
@@ -247,18 +244,17 @@ def create_combined_figure(metrics: dict, output_dir: Path, model_name: str = "G
     plt.close()
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Generate publication figures')
-    parser.add_argument('--metrics_file', type=str, required=True,
-                       help='Path to metrics.csv file')
-    parser.add_argument('--output_dir', type=str, default='figures',
-                       help='Output directory for figures')
-    parser.add_argument('--model_name', type=str, default='Gauge VFE (SO(20))',
-                       help='Model name for figure titles')
-    args = parser.parse_args()
+CONFIG = {
+    # Required: path to metrics.csv emitted by a training run.
+    'metrics_file': '230_K=100_N=128_so20_200k_3batch_ffn_VFE_dynamic/metrics.csv',
+    'output_dir':   'figures',
+    'model_name':   'Gauge VFE (SO(20))',
+}
 
-    metrics_path = Path(args.metrics_file)
-    output_dir = Path(args.output_dir)
+
+def main() -> None:
+    metrics_path = Path(CONFIG['metrics_file'])
+    output_dir = Path(CONFIG['output_dir'])
 
     if not metrics_path.exists():
         print(f"Error: Metrics file not found: {metrics_path}")
@@ -273,7 +269,7 @@ def main():
     # Generate all figures
     create_training_curves_figure(metrics, output_dir)
     create_train_val_gap_figure(metrics, output_dir)
-    create_combined_figure(metrics, output_dir, args.model_name)
+    create_combined_figure(metrics, output_dir, CONFIG['model_name'])
 
     print("\nDone!")
 

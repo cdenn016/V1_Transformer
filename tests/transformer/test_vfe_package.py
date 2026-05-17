@@ -232,16 +232,17 @@ class TestVFEModel:
     def test_forward_with_targets(self, model, cfg):
         token_ids = torch.randint(0, cfg.vocab_size, (2, 8))
         targets = torch.randint(0, cfg.vocab_size, (2, 8))
-        logits, loss = model(token_ids, targets=targets)
+        logits, loss, ce_for_log = model(token_ids, targets=targets)
 
         assert logits.shape == (2, 8, cfg.vocab_size)
         assert loss.dim() == 0  # scalar
         assert loss.item() > 0
+        assert ce_for_log.dim() == 0
 
     def test_gradient_flow_to_prior_bank(self, model, cfg):
         token_ids = torch.randint(0, cfg.vocab_size, (2, 8))
         targets = torch.randint(0, cfg.vocab_size, (2, 8))
-        _, loss = model(token_ids, targets=targets)
+        _, loss, _ = model(token_ids, targets=targets)
         loss.backward()
 
         # Prior bank parameters should receive gradients
@@ -407,7 +408,7 @@ class TestLearnableKappa:
         model = VFEModel(cfg_lk)
         token_ids = torch.randint(0, 50, (2, 8))
         targets = torch.randint(0, 50, (2, 8))
-        _, loss = model(token_ids, targets=targets)
+        _, loss, _ = model(token_ids, targets=targets)
         loss.backward()
         for block in model.stack.blocks:
             assert block.e_step.log_kappa.grad is not None

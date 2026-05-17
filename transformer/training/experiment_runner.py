@@ -24,7 +24,6 @@ import gc
 import logging
 import torch
 import torch.nn.functional as F
-import argparse
 import json
 import csv
 import time
@@ -244,7 +243,7 @@ def save_experiment_config(
     config: Dict[str, Any],
     ffn_mode: str,
     checkpoint_dir: Path,
-    args: argparse.Namespace = None,
+    args: Optional[Any] = None,
 ) -> Path:
     """
     Save complete experiment configuration to JSON.
@@ -1761,7 +1760,7 @@ def run_single_experiment(
     ffn_mode: str,
     device: torch.device,
     checkpoint_dir: Path,
-    args: argparse.Namespace = None,
+    args: Optional[Any] = None,
     enable_publication_metrics: bool = True,
     quiet: bool = False,
     skip_test_eval: bool = False,
@@ -2580,7 +2579,7 @@ def run_pure_vfe_experiment(
     config: dict,
     device: torch.device,
     checkpoint_dir: Path,
-    args: argparse.Namespace = None,
+    args: Optional[Any] = None,
 ) -> Dict:
     """
     Run a training experiment with the Pure VFE Transformer.

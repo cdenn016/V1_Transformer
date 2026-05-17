@@ -93,7 +93,7 @@ class TestGradientStaysInSlk:
 
         token_ids = torch.randint(0, slk_cfg.vocab_size, (2, 8))
         targets = torch.randint(0, slk_cfg.vocab_size, (2, 8))
-        _, loss = model(token_ids, targets=targets)
+        _, loss, _ = model(token_ids, targets=targets)
         loss.backward()
 
         # Expand pos_phi_free.grad through the basis to full n_gen coords,

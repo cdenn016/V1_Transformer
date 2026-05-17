@@ -19,13 +19,13 @@ from transformer.core.model import GaugeTransformerLM
 
 def save_checkpoint(
     model: GaugeTransformerLM,
-    optimizer,
+    optimizer: Optional[torch.optim.Optimizer],
     config: Dict[str, Any],
     epoch: int,
     step: int,
     save_path: str,
-    **kwargs
-):
+    **kwargs: Any,
+) -> None:
     """
     Save a model checkpoint.
 
@@ -186,13 +186,15 @@ def load_model(checkpoint_path: str, trusted: bool = True) -> Tuple[GaugeTransfo
     return model, config
 
 
-def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
+def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None) -> Optional[Any]:
     """
     Get tokenizer matching the vocabulary a model was trained with.
 
     Encoding selection:
-    - wiki-ja (or vocab_size > 50257): cl100k_base (GPT-4, better CJK).
-    - All others: gpt2 encoding.
+    - wiki-ja, wiki-en, or any model with vocab_size > 50257: cl100k_base
+      (GPT-4 BPE, 100277 vocab — chosen for wiki-ja's CJK quality and
+      matched on wiki-en for clean cross-lingual comparison).
+    - All others: gpt2 encoding (50257 vocab).
 
     Falls back to WikiTextDataset tokenizer if tiktoken is unavailable.
 
@@ -206,20 +208,20 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     if dataset_name is None:
         dataset_name = config.get('dataset', 'wikitext-103')
 
-    # Auto-detect wiki-ja from vocab_size if dataset not in config
-    # cl100k_base has 100277 tokens; GPT-2 has 50257
+    # Auto-detect a cl100k_base model from vocab_size if dataset not in config.
+    # cl100k_base has 100277 tokens; GPT-2 has 50257.
     vocab_size = config.get('vocab_size', 50257)
     if dataset_name is None and vocab_size > 50257:
-        dataset_name = 'wiki-ja'
+        dataset_name = 'wiki-ja'  # legacy default, just used to flag cl100k below
 
-    is_japanese = (dataset_name == 'wiki-ja')
+    is_cl100k = dataset_name in ('wiki-ja', 'wiki-en') or vocab_size > 50257
 
     # Try tiktoken first (faster, lighter)
     try:
         import tiktoken
-        if is_japanese:
+        if is_cl100k:
             enc = tiktoken.get_encoding("cl100k_base")
-            print(f"Using tiktoken cl100k_base tokenizer for wiki-ja (vocab_size={enc.n_vocab})")
+            print(f"Using tiktoken cl100k_base tokenizer for {dataset_name} (vocab_size={enc.n_vocab})")
         else:
             enc = tiktoken.get_encoding("gpt2")
             print(f"Using tiktoken GPT-2 tokenizer (vocab_size={enc.n_vocab})")

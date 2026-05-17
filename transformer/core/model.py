@@ -335,7 +335,6 @@ class GaugeTransformerLM(nn.Module):
             config,
             generators=self.generators,
             prior_bank=self.prior_bank,
-            cross_head_perm=getattr(self, '_cross_head_perm', None),
             ffn_irrep_dims=self._get_effective_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
         )
         # Override derived values that model.py computes

@@ -24,30 +24,31 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
 config = {
     # === Structure ===
-    'vocab_size':               None,      # None = full GPT-2 vocabulary (50257)
+    'vocab_size':               None,    # None = full GPT-2 vocabulary (50257)
     'embed_dim':                20,
-    'irrep_spec':     [('fund', 2, 10)],   # 2 heads x dim 10 = K=20
+    
+    'irrep_spec':      [('fund', 2, 10)],   # 2 heads x dim 10 = K=20
     
     
-    'batch_size':               16,    
-    'max_seq_len':              32,
-    'max_steps':                20000,
+    'batch_size':               32,    
+    'max_seq_len':              64,
+    'max_steps':                5000,
  
     
     # === E-step dynamics ===
-    'n_e_steps':                2,         # Inner-loop iterations per layer
-    'n_layers':                 2,
+    'n_e_steps':                1,         # Inner-loop iterations per layer
+    'n_layers':                 1,
     
-    'e_mu_lr':                  0.1,       # Mean natural gradient step size
-    'e_sigma_lr':               0.001,     # Covariance retraction step size
+    'e_mu_lr':                  0.3,       # Mean natural gradient step size
+    'e_sigma_lr':               0.015,     # Covariance retraction step size
     'e_phi_lr':                 0.05,      # Gauge frame step size
     
     'alpha':                    1.0,       # KL(q||p) prior self-coupling weight
     'alpha_divergence':         1.0,       # Rényi α (1.0=KL, 0.5=Bhattacharyya)
     
     'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
-    'lambda_align':             1.0,       # Direct attention coupling (β · ∂KL/∂θ)
-    'lambda_soft':              1.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
+    'lambda_align':             10.0,       # Direct attention coupling (β · ∂KL/∂θ)
+    'lambda_soft':              0.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
     'kappa':                    1.0,       # Attention temperature
     'learnable_kappa':          False,     # Learn per-layer kappa
 
@@ -61,7 +62,7 @@ config = {
     # === Covariance ===
     'diagonal_covariance':      True,      # True = (B,N,K), False = (B,N,K,K) full
     'isotropic_covariance':     False,     # Force Σ = σ²I
-    'exact_diagonal_transport': True,      # Lift diagonal for exact Ω@Σ@Ω^T
+    'exact_diagonal_transport': False,      # Lift diagonal for exact Ω@Σ@Ω^T
     
     
     
@@ -69,7 +70,8 @@ config = {
     # === Gauge geometry ===
     'gauge_group':              'GLK',      # 'SO3', 'SON', 'GLK'
     'phi_project_slk':          False,      # GL(K) only: hard project φ → sl(K) ⇒ det(Ω) ≡ 1
-    'phi_trace_clamp':          None,       # GL(K) only: soft cap |tr(φ·G)| ≤ T (e.g., 0.35)
+    'phi_trace_clamp':          0.75,       # GL(K) only: soft cap |tr(φ·G)| ≤ T (e.g., 0.35)
+    
     'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
     'enforce_orthogonal':       False,      # Project Ω to SO(K)
     'mask_self_attention':      False,      # Mask diagonal (prevents KL=0 self-attention)
@@ -79,13 +81,13 @@ config = {
     # === Positional encoding ===
     'use_rope':                 True,
     'rope_full_gauge':          'off',      # 'off' | 'vfe_only' | 'both'. Requires diagonal_covariance=False when != 'off'.
-    'rope_base':                100.0,
+    'rope_base':                100,
     
     
     # === Embedding init ===
-    'mu_init_std':              0.5,        # Std for base prior mean
-    'phi_scale':                0.1,        # Scale for per-token gauge frames
-    'sigma_init':               0.5,
+    'mu_init_std':              0.4,        # Std for base prior mean
+    'phi_scale':                0.05,        # Scale for per-token gauge frames
+    'sigma_init':               0.4,
     
     
     
@@ -98,8 +100,8 @@ config = {
 
 
     # === Normalization ===
-    'norm_type':                'rmsnorm',  # 'mahalnorm', 'rmsnorm', 'none'
-    'normalize_ce_by_dim':      False,      # Divide CE by sqrt(K)
+    'norm_type':                'layernorm',  # 'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm' (gauge-blind ablation), 'none'
+    'normalize_ce_by_dim':      True,      # Divide CE by sqrt(K)
 
 
     # === Training ===
@@ -107,7 +109,7 @@ config = {
     'weight_decay':             0.001,
     'warmup_steps':             100,
     
-    'grad_clip':                15,
+    'grad_clip':                50,
     'sigma_max':                12.0,
     'bch_order':                3,          # BCH truncation (1=additive, ≥2=commutator terms)
     
@@ -119,14 +121,15 @@ config = {
 }
 
 # ============================================================================
-# DATASET — select one: 'wikitext-2', 'wikitext-103', 'wiki-ja'
+# DATASET — select one: 'wikitext-2', 'wikitext-103', 'wiki-ja', 'wiki-en'
 # ============================================================================
 
-SEED = 1234                   # Reproducibility seed for torch / numpy / dataloader workers
+SEED = 6                   # Reproducibility seed for torch / numpy / dataloader workers
 
 DATASET = 'wikitext-103'      # ~103M tokens, full-scale training
 # DATASET = 'wikitext-2'      # ~2M tokens, fast iteration
-# DATASET = 'wiki-ja'         # Japanese Wikipedia, ~1B chars
+# DATASET = 'wiki-ja'         # Japanese Wikipedia, ~190M tokens at default 100K-article cap
+# DATASET = 'wiki-en'         # English Wikipedia, ~5B cl100k tokens at full dump (no cap)
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

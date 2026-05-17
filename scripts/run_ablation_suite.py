@@ -13,24 +13,10 @@ Systematic Ablation Suite for Gauge VFE Transformer
 Sweeps hyperparameters one-at-a-time against a baseline (Exp 74 config),
 then runs interaction sweeps for significant factors.
 
-Usage:
-    # Run all ablations sequentially
-    python scripts/run_ablation_suite.py --device cuda --dataset wikitext-103
-
-    # Run a specific sweep
-    python scripts/run_ablation_suite.py --sweep alpha --device cuda
-
-    # Run with reduced steps (quick validation)
-    python scripts/run_ablation_suite.py --sweep alpha --max_steps 5000
-
-    # Analyze results from a completed sweep
-    python scripts/run_ablation_suite.py --analyze ablation_results/
-
-    # List available sweeps
-    python scripts/run_ablation_suite.py --list
+Click-to-run: edit ``CONFIG`` near the bottom of this file, then press Run.
+No CLI arguments (per CLAUDE.md).
 """
 
-import argparse
 import copy
 import gc
 import json
@@ -174,7 +160,7 @@ BASELINE_CONFIG = {
    
    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
    'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
-   'M_phi_lr':                   0.003,    # M-step gauge frame embeddings (φ) 0.0075
+   'M_phi_lr':                   0.0025,    # M-step gauge frame embeddings (φ) 0.0075
    
    # === M-step Other LR's (AdamW parameter groups) ===
    'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
@@ -482,8 +468,8 @@ SWEEPS = {
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'values': [0.005, 0.0075, 0.01, 0.015, 0.02],
-        'baseline_value': 0.00325,
+        'values': [0.002, 0.003, 0.004, 0.005, 0.0075, 0.01],
+        'baseline_value': 0.0025,
     },
 
     'M_vfe_hyperparam_lr': {
@@ -1098,36 +1084,29 @@ def generate_plots(output_dir: Path):
 # MAIN
 # =============================================================================
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Systematic Ablation Suite for Gauge VFE Transformer',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument('--sweep', type=str, default=None,
-                        help='Run a specific sweep (e.g., "alpha", "K"). '
-                             'If not set, runs all sweeps in order.')
-    parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--dataset', type=str, default='wikitext-103',
-                        choices=['wikitext-2', 'wikitext-103'])
-    parser.add_argument('--output_dir', type=str, default='ablation_results')
-    parser.add_argument('--max_steps', type=int, default=None,
-                        help='Override max_steps for all runs (e.g., 5000 for quick test)')
-    parser.add_argument('--seed', type=int, default=6)
-    parser.add_argument('--analyze', type=str, default=None, nargs='?', const='ablation_results',
-                        help='Analyze results in directory (default: ablation_results/)')
-    parser.add_argument('--plot', type=str, default=None, nargs='?', const='ablation_results',
-                        help='Generate plots from results in directory')
-    parser.add_argument('--resume', action='store_true',
-                        help='Resume interrupted run: skip sweeps/runs that already '
-                             'have ablation_result.json on disk')
-    parser.add_argument('--list', action='store_true',
-                        help='List all available sweeps')
+CONFIG = {
+    # Action mode: one of 'train', 'analyze', 'plot', 'list'.
+    'mode':        'train',
 
-    args = parser.parse_args()
+    # Train-mode settings (ignored in other modes)
+    'sweep':       None,         # name of a single sweep (e.g. 'alpha'); None runs all in SWEEP_ORDER
+    'device':      'auto',        # 'auto', 'cuda', 'cpu'
+    'dataset':     'wikitext-103',
+    'output_dir':  'ablation_results',
+    'max_steps':   None,          # override BASELINE_CONFIG max_steps when set
+    'seed':        6,
+    'resume':      False,         # skip sweeps/runs with ablation_result.json on disk
+
+    # Analyze / plot mode reads from this directory
+    'results_dir': 'ablation_results',
+}
+
+
+def main() -> None:
+    mode = CONFIG['mode']
 
     # List mode
-    if args.list:
+    if mode == 'list':
         print(f"\nAvailable sweeps ({len(SWEEPS)}):\n")
         print(f"{'Name':<25} {'# Configs':>10} {'Description'}")
         print('-' * 80)
@@ -1140,46 +1119,53 @@ def main():
         return
 
     # Analyze mode
-    if args.analyze is not None:
-        analyze_all(Path(args.analyze))
+    if mode == 'analyze':
+        analyze_all(Path(CONFIG['results_dir']))
         return
 
     # Plot mode
-    if args.plot is not None:
-        generate_plots(Path(args.plot))
+    if mode == 'plot':
+        generate_plots(Path(CONFIG['results_dir']))
         return
 
+    if mode != 'train':
+        raise ValueError(
+            f"CONFIG['mode']={mode!r} not recognized; expected one of "
+            "'train', 'analyze', 'plot', 'list'."
+        )
+
     # Training mode
-    if args.device == 'auto':
+    if CONFIG['device'] == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
-        device = torch.device(args.device)
+        device = torch.device(CONFIG['device'])
 
-    output_dir = Path(args.output_dir)
+    output_dir = Path(CONFIG['output_dir'])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     base_config = copy.deepcopy(BASELINE_CONFIG)
-    base_config['dataset'] = args.dataset
+    base_config['dataset'] = CONFIG['dataset']
 
     # Determine which sweeps to run
-    if args.sweep:
-        if args.sweep not in SWEEPS:
-            print(f"Unknown sweep: {args.sweep}")
+    sweep_arg = CONFIG['sweep']
+    if sweep_arg:
+        if sweep_arg not in SWEEPS:
+            print(f"Unknown sweep: {sweep_arg}")
             print(f"Available: {', '.join(SWEEP_ORDER)}")
             return
-        sweep_names = [args.sweep]
+        sweep_names = [sweep_arg]
     else:
         sweep_names = SWEEP_ORDER
 
     print(f"\nAblation Suite Configuration:")
     print(f"  Device:    {device}")
-    print(f"  Dataset:   {args.dataset}")
+    print(f"  Dataset:   {CONFIG['dataset']}")
     print(f"  Output:    {output_dir}")
-    print(f"  Seed:      {args.seed}")
+    print(f"  Seed:      {CONFIG['seed']}")
     print(f"  Sweeps:    {', '.join(sweep_names)}")
-    if args.max_steps:
-        print(f"  Max steps: {args.max_steps} (override)")
-    if args.resume:
+    if CONFIG['max_steps']:
+        print(f"  Max steps: {CONFIG['max_steps']} (override)")
+    if CONFIG['resume']:
         print(f"  Resume:    ON (skipping completed runs)")
     print()
 
@@ -1191,9 +1177,9 @@ def main():
             base_config=base_config,
             device=device,
             output_dir=output_dir,
-            seed=args.seed,
-            max_steps_override=args.max_steps,
-            resume=args.resume,
+            seed=CONFIG['seed'],
+            max_steps_override=CONFIG['max_steps'],
+            resume=CONFIG['resume'],
         )
         all_dfs[sweep_name] = df
 

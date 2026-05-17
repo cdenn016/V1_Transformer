@@ -15,6 +15,7 @@ Dataset Details:
     - WikiText-103 (103M tokens, default)
     - WikiText-2 (2.08M tokens, smaller alternative)
     - wiki-ja (Japanese Wikipedia, ~1B chars, ~1.2M articles)
+    - wiki-en (English Wikipedia, ~22GB chars, ~6.7M articles, streaming-tokenized)
 
 Usage:
     from transformer.data import create_dataloaders
@@ -47,6 +48,8 @@ Usage:
     )
 """
 
+from __future__ import annotations
+
 # Suppress Triton warnings BEFORE torch import (torch may trigger triton import)
 import warnings
 warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
@@ -54,7 +57,7 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="tri
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Union
 import numpy as np
 from pathlib import Path
 import os
@@ -184,6 +187,7 @@ DATASET_CONFIGS = {
     'wikitext-103': 'wikitext-103-raw-v1',
     'openwebtext': None,  # No config needed, loaded as load_dataset('openwebtext')
     'wiki-ja': '20231101.ja',  # Japanese Wikipedia (~1B chars, ~1.2M articles)
+    'wiki-en': '20231101.en',  # English Wikipedia (~22GB chars, ~6.7M articles)
 }
 
 # OpenWebText split ratios (only has a 'train' split on HuggingFace)
@@ -259,7 +263,7 @@ def _download_file(url: str, dest_path: Path) -> bool:
         return False
 
 
-def _download_wikitext2_fallback(cache_dir: Optional[str] = None) -> dict:
+def _download_wikitext2_fallback(cache_dir: Optional[str] = None) -> Dict[str, str]:
     """
     Download WikiText-2 directly from source (fallback when datasets unavailable).
 
@@ -315,7 +319,7 @@ def _download_wikitext2_fallback(cache_dir: Optional[str] = None) -> dict:
     return result
 
 
-def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> dict:
+def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> Dict[str, str]:
     """
     Download WikiText-103 directly from source (fallback when datasets unavailable).
 
@@ -560,6 +564,152 @@ def _load_wiki_ja_split(
     return full_text
 
 
+def _load_wiki_en_split(
+    split: str,
+    output_bin_path: Path,
+    cache_dir: Optional[str] = None,
+    max_articles: Optional[int] = None,
+) -> Tuple[int, int]:
+    r"""
+    Stream-load, tokenize, and incrementally write an English Wikipedia split.
+
+    Tokens are written directly to `output_bin_path` as raw little-endian
+    int32 bytes (no .npy header) as each batch is encoded. Memory usage
+    stays at O(one batch) regardless of split size; disk usage is exactly
+    `4 * n_tokens` bytes on success.
+
+    The on-disk layout is a flat int32 stream so that downstream code can
+    `np.memmap(path, dtype=np.int32, mode='r', shape=(n_tokens,))` it
+    without ever loading the full array into RAM. The token count is not
+    embedded in the file; the caller persists it in a sidecar JSON and is
+    responsible for atomic rename of the binary file.
+
+    English Wikipedia (~6.7M articles) only has a 'train' split on
+    HuggingFace, so the dataset is split deterministically by index range
+    into 99% train / 0.5% val / 0.5% test (same convention as wiki-ja
+    and OpenWebText).
+
+    Source ordering: by default index ranges follow the raw HuggingFace
+    order, which is *not* randomized. Set `WIKI_EN_SHUFFLE_ARTICLES=1`
+    to deterministically shuffle (seed 42 default; override via
+    `WIKI_EN_SHUFFLE_SEED`) before slicing.
+
+    Tokenization-boundary note: BPE merges cannot span batch boundaries
+    in this streaming path, so the resulting token stream differs from a
+    hypothetical "tokenize the entire dump as one string" path by at most
+    a few merges per batch boundary (~67 boundaries at the 100K-article
+    batch size). This is below measurement noise for BPC and accepted
+    as a memory-vs-byte-identity trade-off.
+
+    Args:
+        split: 'train', 'validation', or 'test'.
+        output_bin_path: File path for the int32 token stream. Caller
+            should pass a `.bin.part` path and atomically rename to `.bin`
+            on success.
+        cache_dir: Optional cache directory for HuggingFace datasets.
+        max_articles: Optional cap on train articles (None = no cap, the
+            full ~6.7M dump). Validation and test splits are not capped.
+
+    Returns:
+        Tuple `(n_tokens, n_chars_source)` where `n_tokens` is the
+        number of int32 token IDs written to `output_bin_path` and
+        `n_chars_source` is the number of source characters tokenized
+        (denominator for bits-per-character).
+    """
+    if not DATASETS_AVAILABLE:
+        raise RuntimeError(
+            "English Wikipedia requires the 'datasets' package.\n"
+            "  pip install datasets\n"
+        )
+    if not TIKTOKEN_AVAILABLE:
+        raise RuntimeError(
+            "English Wikipedia streaming tokenization requires tiktoken.\n"
+            "  pip install tiktoken\n"
+        )
+
+    _log(f"  Loading English Wikipedia from HuggingFace...")
+    full_dataset = load_dataset(
+        'wikimedia/wikipedia', '20231101.en', split='train', cache_dir=cache_dir
+    )
+
+    total_docs = len(full_dataset)
+    _log(f"  Total articles: {total_docs:,}")
+
+    import os as _os
+    shuffle_articles = _os.environ.get('WIKI_EN_SHUFFLE_ARTICLES', '0') in ('1', 'true', 'True')
+    shuffle_seed = int(_os.environ.get('WIKI_EN_SHUFFLE_SEED', '42'))
+    if shuffle_articles:
+        full_dataset = full_dataset.shuffle(seed=shuffle_seed)
+        _log(f"  Shuffled article order with seed={shuffle_seed} (WIKI_EN_SHUFFLE_ARTICLES=1)")
+
+    # Deterministic split: 99% train, 0.5% val, 0.5% test.
+    n_val = int(total_docs * 0.005)
+    n_test = int(total_docs * 0.005)
+    n_train_full = total_docs - n_val - n_test
+
+    if split == 'train':
+        n_use = n_train_full if max_articles is None else min(n_train_full, max_articles)
+        subset = full_dataset.select(range(n_use))
+        if max_articles is not None and n_use < n_train_full:
+            _log(f"  Train split: {n_use:,} articles (capped from {n_train_full:,})")
+        else:
+            _log(f"  Train split: {n_use:,} articles")
+    elif split == 'validation':
+        subset = full_dataset.select(range(n_train_full, n_train_full + n_val))
+        _log(f"  Validation split: {n_val:,} articles")
+    elif split == 'test':
+        subset = full_dataset.select(range(n_train_full + n_val, total_docs))
+        _log(f"  Test split: {n_test:,} articles")
+    else:
+        raise ValueError(f"Unknown split: {split}")
+
+    n_docs = len(subset)
+    BATCH_SIZE = 100_000
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    n_chars_source = 0
+    n_tokens_total = 0
+    n_batches = (n_docs + BATCH_SIZE - 1) // BATCH_SIZE
+
+    output_bin_path.parent.mkdir(parents=True, exist_ok=True)
+    _log(
+        f"  Stream-tokenizing {n_docs:,} articles in {n_batches:,} batches of {BATCH_SIZE:,} "
+        f"to {output_bin_path.name}..."
+    )
+    if split == 'train':
+        _log(
+            f"  (Full English Wikipedia train tokenization typically takes 30-60 min "
+            f"single-threaded on modern CPUs; expect ~5B int32 tokens, ~20GB on disk.)"
+        )
+
+    with open(output_bin_path, 'wb') as f:
+        for i in range(0, n_docs, BATCH_SIZE):
+            batch = subset.select(range(i, min(i + BATCH_SIZE, n_docs)))
+            batch_texts = [item['text'] for item in batch if len(item['text'].strip()) > 0]
+            if not batch_texts:
+                continue
+            joined = '\n\n'.join(batch_texts)
+            n_chars_source += len(joined)
+            batch_tokens = tokenizer.encode(joined)
+            arr = np.asarray(batch_tokens, dtype=np.int32)
+            f.write(arr.tobytes())
+            n_tokens_total += int(arr.size)
+            del joined, batch_tokens, arr, batch_texts, batch
+            batch_idx = i // BATCH_SIZE + 1
+            if batch_idx % 5 == 0 or batch_idx == n_batches:
+                _log(
+                    f"  Batch {batch_idx}/{n_batches}: "
+                    f"{n_chars_source:,} chars, {n_tokens_total:,} tokens "
+                    f"(tokens/char: {n_tokens_total / max(1, n_chars_source):.4f})"
+                )
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass  # fsync not supported on all filesystems; rename is still ordered
+
+    return n_tokens_total, n_chars_source
+
+
 class WikiText2Dataset(Dataset):
     """
     WikiText-2 dataset for language modeling (transformers backend).
@@ -790,7 +940,7 @@ class WikiText2Dataset(Dataset):
             tokens = [self._vocab_mapping.get(tok, self._unk_id) for tok in tokens]
         return tokens
 
-    def decode(self, ids) -> str:
+    def decode(self, ids: Union[List[int], torch.Tensor]) -> str:
         """Decode token IDs back to text (handles vocab restriction)."""
         if isinstance(ids, torch.Tensor):
             ids = ids.tolist()
@@ -905,7 +1055,8 @@ class WikiText2TiktokenDataset(Dataset):
                           this split's frequencies. Essential for ensuring train/val
                           consistency when vocab restriction is used.
             dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens),
-                     'openwebtext' (~8B tokens), or 'wiki-ja' (Japanese Wikipedia)
+                     'openwebtext' (~8B tokens), 'wiki-ja' (Japanese Wikipedia),
+                     or 'wiki-en' (English Wikipedia, ~5B cl100k tokens at full dump).
             stride: Optional window stride (see TrainingConfig.stride for semantics).
                     None => verbatim legacy formula, bit-identical behavior.
             random_offset_per_epoch: When stride>1, draw a per-epoch offset in
@@ -913,7 +1064,7 @@ class WikiText2TiktokenDataset(Dataset):
             base_epoch_seed: Seed for the isolated offset Generator.
         """
         assert TIKTOKEN_AVAILABLE, "tiktoken required! pip install tiktoken"
-        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', 'openwebtext', or 'wiki-ja'"
+        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', 'openwebtext', 'wiki-ja', or 'wiki-en'"
 
         self.split = split
         self.max_seq_len = max_seq_len
@@ -929,9 +1080,11 @@ class WikiText2TiktokenDataset(Dataset):
         self._epoch_offset = 0
 
         # Load tokenizer via tiktoken
-        # Use cl100k_base (GPT-4) for Japanese - much better CJK tokenization
-        # Use gpt2 for English datasets (original behavior)
-        if dataset == 'wiki-ja':
+        # cl100k_base (GPT-4) for the Wikipedia datasets — chosen for wiki-ja
+        # (CJK tokenization quality) and matched on wiki-en for clean
+        # cross-lingual comparison (same vocab size, same softmax cost,
+        # same token-counting convention). gpt2 for the rest (legacy default).
+        if dataset in ('wiki-ja', 'wiki-en'):
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
             self._full_vocab_size = self.tokenizer.n_vocab  # 100277
             self.eos_token_id = 100257  # cl100k_base's <|endoftext|>
@@ -947,14 +1100,20 @@ class WikiText2TiktokenDataset(Dataset):
 
         # Try loading from token cache first
         # Use different cache key for cl100k_base vs gpt2 tokenizer
-        tokenizer_cache_key = 'tiktoken_cl100k' if dataset == 'wiki-ja' else 'tiktoken'
-        # Include WIKI_JA_SHUFFLE_ARTICLES in the cache key so toggling the env
-        # var on a machine with a stale unshuffled cache forces re-tokenization
-        # of the new shuffled split rather than silently reusing old tokens.
+        tokenizer_cache_key = 'tiktoken_cl100k' if dataset in ('wiki-ja', 'wiki-en') else 'tiktoken'
+        # Include WIKI_{JA,EN}_SHUFFLE_ARTICLES in the cache key so toggling
+        # the env var on a machine with a stale unshuffled cache forces
+        # re-tokenization of the new shuffled split rather than silently
+        # reusing old tokens.
         if dataset == 'wiki-ja':
             import os as _os
             if _os.environ.get('WIKI_JA_SHUFFLE_ARTICLES', '0') in ('1', 'true', 'True'):
                 _seed = _os.environ.get('WIKI_JA_SHUFFLE_SEED', '42')
+                tokenizer_cache_key = f'tiktoken_cl100k_shuffled_s{_seed}'
+        elif dataset == 'wiki-en':
+            import os as _os
+            if _os.environ.get('WIKI_EN_SHUFFLE_ARTICLES', '0') in ('1', 'true', 'True'):
+                _seed = _os.environ.get('WIKI_EN_SHUFFLE_SEED', '42')
                 tokenizer_cache_key = f'tiktoken_cl100k_shuffled_s{_seed}'
         token_cache_path = _get_token_cache_path(dataset, split, tokenizer_cache_key, cache_dir)
         # Sidecar JSON next to the token cache stores `n_chars_source` (the raw
@@ -963,123 +1122,320 @@ class WikiText2TiktokenDataset(Dataset):
         # Without it, "BPC" is actually bits-per-token, which differs by ~4x for
         # GPT-2 BPE on English (~0.23 tok/char) and ~10% for cl100k_base on
         # Japanese (~1.1 tok/char).
-        meta_cache_path = token_cache_path.with_suffix(token_cache_path.suffix + '.meta.json')
         self._n_chars_source: Optional[int] = None
-        if token_cache_path.exists():
-            _log(f"Loading {dataset.upper()} ({split}) from token cache...")
-            _log(f"  Cache: {token_cache_path}")
-            tokens = torch.load(token_cache_path, weights_only=True)
-            _log(f"  Loaded {len(tokens):,} cached tokens")
-            if meta_cache_path.exists():
+        # Set True for the wiki-en streaming-bin-cache path so __getitem__ knows
+        # to cast int32 slices to int64 before torch.cat with long-typed padding.
+        self._tokens_int32_mmap: bool = False
+
+        if dataset == 'wiki-en':
+            # Wiki-en uses a dedicated raw-int32 binary cache plus sidecar JSON
+            # for tokenization. The legacy `.pt` path's `chunk_arrays` list +
+            # final `np.concatenate` peaks at ~40GB RAM on the full ~5B-token
+            # train split, which OOM-kills on machines with <64GB RAM and leaves
+            # a corrupt stub. The streaming path writes each batch's tokens
+            # straight to disk inside `_load_wiki_en_split` and memmaps the
+            # resulting file on read, so peak RAM is ~one batch (~80MB)
+            # regardless of split size.
+            #
+            # Backwards compatibility: an existing legacy `.pt` cache + sidecar
+            # for val/test (small, ~130MB) is still honored on load via the
+            # legacy_pt_fallback path so we don't force re-tokenization of
+            # working caches. The corrupt train `.pt` stub is detected and
+            # removed below.
+            bin_cache_path = token_cache_path.with_suffix('.bin')
+            bin_meta_path = bin_cache_path.parent / (bin_cache_path.name + '.meta.json')
+            legacy_pt_meta_path = token_cache_path.with_suffix(
+                token_cache_path.suffix + '.meta.json'
+            )
+            cache_hit = bin_cache_path.exists() and bin_meta_path.exists()
+            # Legacy hit: working .pt cache from before the streaming refactor.
+            # Train's 200KB stub has the .meta.json present but is < 1MB, so
+            # the size threshold filters it out and we'll re-tokenize via .bin.
+            LEGACY_PT_MIN_BYTES = 1_048_576  # 1MB
+            legacy_pt_hit = (
+                not cache_hit
+                and token_cache_path.exists()
+                and legacy_pt_meta_path.exists()
+                and token_cache_path.stat().st_size >= LEGACY_PT_MIN_BYTES
+            )
+
+            if cache_hit:
+                _log(f"Loading {dataset.upper()} ({split}) from token cache (memmap)...")
+                _log(f"  Cache: {bin_cache_path}")
+                import json as _json
+                with open(bin_meta_path, 'r', encoding='utf-8') as _f:
+                    _meta = _json.load(_f)
+                n_tokens_meta = int(_meta['n_tokens'])
+                self._n_chars_source = (
+                    int(_meta['n_chars_source'])
+                    if _meta.get('n_chars_source') is not None else None
+                )
+                expected_bytes = n_tokens_meta * 4  # int32
+                actual_bytes = bin_cache_path.stat().st_size
+                if expected_bytes != actual_bytes:
+                    raise RuntimeError(
+                        f"wiki-en token cache size mismatch: {bin_cache_path.name} is "
+                        f"{actual_bytes:,} bytes but sidecar declares {expected_bytes:,} "
+                        f"bytes ({n_tokens_meta:,} int32 tokens). Cache is corrupt — "
+                        f"delete both files and re-tokenize."
+                    )
+                memmap_arr = np.memmap(
+                    bin_cache_path, dtype=np.int32, mode='r', shape=(n_tokens_meta,)
+                )
+                # torch.from_numpy on a memmap shares the memory map: no
+                # 20GB allocation, slices materialize lazily through the OS
+                # page cache.
+                tokens = torch.from_numpy(memmap_arr)
+                self._tokens_int32_mmap = True
+                _log(f"  Memmap-loaded {n_tokens_meta:,} int32 tokens (no RAM allocation)")
+                if self._n_chars_source is not None:
+                    _log(f"  Source character count (from sidecar): {self._n_chars_source:,}")
+            elif legacy_pt_hit:
+                # Honor pre-refactor `.pt` cache (e.g. wiki-en val/test from
+                # earlier runs at ~130MB). Loaded into RAM via `torch.load`,
+                # consistent with the legacy path's memory profile. The 1MB
+                # threshold above already filtered out the corrupt train stub.
+                _log(
+                    f"Loading {dataset.upper()} ({split}) from legacy .pt token "
+                    f"cache (pre-streaming-bin format)..."
+                )
+                _log(f"  Cache: {token_cache_path}")
+                tokens = torch.load(token_cache_path, weights_only=True)
+                _log(f"  Loaded {len(tokens):,} cached tokens")
                 try:
                     import json as _json
-                    with open(meta_cache_path, 'r', encoding='utf-8') as _f:
+                    with open(legacy_pt_meta_path, 'r', encoding='utf-8') as _f:
                         _meta = _json.load(_f)
-                    self._n_chars_source = int(_meta.get('n_chars_source')) if _meta.get('n_chars_source') is not None else None
+                    self._n_chars_source = (
+                        int(_meta['n_chars_source'])
+                        if _meta.get('n_chars_source') is not None else None
+                    )
                     if self._n_chars_source is not None:
-                        _log(f"  Source character count (from sidecar): {self._n_chars_source:,}")
+                        _log(
+                            f"  Source character count (from sidecar): "
+                            f"{self._n_chars_source:,}"
+                        )
                 except (OSError, ValueError) as _exc:
-                    _log(f"  Sidecar metadata unreadable ({_exc}); BPC will fall back to bits-per-token")
+                    _log(
+                        f"  Sidecar metadata unreadable ({_exc}); BPC will fall "
+                        f"back to bits-per-token"
+                    )
             else:
                 _log(
-                    f"  No sidecar metadata for token cache; BPC will fall back to bits-per-token. "
-                    f"Delete {token_cache_path.name} to rebuild with sidecar."
+                    f"Loading {dataset.upper()} ({split}) for BPE tokenization "
+                    f"(tiktoken, streaming-bin)..."
                 )
+                _log(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
+
+                # Disk pre-check: train split is ~20GB int32 on disk; require
+                # comfortable headroom. (val/test are much smaller, ~130MB.)
+                import shutil as _shutil
+                free_bytes = _shutil.disk_usage(token_cache_path.parent).free
+                required_free_gb = 30 if split == 'train' else 2
+                free_gb = free_bytes / (1024 ** 3)
+                if free_gb < required_free_gb:
+                    raise RuntimeError(
+                        f"Insufficient disk free space at {token_cache_path.parent} "
+                        f"for wiki-en {split} tokenization: {free_gb:.1f} GB free, "
+                        f"need ~{required_free_gb} GB. Free space and retry."
+                    )
+
+                # Remove orphan legacy `.pt` stub from prior OOM-killed runs so
+                # it can't poison anything else that still searches for the .pt
+                # convention. Best-effort.
+                if token_cache_path.exists():
+                    try:
+                        _stub_size = token_cache_path.stat().st_size
+                        _log(
+                            f"  Removing orphan legacy cache "
+                            f"{token_cache_path.name} ({_stub_size:,} bytes) "
+                            f"— superseded by .bin streaming format."
+                        )
+                        token_cache_path.unlink()
+                        legacy_meta = token_cache_path.parent / (
+                            token_cache_path.name + '.meta.json'
+                        )
+                        if legacy_meta.exists():
+                            legacy_meta.unlink()
+                    except OSError as _exc:
+                        _log(f"  Could not remove legacy cache: {_exc}")
+
+                # Stream-write to `.bin.part`, then atomic-rename to `.bin` so
+                # the cache_hit predicate (bin AND meta) only flips True after
+                # both files are durable.
+                bin_part_path = bin_cache_path.parent / (bin_cache_path.name + '.part')
+                if bin_part_path.exists():
+                    bin_part_path.unlink()  # stale from prior crash mid-tokenize
+                n_tokens_total, self._n_chars_source = _load_wiki_en_split(
+                    split, bin_part_path, cache_dir
+                )
+                os.replace(bin_part_path, bin_cache_path)
+
+                # Sidecar written AFTER atomic rename: a crash between rename
+                # and sidecar write means the next run sees a `.bin` without
+                # meta, falls into the cache_miss branch, and re-tokenizes
+                # cleanly rather than reading garbage shape information.
+                try:
+                    import json as _json
+                    with open(bin_meta_path, 'w', encoding='utf-8') as _f:
+                        _json.dump({
+                            'n_chars_source': int(self._n_chars_source),
+                            'n_tokens': int(n_tokens_total),
+                            'tokens_per_char': float(n_tokens_total) / max(1, int(self._n_chars_source)),
+                            'tokenizer': tokenizer_cache_key,
+                            'dtype': 'int32',
+                            'format': 'raw_bin_v1',
+                        }, _f)
+                    _log(f"  Sidecar metadata saved: {bin_meta_path.name}")
+                except OSError as _exc:
+                    raise RuntimeError(
+                        f"Tokenization succeeded but sidecar write failed "
+                        f"({_exc}). Either create {bin_meta_path} manually with "
+                        f"n_tokens={n_tokens_total} or rerun (will re-tokenize)."
+                    ) from _exc
+
+                bin_size_gb = bin_cache_path.stat().st_size / (1024 ** 3)
+                _log(
+                    f"  Token cache saved: {bin_cache_path.name} "
+                    f"({bin_size_gb:.2f} GB, {n_tokens_total:,} int32 tokens)"
+                )
+
+                memmap_arr = np.memmap(
+                    bin_cache_path, dtype=np.int32, mode='r', shape=(n_tokens_total,)
+                )
+                tokens = torch.from_numpy(memmap_arr)
+                self._tokens_int32_mmap = True
         else:
-            # Load dataset and tokenize from scratch
-            _log(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
-            _log(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
-
-            if dataset == 'openwebtext':
-                # OpenWebText: ~8B tokens, loaded via HuggingFace datasets
-                full_text = _load_openwebtext_split(split, cache_dir)
-            elif dataset == 'wiki-ja':
-                # Japanese Wikipedia: ~1B chars, loaded via HuggingFace datasets
-                full_text = _load_wiki_ja_split(split, cache_dir)
-            elif DATASETS_AVAILABLE:
-                hf_config = DATASET_CONFIGS[dataset]
-                dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
-                texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
-                full_text = '\n\n'.join(texts)
-            else:
-                _log("  (Using direct download fallback)")
-                if dataset == 'wikitext-103':
-                    wikitext_data = _download_wikitext103_fallback(cache_dir)
+            # Legacy path: in-RAM tokenization with `torch.save`-formatted
+            # cache. Used by wikitext-{2,103}, openwebtext, and wiki-ja, all
+            # of which fit comfortably (<8GB final tensor) under the existing
+            # chunked-tokenize scheme.
+            meta_cache_path = token_cache_path.with_suffix(token_cache_path.suffix + '.meta.json')
+            if token_cache_path.exists():
+                _log(f"Loading {dataset.upper()} ({split}) from token cache...")
+                _log(f"  Cache: {token_cache_path}")
+                tokens = torch.load(token_cache_path, weights_only=True)
+                _log(f"  Loaded {len(tokens):,} cached tokens")
+                if meta_cache_path.exists():
+                    try:
+                        import json as _json
+                        with open(meta_cache_path, 'r', encoding='utf-8') as _f:
+                            _meta = _json.load(_f)
+                        self._n_chars_source = int(_meta.get('n_chars_source')) if _meta.get('n_chars_source') is not None else None
+                        if self._n_chars_source is not None:
+                            _log(f"  Source character count (from sidecar): {self._n_chars_source:,}")
+                    except (OSError, ValueError) as _exc:
+                        _log(f"  Sidecar metadata unreadable ({_exc}); BPC will fall back to bits-per-token")
                 else:
-                    wikitext_data = _download_wikitext2_fallback(cache_dir)
-                full_text = wikitext_data[split]
-
-            # Clean up processed WikiText artifacts (not needed for openwebtext or wiki-ja)
-            if dataset not in ('openwebtext', 'wiki-ja'):
-                import re
-                unk_count = full_text.count('<unk>')
-                if unk_count > 0:
-                    print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")  # keep: warning
-                    full_text = re.sub(r'<unk>', '', full_text)
-                    full_text = re.sub(r'[ \t]+', ' ', full_text)
-
-                # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
-                full_text = full_text.replace(' @-@ ', '-')
-                full_text = full_text.replace(' @,@ ', ',')
-                full_text = full_text.replace(' @.@ ', '.')
-
-            _log(f"  Total characters: {len(full_text):,}")
-            # Capture for the bits-per-character correction (see sidecar logic above).
-            self._n_chars_source = len(full_text)
-
-            # Tokenize (chunked for large datasets to manage memory)
-            tokenizer_label = 'cl100k_base' if dataset == 'wiki-ja' else 'GPT-2'
-            _log(f"Tokenizing with tiktoken ({tokenizer_label} BPE)...")
-            CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
-            if len(full_text) > CHUNK_CHARS * 2:
-                # Memory-efficient chunked tokenization using numpy arrays
-                # (Python list of ints uses ~28 bytes each; numpy int32 uses 4 bytes)
-                chunk_arrays = []
-                total_tokens = 0
-                n_chunks = (len(full_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
-                for i in range(0, len(full_text), CHUNK_CHARS):
-                    chunk_idx = i // CHUNK_CHARS + 1
-                    chunk = full_text[i:i + CHUNK_CHARS]
-                    chunk_tokens = self.tokenizer.encode(chunk)
-                    chunk_arrays.append(np.array(chunk_tokens, dtype=np.int32))
-                    total_tokens += len(chunk_tokens)
-                    del chunk_tokens
-                    if chunk_idx % 10 == 0 or chunk_idx == n_chunks:
-                        _log(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({total_tokens:,} tokens so far)")
-                del full_text  # Free the text string
-                _log(f"  Concatenating {total_tokens:,} tokens...")
-                tokens_np = np.concatenate(chunk_arrays)
-                del chunk_arrays
-                # Convert to int64 numpy array (zero-copy torch conversion)
-                tokens = tokens_np.astype(np.int64)
-                del tokens_np
+                    _log(
+                        f"  No sidecar metadata for token cache; BPC will fall back to bits-per-token. "
+                        f"Delete {token_cache_path.name} to rebuild with sidecar."
+                    )
             else:
-                tokens = self.tokenizer.encode(full_text)
+                _log(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
+                _log(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
 
-            # Save to cache for next run
-            _log(f"  Saving token cache to {token_cache_path}...")
-            if isinstance(tokens, np.ndarray):
-                torch.save(torch.from_numpy(tokens), token_cache_path)
-            else:
-                torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
-            _log(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
-            # Persist source-character count alongside the cache so future loads
-            # can compute true bits-per-character without re-loading the text.
-            try:
-                import json as _json
-                with open(meta_cache_path, 'w', encoding='utf-8') as _f:
-                    _json.dump({
-                        'n_chars_source': int(self._n_chars_source),
-                        'n_tokens': int(len(tokens)),
-                        'tokens_per_char': float(len(tokens)) / max(1, int(self._n_chars_source)),
-                        'tokenizer': tokenizer_cache_key,
-                    }, _f)
-                _log(f"  Sidecar metadata saved: {meta_cache_path.name}")
-            except OSError as _exc:
-                _log(f"  Failed to save sidecar metadata: {_exc}")
+                if dataset == 'openwebtext':
+                    # OpenWebText: ~8B tokens, loaded via HuggingFace datasets
+                    full_text = _load_openwebtext_split(split, cache_dir)
+                elif dataset == 'wiki-ja':
+                    # Japanese Wikipedia: ~1B chars, loaded via HuggingFace datasets
+                    full_text = _load_wiki_ja_split(split, cache_dir)
+                elif DATASETS_AVAILABLE:
+                    hf_config = DATASET_CONFIGS[dataset]
+                    dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
+                    texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
+                    full_text = '\n\n'.join(texts)
+                else:
+                    _log("  (Using direct download fallback)")
+                    if dataset == 'wikitext-103':
+                        wikitext_data = _download_wikitext103_fallback(cache_dir)
+                    else:
+                        wikitext_data = _download_wikitext2_fallback(cache_dir)
+                    full_text = wikitext_data[split]
+
+                # Clean up processed WikiText artifacts (not needed for openwebtext or wiki-ja)
+                if dataset not in ('openwebtext', 'wiki-ja'):
+                    import re
+                    unk_count = full_text.count('<unk>')
+                    if unk_count > 0:
+                        print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")  # keep: warning
+                        full_text = re.sub(r'<unk>', '', full_text)
+                        full_text = re.sub(r'[ \t]+', ' ', full_text)
+
+                    # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
+                    full_text = full_text.replace(' @-@ ', '-')
+                    full_text = full_text.replace(' @,@ ', ',')
+                    full_text = full_text.replace(' @.@ ', '.')
+
+                _log(f"  Total characters: {len(full_text):,}")
+                # Capture for the bits-per-character correction (see sidecar logic above).
+                self._n_chars_source = len(full_text)
+
+                # Tokenize (chunked for large datasets to manage memory)
+                tokenizer_label = 'cl100k_base' if dataset == 'wiki-ja' else 'GPT-2'
+                _log(f"Tokenizing with tiktoken ({tokenizer_label} BPE)...")
+                CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
+                if len(full_text) > CHUNK_CHARS * 2:
+                    # Memory-efficient chunked tokenization using numpy arrays
+                    # (Python list of ints uses ~28 bytes each; numpy int32 uses 4 bytes)
+                    chunk_arrays = []
+                    total_tokens = 0
+                    n_chunks = (len(full_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
+                    for i in range(0, len(full_text), CHUNK_CHARS):
+                        chunk_idx = i // CHUNK_CHARS + 1
+                        chunk = full_text[i:i + CHUNK_CHARS]
+                        chunk_tokens = self.tokenizer.encode(chunk)
+                        chunk_arrays.append(np.array(chunk_tokens, dtype=np.int32))
+                        total_tokens += len(chunk_tokens)
+                        del chunk_tokens
+                        if chunk_idx % 10 == 0 or chunk_idx == n_chunks:
+                            _log(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({total_tokens:,} tokens so far)")
+                    del full_text  # Free the text string
+                    _log(f"  Concatenating {total_tokens:,} tokens...")
+                    tokens_np = np.concatenate(chunk_arrays)
+                    del chunk_arrays
+                    # Convert to int64 numpy array (zero-copy torch conversion)
+                    tokens = tokens_np.astype(np.int64)
+                    del tokens_np
+                else:
+                    tokens = self.tokenizer.encode(full_text)
+
+                # Save to cache for next run
+                _log(f"  Saving token cache to {token_cache_path}...")
+                if isinstance(tokens, np.ndarray):
+                    torch.save(torch.from_numpy(tokens), token_cache_path)
+                else:
+                    torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
+                _log(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
+                # Persist source-character count alongside the cache so future loads
+                # can compute true bits-per-character without re-loading the text.
+                try:
+                    import json as _json
+                    with open(meta_cache_path, 'w', encoding='utf-8') as _f:
+                        _json.dump({
+                            'n_chars_source': int(self._n_chars_source),
+                            'n_tokens': int(len(tokens)),
+                            'tokens_per_char': float(len(tokens)) / max(1, int(self._n_chars_source)),
+                            'tokenizer': tokenizer_cache_key,
+                        }, _f)
+                    _log(f"  Sidecar metadata saved: {meta_cache_path.name}")
+                except OSError as _exc:
+                    _log(f"  Failed to save sidecar metadata: {_exc}")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < self._full_vocab_size:
+            if dataset == 'wiki-en':
+                # The vocab-restrict path calls tokens.tolist(), which on a
+                # full-dump wiki-en cache (~5B tokens) allocates ~140GB of
+                # Python ints. The auto-adjust in train_publication.py
+                # already pins vocab_size=100277 for cl100k datasets, so
+                # hitting this branch implies a deliberate misconfiguration.
+                raise NotImplementedError(
+                    f"Vocabulary restriction (vocab_size={vocab_size}) is not "
+                    f"supported for dataset='wiki-en'. Set vocab_size=None or "
+                    f"vocab_size=100277 (full cl100k_base vocab)."
+                )
             # Vocab restriction requires Python list; convert if needed
             if isinstance(tokens, (torch.Tensor, np.ndarray)):
                 tokens = tokens.tolist()
@@ -1092,8 +1448,19 @@ class WikiText2TiktokenDataset(Dataset):
                 _log(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
                 tokens = self._restrict_vocab(tokens, vocab_size)
 
-        # Convert to tensor efficiently based on input type
-        if isinstance(tokens, torch.Tensor):
+        # Convert to tensor efficiently based on input type.
+        # Special case: when tokens is a memmap-backed int32 torch.Tensor
+        # (the wiki-en streaming-bin path), keep dtype int32 to preserve the
+        # memory map. `.long()` would force a 4x-larger int64 copy of the
+        # whole tensor (~40GB for full wiki-en train) and defeat the point of
+        # streaming. `__getitem__` handles the per-slice cast to int64 below.
+        if self._tokens_int32_mmap:
+            assert isinstance(tokens, torch.Tensor) and tokens.dtype == torch.int32, (
+                f"_tokens_int32_mmap=True requires int32 torch.Tensor, "
+                f"got {type(tokens).__name__} dtype={getattr(tokens, 'dtype', None)}"
+            )
+            self.tokens = tokens
+        elif isinstance(tokens, torch.Tensor):
             self.tokens = tokens.long()
         elif isinstance(tokens, np.ndarray):
             self.tokens = torch.from_numpy(tokens.astype(np.int64))
@@ -1186,7 +1553,7 @@ class WikiText2TiktokenDataset(Dataset):
             tokens = [self._vocab_mapping.get(tok, self._unk_id) for tok in tokens]
         return tokens
 
-    def decode(self, ids) -> str:
+    def decode(self, ids: Union[List[int], torch.Tensor]) -> str:
         """Decode token IDs back to text (handles vocab restriction)."""
         if isinstance(ids, torch.Tensor):
             ids = ids.tolist()
@@ -1231,8 +1598,12 @@ class WikiText2TiktokenDataset(Dataset):
             start_idx = self._epoch_offset + idx * int(self.stride)
         end_idx = start_idx + self.max_seq_len
 
-        input_ids = self.tokens[start_idx:end_idx]
-        target_ids = self.tokens[start_idx + 1:end_idx + 1]
+        # `.long()` is a no-op when self.tokens is already int64 (the legacy
+        # path) and a per-window 128-element int32->int64 cast in the wiki-en
+        # streaming-bin path. Required because the pad tensors below are long
+        # and `torch.cat` rejects mixed dtypes.
+        input_ids = self.tokens[start_idx:end_idx].long()
+        target_ids = self.tokens[start_idx + 1:end_idx + 1].long()
 
         if len(input_ids) < self.max_seq_len:
             padding_length = self.max_seq_len - len(input_ids)
@@ -1403,7 +1774,7 @@ class WikiText2CharDataset(Dataset):
         """Encode text to character IDs."""
         return [self.char_to_id.get(c, self.unk_token_id) for c in text]
 
-    def decode(self, indices) -> str:
+    def decode(self, indices: Union[List[int], torch.Tensor]) -> str:
         """Decode indices back to text."""
         if isinstance(indices, torch.Tensor):
             indices = indices.tolist()
@@ -1851,7 +2222,8 @@ def create_dataloaders(
         cache_dir: Optional cache directory
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
         dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens, default),
-                 'openwebtext' (~8B tokens), or 'wiki-ja' (Japanese Wikipedia)
+                 'openwebtext' (~8B tokens), 'wiki-ja' (Japanese Wikipedia),
+                 or 'wiki-en' (English Wikipedia, ~5B cl100k tokens at full dump).
         include_test: If True, also return test dataloader
         return_tokenizer: If True, also return the train dataset (has .decode() method)
 

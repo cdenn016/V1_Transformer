@@ -164,7 +164,7 @@ def test_belief_similarity(model, input_ids):
             print(f"  Token {i}: {mu_batch[i, :5].cpu().numpy()}")
 
 
-def main(checkpoint_path: str = None):
+def main(checkpoint_path: str = None, trusted_checkpoint: bool = True):
     """
     Run query variation and belief-space analysis on a trained checkpoint.
 
@@ -173,6 +173,9 @@ def main(checkpoint_path: str = None):
 
     Args:
         checkpoint_path: Path to model checkpoint. If None, uses CLI arg.
+        trusted_checkpoint: If True (default), allows pickle-based loads.
+            Set False to refuse arbitrary code execution from hostile
+            checkpoints (will fail on configs that contain non-tensor fields).
     """
     import argparse
 
@@ -217,7 +220,7 @@ def main(checkpoint_path: str = None):
         print(f"Warning: {config_json_path} not found, trying to extract from checkpoint...")
 
         # Try to extract config from checkpoint pickle
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not trusted_checkpoint)
         if 'config' in checkpoint:
             ckpt_config = checkpoint['config']
             if isinstance(ckpt_config, dict):

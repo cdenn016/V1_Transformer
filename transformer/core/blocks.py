@@ -1092,8 +1092,6 @@ class GaugeTransformerStack(nn.Module):
         self.n_layers = cfg.n_layers
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
         self.em_mode = cfg.em_mode
-        self.amortized_inference = cfg.amortized_inference  # property, from em_mode
-        self.em_phi_mode = cfg.em_phi_mode  # property, from em_mode
 
         self.blocks =nn.ModuleList([
             GaugeTransformerBlock(cfg)

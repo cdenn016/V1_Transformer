@@ -34,6 +34,7 @@ Updated: GL(K) generalization - February 2026
 """
 
 import math
+import warnings
 import numpy as np
 import torch
 import torch.nn as nn
@@ -87,11 +88,11 @@ class GaugeTokenEmbedding(nn.Module):
         self,
         vocab_size: int,
         embed_dim: int,
-        irrep_spec: list = None,
-        init_std: float = None,  # Default: 2.0 for sharper attention
+        irrep_spec: Optional[list] = None,
+        init_std: Optional[float] = None,  # Default: 2.0 for sharper attention
         init_sigma_scale: float = 1.0,  # Scaled to match init_std for O(1) KL
         learnable_sigma: bool = False,
-        learnable_phi: bool = False,
+        learnable_phi: bool = True,
         gauge_fixed_priors: bool = False,
         generators: Optional[torch.Tensor] = None,
         diagonal_covariance: bool = False,
@@ -101,7 +102,7 @@ class GaugeTokenEmbedding(nn.Module):
                                              # transported Σ stays isotropic. Use enforce_orthogonal=True
                                              # or learnable_reflection=True with SO(K) generators.
                                              # With GL(K), transported cov is NOT isotropic (S(Ω) ≠ 0).
-        max_seq_len: int = 2048,
+        max_seq_len: int = 128,
         use_positional_embedding: bool = False,
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
         phi_scale: float = 0.3,  # Target ||φ|| norm for gauge frame initialization
@@ -991,7 +992,13 @@ class GaugePositionalEncoding(nn.Module):
             # GL(K): 'exact' not supported (matrix log is problematic for GL),
             # but BCH works via general Lie bracket with transport generators
             if composition == 'exact':
-                
+                warnings.warn(
+                    "GaugePositionalEncoding: composition='exact' is not "
+                    "supported for gauge_group='GLK' (matrix log is unstable "
+                    "for non-orthogonal Omega). Falling back to 'bch2'.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 composition = 'bch2'
             if composition in ['bch1', 'bch2'] and generators is None and not GENERAL_BCH_AVAILABLE:
                 print(f"[WARNING] GL(K) BCH requires generators. "
@@ -1000,7 +1007,13 @@ class GaugePositionalEncoding(nn.Module):
         elif phi_dim != 3:
             # SO(N) with N > 3: 'exact' is SO(3)-only
             if composition == 'exact':
-               
+                warnings.warn(
+                    f"GaugePositionalEncoding: composition='exact' is only "
+                    f"available for SO(3) (phi_dim=3); got phi_dim={phi_dim}. "
+                    "Falling back to 'bch2'.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 composition = 'bch2'
             if composition in ['bch1', 'bch2'] and generators is None and not SON_BCH_AVAILABLE:
                 print(f"[WARNING] SO(N) BCH requires generators. "
