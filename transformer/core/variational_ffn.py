@@ -85,22 +85,6 @@ from transformer.core.vfe_utils import (
 from transformer.core.active_inference import compute_ai_gradients
 
 
-# =============================================================================
-# Implicit EM Gradient — extracted to transformer/core/vfe_implicit_em.py
-# =============================================================================
-# The two autograd Functions and the scale-factor helper below were moved
-# out of this file as part of a side-quest extraction.  They are re-exported
-# here so external callers that do
-#     from transformer.core.variational_ffn import ImplicitEMGradient
-# continue to work unchanged.  See vfe_implicit_em.py for the definitions
-# and the full derivation.
-from transformer.core.vfe_implicit_em import (
-    ImplicitEMGradient,
-    ImplicitEMGradientSigma,
-    compute_implicit_em_scales,
-)
-
-
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights
 from transformer.core.transport_ops import compute_transport_operators, compute_transport_operators_direct
@@ -271,7 +255,7 @@ class VariationalFFNDynamic(nn.Module):
         # Isotropic covariance limit
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # EM gradient-flow mode — replaces individual amortized_inference / amortize_sigma /
-        # exact_phi_grad / implicit_em / em_phi_mode flags (all derived from em_mode).
+        # exact_phi_grad / em_phi_mode flags (all derived from em_mode).
         em_mode: str = 'ift_phi',
         
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
@@ -380,7 +364,6 @@ class VariationalFFNDynamic(nn.Module):
         self.amortized_inference = _flags['amortized_inference']
         self.amortize_sigma = _flags['amortize_sigma']
         self.exact_phi_grad = _flags['exact_phi_grad']
-        self.implicit_em = _flags['implicit_em']
         self.em_phi_mode = _flags['em_phi_mode']
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
@@ -397,11 +380,6 @@ class VariationalFFNDynamic(nn.Module):
         self.gradient_checkpoint_vfe = gradient_checkpoint_vfe
         self.n_picard_steps = n_picard_steps
         self.picard_trust_region = picard_trust_region
-        self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
-        self._last_implicit_sigma_scale = None
-        if self.implicit_em:
-            logger.info(f"[VariationalFFNDynamic] Implicit EM enabled: IFT-based M-step gradient")
-            logger.info(f"  → Detaches mu/sigma at E-step start, applies s_k = (α/σ²_p)/A_k scaling")
         # RoPE in the VFE E-step uses a hybrid "attention gauge ≠ value gauge"
         # objective that mirrors the attention sublayer's factorisation:
         #
@@ -1448,54 +1426,19 @@ class VariationalFFNDynamic(nn.Module):
     def _finalize_e_step(
         self,
         alpha_effective,
-        sigma_p: torch.Tensor,
-        sigma_current: Optional[torch.Tensor],
-        beta_current: Optional[torch.Tensor],
-        beta_heads: list,
         omega_current: Optional[torch.Tensor],
-        eps: float,
+        beta_current: Optional[torch.Tensor],
+        beta_heads: Optional[list],
     ) -> None:
         r"""Store post-E-step state on ``self`` for the M-step.
 
-        Writes: ``_last_alpha_i``, ``_last_beta_for_implicit``,
-        ``_last_implicit_mu_scale``, ``_last_implicit_sigma_scale``,
-        ``_last_omega``.
+        Writes: ``_last_alpha_i``, ``_last_omega``, ``_last_beta``.
         """
         # Alpha
         if self.learnable_alpha:
             self._last_alpha_i = alpha_effective.detach()
         else:
             self._last_alpha_i = None
-
-        # Beta for implicit EM
-        if self.implicit_em:
-            if beta_heads:
-                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
-            elif beta_current is not None:
-                self._last_beta_for_implicit = beta_current.detach()
-            else:
-                self._last_beta_for_implicit = None
-
-        # Implicit EM gradient scales
-        if self.implicit_em:
-            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
-            if _beta_for_scale is not None:
-                _alpha_for_scale = alpha_effective if alpha_effective is not None else self.alpha
-                mu_scale, sigma_scale = compute_implicit_em_scales(
-                    alpha_i=_alpha_for_scale,
-                    sigma_p=sigma_p,
-                    beta=_beta_for_scale,
-                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
-                    eps=eps,
-                )
-                self._last_implicit_mu_scale = mu_scale
-                self._last_implicit_sigma_scale = sigma_scale
-            else:
-                self._last_implicit_mu_scale = None
-                self._last_implicit_sigma_scale = None
-        else:
-            self._last_implicit_mu_scale = None
-            self._last_implicit_sigma_scale = None
 
         # Omega for multi-layer propagation
         self._last_omega = omega_current
@@ -1559,7 +1502,7 @@ class VariationalFFNDynamic(nn.Module):
         #
         # EM modes: mu_p is always an M-step variable from E-step's perspective.
         _em_active = self.em_phi_mode in ('E_phi_q', 'M_phi_p')
-        if (self.amortized_inference and not self.implicit_em) and not _em_active:
+        if self.amortized_inference and not _em_active:
             mu_p_current = mu_prior
         else:
             mu_p_current = mu_prior.detach()
@@ -1567,7 +1510,7 @@ class VariationalFFNDynamic(nn.Module):
         # sigma_p: detached by default (M-step parameter). When amortize_sigma=True
         # and amortized_inference=True, kept attached so E-step gradients flow
         # back through prior covariances — enables learned prior uncertainty.
-        _attach_sigma = self.amortized_inference and self.amortize_sigma and not self.implicit_em
+        _attach_sigma = self.amortized_inference and self.amortize_sigma
         if sigma_prior is not None:
             sigma_p = sigma_prior if _attach_sigma else sigma_prior.detach()
         else:
@@ -1616,12 +1559,8 @@ class VariationalFFNDynamic(nn.Module):
         # ── Initial belief state ─────────────────────────────────────────
         # No .clone() needed: the E-step loop reassigns mu_current/sigma_current
         # (mu_current = mu_current + delta), never mutating in-place.
-        if self.implicit_em:
-            mu_current = mu.detach()
-            sigma_current = sigma.detach()
-        else:
-            mu_current = mu
-            sigma_current = sigma
+        mu_current = mu
+        sigma_current = sigma
 
         # Clamp initial sigma to [eps, sigma_max]
         if self.update_sigma:
@@ -2728,10 +2667,7 @@ class VariationalFFNDynamic(nn.Module):
             phi_current = phi_current.to(dtype)
 
         # Store post-E-step state for M-step
-        self._finalize_e_step(
-            alpha_effective, sigma_p, sigma_current,
-            beta_current, beta_heads, omega_current, eps,
-        )
+        self._finalize_e_step(alpha_effective, omega_current, beta_current, beta_heads)
 
         # ── EM boundary ──────────────────────────────────────────────────
         # In principled EM modes, q* is held fixed during the M-step.

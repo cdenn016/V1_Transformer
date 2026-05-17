@@ -50,8 +50,7 @@ TRAIN_CONFIG = {
     'learnable_pb_temperature': True,
     'mask_self_attention':      True,  #Prevent attention collapse?
   
-    'hierarchical_priors':      True,
-    'gauge_fixed_priors':       True,    
+    'gauge_fixed_priors':       True,
   
     'active_inference':         True,    #requires priorbank true
     
@@ -210,10 +209,6 @@ TRAIN_CONFIG = {
     
     'debug_vfe_grads':             False,
     'verbose_diagnostics':         False,
-    
-    # === Multi-layer depth signal ===
-    'aux_layer_loss':  True,   # Enable for multi-layer: per-layer M-step CE loss
-    'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
     
     
     # === Regularization ===

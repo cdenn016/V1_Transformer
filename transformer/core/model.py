@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # Import our components
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
 from transformer.core.blocks import GaugeTransformerStack, RMSNorm, MahalanobisNorm
-from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradientSigma
 from transformer.core.block_config import BlockConfig
 from transformer.core.active_inference import wire_readout_references
 
@@ -1120,15 +1119,13 @@ class GaugeTransformerLM(nn.Module):
             F = Σ_ij β_ij · KL(q_i || Ω_ij[q_j]) - E[log p(o|x)]
 
         The E-step does not see target tokens. `targets` here is forwarded only
-        to the per-layer auxiliary CE loss (aux_layer_loss) and the final-layer
-        CE in compute_free_energy_loss; it is never passed into the belief
-        inference loop.
+        to the final-layer CE in compute_free_energy_loss; it is never passed
+        into the belief inference loop.
 
         Args:
             token_ids: (batch, seq_len) token indices
             targets: (batch, seq_len) target tokens — used only for the outer
-                per-layer auxiliary CE loss (aux_layer_loss). Not available to
-                the E-step.
+                CE loss. Not available to the E-step.
 
         Returns:
             logits: (batch, num_agents, vocab_size) predictions
@@ -1171,8 +1168,6 @@ class GaugeTransformerLM(nn.Module):
         # is provided by the outer CE loss in compute_free_energy_loss.
         all_betas = []
         all_kls = []
-        aux_losses = []  # Per-layer auxiliary CE losses (M-step signal for non-final layers)
-        _aux_layer_loss = self.config.get('aux_layer_loss', False)
         n_blocks = len(self.transformer.blocks)
 
         for layer_idx, block in enumerate(self.transformer.blocks):
@@ -1214,51 +1209,9 @@ class GaugeTransformerLM(nn.Module):
                 # blocks.py:586-611 handles the rebuild when this is None.
                 cached_head_transports = None
 
-            # Hierarchical priors: each layer's posterior μ becomes the next
-            # layer's prior μ.  sigma_prior stays at the embedding value to
-            # prevent progressive tightening (sigma cascade).
-            # Match GaugeTransformerStack.forward: when amortized_inference=True,
-            # keep gradients attached so cross-layer gradient flows to embeddings.
-            if self.transformer.hierarchical_priors and not is_final:
-                if getattr(self.transformer, 'amortized_inference', True):
-                    mu_prior = mu_q
-                else:
-                    mu_prior = mu_q.detach()
-
-            # =============================================================
-            # Auxiliary per-layer CE loss (M-step task signal for non-final layers)
-            # =============================================================
-            # Computed AFTER E-step on the layer's output μ. Enters through
-            # standard backprop (M-step), NOT through the E-step. The E-step
-            # remains purely geometric (prior + alignment). This provides
-            # task-relevant gradient signal to non-final layers' attention W_O
-            # and (indirectly) to embeddings, enabling genuine feature composition.
-            if _aux_layer_loss and not is_final and targets is not None:
-                _fn = self.transformer.final_norm
-                _aux_mu = _fn(mu_q, sigma_q) if isinstance(_fn, (RMSNorm, MahalanobisNorm)) else _fn(mu_q)
-                # Undo cross-head permutation before projecting to vocab
-                _aux_mu, _aux_sigma_tmp = self._apply_cross_head_perm(
-                    _aux_mu, sigma_q, _aux_mu.device, inverse=True
-                )
-                if self.use_prior_bank and self.prior_bank is not None:
-                    # _aux_sigma_tmp is already inverse-permuted
-                    _aux_logits = self.prior_bank.decode(
-                        _aux_mu, _aux_sigma_tmp, tau=self.prior_bank_tau
-                    )
-                else:
-                    # Detach out_proj weights from aux loss: gradient flows to
-                    # the layer's mu (training attention W_O and embeddings) but
-                    # NOT to out_proj, which should only learn from the final
-                    # layer's best representation.
-                    _W = self.out_proj.weight.detach()
-                    _aux_logits = F.linear(_aux_mu, _W)
-                _aux_ce = F.cross_entropy(
-                    _aux_logits.reshape(-1, _aux_logits.size(-1)),
-                    targets.reshape(-1),
-                    reduction='mean',
-                    ignore_index=-100,
-                )
-                aux_losses.append(_aux_ce)
+            # mu_prior stays at the embedding-derived prior for every layer
+            # (no cross-layer μ cascade). sigma_prior also stays at the
+            # embedding value to prevent progressive tightening.
 
             # =============================================================
             # Per-layer diagnostics collection
@@ -1331,32 +1284,6 @@ class GaugeTransformerLM(nn.Module):
                         _ld['perplexity'] = math.exp(min(_ld['ce_loss'], 20.0))
                 self._layer_diagnostics.append(_ld)
 
-        # =================================================================
-        # Implicit EM: Re-establish gradient path from mu_q → mu_embed
-        # =================================================================
-        # Applied BEFORE final_norm and inv_perm so that:
-        # (a) scale, mu_q, and mu_prior are all in the same (permuted) K space
-        #     — applying after inv_perm misaligns per-dimension scales
-        # (b) the IFT scale was derived at the E-step fixed point (pre-norm),
-        #     so J_norm should be part of the scaled gradient path
-        #
-        # IMPORTANT: Detach mu_q from the residual+attention chain before
-        # re-attaching with IFT scaling. Without this, embeddings receive BOTH
-        # the unscaled residual+attention gradient AND the IFT-scaled gradient,
-        # violating the EM separation. The IFT scale should be the SOLE gradient
-        # path to embeddings when implicit_em=True.
-        last_block = self.transformer.blocks[-1]
-        implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
-        implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
-
-        if implicit_mu_scale is not None:
-            # Detach mu_q to remove the residual+attention gradient path.
-            # ImplicitEMGradient.apply then establishes the IFT-scaled path as
-            # the sole gradient to mu_prior (→ embeddings).
-            mu_q = ImplicitEMGradient.apply(mu_q.detach(), mu_prior, implicit_mu_scale)
-        if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
-            sigma_q = ImplicitEMGradientSigma.apply(sigma_q.detach(), sigma_prior, implicit_sigma_scale)
-
         # Final norm (pass sigma for MahalanobisNorm/RMSNorm; LayerNorm doesn't accept it)
         _fn = self.transformer.final_norm
         mu_q = _fn(mu_q, sigma_q) if isinstance(_fn, (RMSNorm, MahalanobisNorm)) else _fn(mu_q)
@@ -1375,6 +1302,7 @@ class GaugeTransformerLM(nn.Module):
         stacked_kl = torch.stack(valid_kls, dim=0) if valid_kls else None
 
         # Retrieve adaptive alpha_i from last block's FFN (if learnable_alpha enabled)
+        last_block = self.transformer.blocks[-1]
         alpha_i = getattr(last_block.ffn, '_last_alpha_i', None)
 
         # =====================================================================
@@ -1501,8 +1429,6 @@ class GaugeTransformerLM(nn.Module):
             'phi_prior': phi_prior,      # (B, N, gauge_dim) - model gauge frames
             # Adaptive alpha_i from E-step (if learnable_alpha enabled)
             'alpha_i': alpha_i,          # (B, N, K) or None
-            # Auxiliary per-layer CE losses (M-step signal for non-final layers)
-            'aux_losses': aux_losses,    # List of scalar tensors, one per non-final layer
             # VFE gradient decomposition (from last layer's E-step)
             'vfe_debug': vfe_debug,      # Dict or None
             # Transport & covariance health

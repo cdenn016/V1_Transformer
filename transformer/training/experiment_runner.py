@@ -759,7 +759,6 @@ class PublicationTrainer(FastTrainer):
                 pad_token_id=self.pad_token_id,
                 mass_phi=self.config.mass_phi,
                 omega_det_penalty=getattr(self.config, 'omega_det_penalty', 0.0),
-                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
                 normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
                 ce_label_smoothing=getattr(self.config, 'ce_label_smoothing', 0.0),
@@ -875,7 +874,6 @@ class PublicationTrainer(FastTrainer):
             'train_loss_belief_align': full_metrics.get('loss/belief_align', 0),
             'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
             'train_loss_model_coupling': full_metrics.get('loss/model_coupling', 0),
-            'train_loss_aux_layer_ce': full_metrics.get('loss/aux_layer_ce', 0),
             # PPL from raw (un-normalized) CE to avoid bogus values when normalize_ce_by_dim=True
             'train_ppl': math.exp(min(full_metrics.get('loss/ce_raw', full_metrics['loss/ce']), 20)),
             'beta_mean': full_metrics.get('attention/beta_mean', 0),
@@ -1491,6 +1489,11 @@ class PublicationTrainer(FastTrainer):
                     if dataset_name == 'wiki-ja':
                         prompts = ["日本", "東京", "世界", "歴史", "文化", "科学", "政治", "経済", "教育", "自然",
                                    "社会", "技術", "音楽", "映画", "大学"]
+                    elif dataset_name == 'wiki-en':
+                        prompts = ["The history of", "In the early", "Founded in", "Born in",
+                                   "The city of", "The Battle of", "The first", "During the",
+                                   "Located in", "Known for", "The University of",
+                                   "The species", "The novel", "The film", "The album"]
                     else:
                         prompts = ["The", "In", "A", "It", "This", "As", "Fuck", "When", "For",
                                    "After", "Before", "During", "While", "Although", "However"]
@@ -1986,10 +1989,6 @@ def run_single_experiment(
         kappa_gamma=config.get('kappa_gamma', 1.0),
         lambda_hyper=config.get('lambda_hyper', 0.0),
 
-        # Multi-layer depth signal
-        aux_layer_loss=config.get('aux_layer_loss', False),
-        aux_loss_weight=config.get('aux_loss_weight', 0.3),
-
         # Gauge geometry: phi gradient control
         mass_phi=config.get('mass_phi', config.get('alpha_phi', 0.0)),
         use_slk_projection=config.get('use_slk_projection', False),
@@ -2308,6 +2307,8 @@ def _validate_pure_vfe(model, loader, device, max_samples=128000):
     total_ce_tokens = 0.0
     total_tokens = 0
     total_samples = 0
+    total_margin_sum = 0.0
+    total_margin_tokens = 0
 
     with torch.no_grad():
         for input_ids, target_ids in loader:
@@ -2323,16 +2324,38 @@ def _validate_pure_vfe(model, loader, device, max_samples=128000):
                 ignore_index=-100,
             ).item()
 
-            non_pad = (target_ids != -100).sum().item()
+            non_pad_mask = (target_ids != -100)
+            non_pad = non_pad_mask.sum().item()
             total_ce_tokens += ce * non_pad
             total_tokens += non_pad
             total_samples += input_ids.size(0)
 
+            # Decode logit margin: target_logit − max(other_logit). A positive
+            # margin means the target token is the argmax. A collapsing margin
+            # over training is the signature of Σ_p inflation eroding decode
+            # discrimination (see plan: A2 / hyper_var coupling).
+            if non_pad > 0:
+                flat_logits = logits.reshape(-1, logits.size(-1))
+                flat_targets = target_ids.reshape(-1)
+                valid = flat_targets != -100
+                v_logits = flat_logits[valid]
+                v_targets = flat_targets[valid]
+                tgt_logit = v_logits.gather(1, v_targets.unsqueeze(1)).squeeze(1)
+                masked = v_logits.scatter(
+                    1, v_targets.unsqueeze(1), float('-inf')
+                )
+                top_other = masked.max(dim=1).values
+                margin = (tgt_logit - top_other)
+                total_margin_sum += margin.sum().item()
+                total_margin_tokens += margin.numel()
+
     avg_ce = total_ce_tokens / max(1, total_tokens)
+    avg_margin = total_margin_sum / max(1, total_margin_tokens)
     return {
         'loss': avg_ce,
         'ce_loss': avg_ce,
         'perplexity': math.exp(min(avg_ce, 20)),
+        'decode_margin': avg_margin,
     }
 
 
@@ -2845,11 +2868,22 @@ def run_pure_vfe_experiment(
                     sig_eigs = torch.linalg.eigvalsh(model.prior_Sigma[:100])
                     sig_min = sig_eigs[..., 0].min().item()
                     sig_max = sig_eigs[..., -1].max().item()
+                    sig_mean = sig_eigs.mean().item()
                     mu_norms = model.prior_mu.norm(dim=-1)
                     mu_mean = mu_norms.mean().item()
                     mu_max = mu_norms.max().item()
 
-                    if sig_min < 0.05 or mu_max > 10.0:
+                    diag_msg = (
+                        f"  [DIAG] SigEig min/mean/max = "
+                        f"{sig_min:.3f}/{sig_mean:.3f}/{sig_max:.3f} | "
+                        f"mu mean/max = {mu_mean:.2f}/{mu_max:.2f}"
+                    )
+                    if use_tqdm:
+                        tqdm.write(diag_msg)
+                    else:
+                        logger.info(diag_msg)
+
+                    if sig_min < 0.05 or mu_max > 10.0 or sig_mean > 5.0:
                         health_msg = (f"  [WARN] Sigma_min={sig_min:.4f} Sigma_max={sig_max:.2f} "
                                       f"mu_mean={mu_mean:.2f} mu_max={mu_max:.2f}")
                         if use_tqdm:
@@ -2885,6 +2919,7 @@ def run_pure_vfe_experiment(
                 logger.info(f"\n  Validation @ step {step+1}:")
                 logger.info(f"    Loss: {val_metrics['loss']:.4f}")
                 logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
+                logger.info(f"    Decode margin: {val_metrics['decode_margin']:+.4f}")
                 from transformer.training.bpc import bpc_from_dataset
                 logger.info(
                     f"    BPC: "

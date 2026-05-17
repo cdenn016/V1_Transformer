@@ -755,8 +755,8 @@ class PriorBank(nn.Module):
         #    gradients back through the same matrix_exp graph at backward.
         #    Replaces the gradient checkpoint.  Memory cost: ~80–200 MB extra
         #    for the matrix_exp saved tensors at V=50k, K=20.  Hugely
-        #    beneficial when active_inference / aux_layer_loss / distillation
-        #    drive multiple decode calls per forward (one matrix_exp instead
+        #    beneficial when active_inference / distillation drive multiple
+        #    decode calls per forward (one matrix_exp instead
         #    of N).  For single-decode workflows it still wins by ~15% by
         #    skipping the gradient-checkpoint recompute on backward.
         #

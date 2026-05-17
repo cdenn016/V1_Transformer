@@ -58,9 +58,6 @@ Mutual exclusions
 -----------------
 ``use_deq=True`` is incompatible with:
 
-- ``implicit_em=True`` — both correct the M-step gradient; using both
-  double-counts the correction.  Enforced in
-  ``VariationalFFNDynamic.__init__``.
 - ``active_inference=True`` — the DEQ Jacobian is built from the VFE-only
   step operator, not the VFE+EFE composite.  Enforced in
   ``wire_readout_references``.

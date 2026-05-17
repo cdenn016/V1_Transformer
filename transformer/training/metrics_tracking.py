@@ -47,7 +47,6 @@ class PublicationMetricsTracker:
             'train_loss_total', 'train_loss_ce', 'train_loss_ce_raw',
             'train_loss_belief_align',
             'train_loss_self_consistency', 'train_loss_model_coupling',
-            'train_loss_aux_layer_ce',
             'val_loss', 'val_ce',
 
             # Metrics
@@ -140,7 +139,6 @@ class PublicationMetricsTracker:
             'train_loss_belief_align': metrics.get('train_loss_belief_align', 0),
             'train_loss_self_consistency': metrics.get('train_loss_self_consistency', 0),
             'train_loss_model_coupling': metrics.get('train_loss_model_coupling', 0),
-            'train_loss_aux_layer_ce': metrics.get('train_loss_aux_layer_ce', 0),
             'val_loss': None,
             'val_ce': None,
 
@@ -262,6 +260,8 @@ class PublicationMetricsTracker:
                 entry['val_ce'] = val_metrics.get(
                     'ce_loss', val_metrics.get('loss'))
                 entry['val_ppl'] = val_metrics.get('perplexity')
+                if 'decode_margin' in val_metrics:
+                    entry['val_decode_margin'] = val_metrics['decode_margin']
                 from transformer.training.bpc import compute_bpc
                 entry['val_bpc'] = (
                     compute_bpc(entry['val_ce'], self.tokens_per_char,

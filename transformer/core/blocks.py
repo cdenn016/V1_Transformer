@@ -1091,11 +1091,6 @@ class GaugeTransformerStack(nn.Module):
         super().__init__()
         self.n_layers = cfg.n_layers
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
-        self.hierarchical_priors = getattr(cfg, 'hierarchical_priors', True)
-        # Stored for the hierarchical cascade: when True, the posterior μ of
-        # layer l becomes the prior μ of layer l+1 WITHOUT detach, so
-        # cross-layer gradients reach early-layer embeddings.  See the
-        # comment on the detach site below in forward().
         self.em_mode = cfg.em_mode
         self.amortized_inference = cfg.amortized_inference  # property, from em_mode
         self.em_phi_mode = cfg.em_phi_mode  # property, from em_mode
@@ -1163,7 +1158,7 @@ class GaugeTransformerStack(nn.Module):
                 # Gradient checkpointing: trade ~30% compute for ~60% memory savings.
                 # Capture mu_prior/omega by value (default arg) so that
                 # backward recomputation uses the correct per-layer values
-                # when hierarchical_priors or omega evolution mutate them.
+                # when the cross-layer cascade or omega evolution mutate them.
                 def create_block_fn(blk, _mu_prior=mu_prior, _omega=omega):
                     def block_fn(mu, sigma, phi_arg):
                         return blk(
@@ -1200,25 +1195,9 @@ class GaugeTransformerStack(nn.Module):
                 # matching invalidation in forward_with_attention.
                 cached_head_transports = None
 
-            # Hierarchical priors: each layer's posterior μ becomes the next
-            # layer's prior μ.  sigma_prior stays at the embedding value to
-            # prevent progressive tightening (sigma cascade).
-            #
-            # EM modes: mu_q is already detached by the FFN EM boundary,
-            # but the residual mu_q = mu_q_pre_ffn + mu_ffn still carries
-            # gradients from the attention sublayer.  For principled EM,
-            # fully detach so each layer's q* is frozen for the next layer.
-            #
-            # Amortized (default): keep mu_q ATTACHED so cross-layer
-            # gradients reach early-layer embeddings (CLAUDE.md).
-            if self.hierarchical_priors and not is_final:
-                _em_active = self.em_phi_mode in ('E_phi_q', 'M_phi_p')
-                if _em_active:
-                    mu_prior = mu_q.detach()
-                elif self.amortized_inference:
-                    mu_prior = mu_q
-                else:
-                    mu_prior = mu_q.detach()
+            # mu_prior stays at the embedding-derived prior for every layer
+            # (no cross-layer μ cascade). sigma_prior also stays at the
+            # embedding value to prevent progressive tightening.
 
             # Trajectory recording: record output
             if recording_enabled:

@@ -236,7 +236,6 @@ class BlockConfig:
         self._amortized_inference = _flags['amortized_inference']
         self._amortize_sigma = _flags['amortize_sigma']
         self._exact_phi_grad = _flags['exact_phi_grad']
-        self._implicit_em = _flags['implicit_em']
         self._em_phi_mode = _flags['em_phi_mode']
 
         # M_phi_p: phi is an M-step parameter — must not evolve during E-step
@@ -329,10 +328,6 @@ class BlockConfig:
         return self._exact_phi_grad
 
     @property
-    def implicit_em(self) -> bool:
-        return self._implicit_em
-
-    @property
     def em_phi_mode(self) -> str:
         return self._em_phi_mode
 
@@ -390,10 +385,6 @@ class BlockConfig:
     gradient_checkpointing: bool = False  # Checkpoint non-final layers (~60% memory savings, ~30% extra compute)
 
     # === Multi-layer depth signal ===
-    aux_layer_loss: bool = False       # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
-    aux_loss_weight: float = 0.3       # Weight for auxiliary per-layer CE losses
-    hierarchical_priors: bool = True   # Each layer's posterior μ becomes the next layer's prior μ
-                                        # (sigma_prior stays at embedding value to prevent cascade).
                                         # When False (default), all layers share the embedding prior.
     # === Active inference / Expected Free Energy (E-step extension) ===
     # When pragmatic_weight > 0, the E-step adds a term −H[p_pred(v|μ_i)] to F:
@@ -415,7 +406,7 @@ class BlockConfig:
     # Master toggle: when False (default), the entire EFE path is bypassed
     # regardless of weight values.  When True, the pragmatic and epistemic
     # weights below take effect.  Matches the project convention used by
-    # non_flat_transport, rope_full_gauge, and hierarchical_priors.
+    # non_flat_transport and rope_full_gauge.
                       # Master EFE on/off toggle
     active_inference_pragmatic_weight: float = 1.0   # λ_prag · H[p(v|μ)]
     active_inference_epistemic_weight: float = 0.5   # −λ_epi · MI(v; μ | q)
@@ -569,10 +560,6 @@ class BlockConfig:
             closed_form_e_step=config.get('closed_form_e_step', False),
             # Memory efficiency
             gradient_checkpointing=config.get('gradient_checkpointing', False),
-            # Multi-layer depth signal
-            aux_layer_loss=config.get('aux_layer_loss', False),
-            aux_loss_weight=config.get('aux_loss_weight', 0.3),
-            hierarchical_priors=config.get('hierarchical_priors', True),
             rope_full_gauge=config.get('rope_full_gauge', 'off'),
             # Active inference / EFE
             active_inference=config.get('active_inference', False),
