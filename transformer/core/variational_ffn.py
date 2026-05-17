@@ -1937,6 +1937,15 @@ class VariationalFFNDynamic(nn.Module):
                 and _nonflat_omega is None
                 and not torch.is_inference_mode_enabled()
             )
+            # Envelope identity: when the manuscript F includes the
+            # attention-entropy term (include_attention_entropy=True), the
+            # gradient at the softmax stationary point of beta is just
+            # sum_j beta * dKL/dtheta — the softmax-coupling term
+            # sum_j KL * dbeta/dtheta cancels exactly against the entropy
+            # gradient tau * sum_j log(beta) * dbeta/dtheta. So pass
+            # lambda_softmax=0 in that regime to avoid descending the
+            # entropy-suppressed surrogate F_surr = sum_j beta * KL.
+            _lambda_softmax_eff = 0.0 if self.include_attention_entropy else self.lambda_softmax
             if _use_rope_full:
                 beta_h, grad_mu_h, grad_sigma_h = _compute_rope_full_gauge_gradient_per_head(
                     mu_h=mu_h, sigma_h=sigma_h,
@@ -1944,7 +1953,7 @@ class VariationalFFNDynamic(nn.Module):
                     phi=phi_current, gen_h=gen_h,
                     alpha=alpha_h,
                     lambda_belief=self.lambda_belief,
-                    lambda_softmax=self.lambda_softmax,
+                    lambda_softmax=_lambda_softmax_eff,
                     kappa=kappa_h, eps=eps,
                     rope_base=self._rope_base_vfe,
                     d_h=d_h,
@@ -1961,7 +1970,7 @@ class VariationalFFNDynamic(nn.Module):
                     mu_q=mu_h, sigma_q=sigma_h,
                     mu_p=mu_p_h, sigma_p=sigma_p_h,
                     phi=phi_current, generators=gen_h,
-                    alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
+                    alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=_lambda_softmax_eff,
                     kappa=kappa_h, eps=eps,
                     irrep_dims=[d_h],
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
@@ -2003,7 +2012,7 @@ class VariationalFFNDynamic(nn.Module):
                     mu_q=mu_h, sigma_q=sigma_h,
                     mu_p=mu_p_h, sigma_p=sigma_p_h,
                     beta=beta_h, phi=phi_current, generators=gen_h,
-                    alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
+                    alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=_lambda_softmax_eff,
                     kappa=kappa_h, eps=eps, alpha_c0=c0_h,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
                     irrep_dims=[d_h],

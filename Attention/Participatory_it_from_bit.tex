@@ -2924,11 +2924,11 @@ Communication between agents $i$ and $j$ is mediated by a gauge frame transport 
 \begin{equation}
 \Omega_{ij} \in \mathrm{GL}(d_k),
 \end{equation}
-which maps representations from agent $j$'s local frame into agent $i$'s frame. The message (update) received by agent $i$ is
+which maps representations from agent $j$'s local frame into agent $i$'s frame. The value-aggregation output received by agent $i$ is the posterior mean of the mixture variational model under responsibilities $\beta_{ij}$ (derived formally in Section~\ref{sec:value_aggregation_itfb}):
 \begin{equation}
-m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
+\hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
-which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
+the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
 
 \subsubsection{Connection to Standard Transformers}
 
@@ -3131,11 +3131,12 @@ Combining all simplifications:
 \end{equation}
 recovering the standard transformer attention weighting rule, up to the key-norm bias term that cancels under the layer-normalisation or high-dimensional-concentration conditions established above.
 
-\subsubsection{Value Aggregation}
+\subsubsection{Value Aggregation}\label{sec:value_aggregation_itfb}
 
 The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore
 \begin{equation}
-m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
+\hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
+\label{eq:glk_mixture_aggregation_itfb}
 \end{equation}
 which is the standard mixture-of-Gaussians expectation. Defining the value projection
 \begin{equation}
@@ -3143,7 +3144,7 @@ V_j \equiv W_V^{\top}\mu_j, \qquad W_V \in \mathbb{R}^{d_k \times d_k},
 \end{equation}
 where we absorb the gauge transport $\Omega$ into the learned matrix $W_V$, we obtain
 \begin{equation}
-\boxed{m_i = \sum_j \beta_{ij} V_j},
+\boxed{\hat\mu_i = \sum_j \beta_{ij} V_j},
 \end{equation}
 identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij} V_j$.
 
@@ -3151,7 +3152,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 Under the assumptions above, the gauge-theoretic message-passing
 \begin{equation}
-\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
+\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad \hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
 reduces to
 \begin{equation}
@@ -4210,6 +4211,14 @@ which is manifestly positive definite for any $\Sigma_1 \succ 0$.
 Hence the covariance alignment fixed-point is an attractor of the variational dynamics.
 
 Therefore, we find that $\Sigma_i \approx\Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the dynamics itself rather than as an imposed constraint.
+
+\paragraph{Collapse to attention-weighted message passing.}
+The Fisher-preconditioned mean update derived in Section~\ref{sec:transformers} carries the per-edge alignment term $\beta_{ij}\,\Sigma_i\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)$. Substituting the covariance-alignment fixed point above into this expression cancels the inner $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ factor against the outer $\Sigma_i$, so the per-edge contribution collapses to
+\begin{equation}
+\beta_{ij}\,\Sigma_i\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)\;\longrightarrow\;\beta_{ij}\,(\mu_i - \Omega_{ij}\mu_j),
+\label{eq:fisher_aligned_collapse}
+\end{equation}
+the non-isotropic generalisation of the value aggregation $\sum_j \alpha_{ij} V_j$. The mean and covariance dynamics therefore cooperate at equilibrium to produce clean attention-weighted message passing with geometric transport: the per-edge update is proportional to the residual $\mu_i - \Omega_{ij}\mu_j$ alone, with no surviving covariance precision factor.
 
 \section{Relating The Quadratic Forms to Transported KL Divergences}
 We now show that the pairwise quadratic expectations can be expressed in terms of KL divergences between transported distributions (see appendix for general requirement of the forward KL).

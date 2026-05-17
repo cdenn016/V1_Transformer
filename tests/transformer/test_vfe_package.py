@@ -422,6 +422,133 @@ class TestExactDiagonalTransport:
         assert cfg.exact_diagonal_transport is True
 
 
+class TestFMonitorEnvelopeRouting:
+    """Regression for the lambda_softmax envelope-routing fix at
+    ``transformer/vfe/e_step.py:288, :344``.
+
+    The f_history monitor at ``vfe/e_step.py:396-413`` measures the
+    manuscript free energy ``F = sum_j beta * KL + tau * sum(beta * log beta)``.
+    Before the fix the (mu, sigma) gradient descended the
+    entropy-suppressed surrogate ``F_surr = sum_j beta * KL`` because
+    ``lambda_softmax=self.lambda_soft`` was passed unconditionally to
+    ``compute_vfe_gradients_gpu``. With the fix,
+    ``lambda_softmax=0.0`` is used when ``include_attention_entropy=True``
+    so the envelope-theorem identity ``dF/dtheta = sum_j beta * dKL/dtheta``
+    holds at the softmax stationary point of beta.
+
+    Note: full strict-monotone descent of F is NOT asserted here.
+    ``compute_vfe_gradients_gpu`` computes the QUERY-side partial
+    gradient only (per ``test_vfe_gradients.py::test_exact_diagonal_transport_fd_mu``);
+    the symmetric KEY-side contribution from positions where mu_k
+    appears as the transport key is not summed in. That is a separate
+    design-level concern from the lambda_softmax routing tested here.
+    """
+
+    def test_f_history_populated_with_entropy(self, generators):
+        """With ``include_attention_entropy=True`` and diagnostics on, the
+        monitor records the manuscript F across all E-step iterations."""
+        torch.manual_seed(20260517)
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=2,
+            max_seq_len=32,
+            n_e_steps=3,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            track_layer_diagnostics=True,
+        )
+        model = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 8))
+        _ = model(token_ids)
+
+        for block in model.stack.blocks:
+            f_history = block.e_step._last_diagnostics.get('f_history')
+            assert f_history is not None and len(f_history) == cfg.n_e_steps, (
+                f"f_history not populated correctly: {f_history}"
+            )
+            assert all(isinstance(v, float) for v in f_history)
+
+    def test_lambda_softmax_zero_when_entropy_on(self, generators):
+        """The E-step must pass lambda_softmax=0.0 to the gradient kernels
+        when include_attention_entropy=True. Verified by monkey-patching
+        compute_vfe_gradients_gpu to capture the kwarg value."""
+        import transformer.vfe.e_step as e_step_mod
+        from transformer.core.vfe_gradients import compute_vfe_gradients_gpu
+
+        captured = {}
+        original = e_step_mod.compute_vfe_gradients_gpu
+
+        def spy(*args, **kwargs):
+            captured['lambda_softmax'] = kwargs.get('lambda_softmax')
+            return original(*args, **kwargs)
+
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            lambda_soft=1.0,  # would be passed through without the fix
+        )
+        model = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
+
+        e_step_mod.compute_vfe_gradients_gpu = spy
+        try:
+            _ = model(token_ids)
+        finally:
+            e_step_mod.compute_vfe_gradients_gpu = original
+
+        assert captured.get('lambda_softmax') == 0.0, (
+            f"Expected lambda_softmax=0.0 with include_attention_entropy=True, "
+            f"got {captured.get('lambda_softmax')}. The envelope-routing fix "
+            f"at vfe/e_step.py:344 has regressed."
+        )
+
+    def test_lambda_softmax_passes_through_when_entropy_off(self, generators):
+        """With include_attention_entropy=False the legacy path is preserved:
+        lambda_softmax = self.lambda_soft is passed unchanged."""
+        import transformer.vfe.e_step as e_step_mod
+
+        captured = {}
+        original = e_step_mod.compute_vfe_gradients_gpu
+
+        def spy(*args, **kwargs):
+            captured['lambda_softmax'] = kwargs.get('lambda_softmax')
+            return original(*args, **kwargs)
+
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            include_attention_entropy=False,
+            lambda_soft=0.7,
+        )
+        model = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
+
+        e_step_mod.compute_vfe_gradients_gpu = spy
+        try:
+            _ = model(token_ids)
+        finally:
+            e_step_mod.compute_vfe_gradients_gpu = original
+
+        assert captured.get('lambda_softmax') == 0.7, (
+            f"Expected lambda_softmax=0.7 (legacy path), got "
+            f"{captured.get('lambda_softmax')}. The envelope-routing fix "
+            f"at vfe/e_step.py:344 broke the legacy lambda_soft pass-through."
+        )
+
+
 class TestFullCrossLayerHandoff:
 
     def test_sigma_handoff(self, generators):
