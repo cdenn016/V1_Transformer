@@ -319,16 +319,16 @@ class VFETrainer:
                 squeeze=False,
             )
             axes = axes[0]
-            vmax = float(max(p[1].max() for p in panels)) or 1.0
+            log_floor = -5.0
             cmap = plt.get_cmap('viridis').copy()
             cmap.set_bad('#dddddd')
 
             im = None
             for ax, (layer_idx, b) in zip(axes, panels):
-                masked = b.copy()
-                iu = np.triu_indices_from(masked, k=1)
-                masked[iu] = np.nan
-                im = ax.imshow(masked, cmap=cmap, vmin=0.0, vmax=vmax, aspect='equal')
+                log_b = np.log10(np.clip(b, 10.0 ** log_floor, 1.0))
+                iu = np.triu_indices_from(log_b, k=1)
+                log_b[iu] = np.nan
+                im = ax.imshow(log_b, cmap=cmap, vmin=log_floor, vmax=0.0, aspect='equal')
                 ax.set_title(f'layer {layer_idx}')
                 ax.set_xlabel('key pos')
                 if ax is axes[0]:
@@ -346,7 +346,7 @@ class VFETrainer:
                 ax.grid(False)
 
             cbar = fig.colorbar(im, ax=list(axes), shrink=0.85, pad=0.02)
-            cbar.set_label(r'$\beta_{ij}$')
+            cbar.set_label(r'$\log_{10} \beta_{ij}$')
             fig.suptitle(rf'Attention $\beta$  |  step {step}', y=1.02)
 
             out_dir = self.output_dir / 'attention'

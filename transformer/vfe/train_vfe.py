@@ -76,7 +76,7 @@ config = {
     
     'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
     'enforce_orthogonal':       False,      # Project Ω to SO(K)
-    'mask_self_attention':      False,      # Mask diagonal (prevents KL=0 self-attention)
+    'mask_self_attention':      True,       # Mask diagonal (prevents KL=0 self-attention)
     'mass_phi':                 0.0,        # Gauge prior: (mass_φ/2) mean(||φ||²)
 
 
