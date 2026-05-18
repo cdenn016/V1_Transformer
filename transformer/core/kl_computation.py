@@ -25,7 +25,6 @@ Usage
 """
 
 from enum import Enum
-import os
 from typing import List, Optional
 
 import torch
@@ -36,20 +35,14 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
     fused_block_matrix_exp_pairs,
 )
-
-
-# Toggles the observational `_nr("kl_nonfinite")` / `_nr("kl_saturated")`
-# instrumentation in `safe_kl_clamp`. Each fires a host-side `.any()` +
-# `.sum().item()` sync per pairwise-KL call. Off by default — set
-# VFE_KL_DIAGNOSTICS=1 or call enable_kl_diagnostics() to turn on during
-# diagnostic sweeps.
-_KL_DIAGNOSTICS_ENABLED: bool = bool(int(os.environ.get("VFE_KL_DIAGNOSTICS", "0")))
-
-
-def enable_kl_diagnostics(enabled: bool = True) -> None:
-    """Toggle the host-sync KL diagnostic counters at runtime."""
-    global _KL_DIAGNOSTICS_ENABLED
-    _KL_DIAGNOSTICS_ENABLED = bool(enabled)
+# Diagnostics flag lives in vfe_utils so gauge_utils, kl_computation, and
+# vfe_gradients can all share it without circular imports. Re-exported here
+# for back-compat with any caller that imports enable_kl_diagnostics from
+# kl_computation.
+from transformer.core.vfe_utils import (
+    kl_diagnostics_enabled as _kl_diagnostics_enabled,
+    enable_kl_diagnostics,
+)
 
 
 # =============================================================================
@@ -107,9 +100,9 @@ def safe_kl_clamp(
     # Saturation counter: how many entries hit the NaN/inf → kl_max path,
     # or the upper clamp ceiling. Observational only — each call forces a
     # host-side sync via `.any()` + `.sum().item()`, so it is gated behind
-    # _KL_DIAGNOSTICS_ENABLED (see module-level toggle).
+    # the diagnostics flag (see transformer/core/vfe_utils.py).
     _nonfinite = ~torch.isfinite(kl)
-    if _KL_DIAGNOSTICS_ENABLED:
+    if _kl_diagnostics_enabled():
         if _nonfinite.any():
             _nr("kl_nonfinite", count=int(_nonfinite.sum().item()))
         _at_ceiling = kl >= kl_max

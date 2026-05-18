@@ -35,6 +35,7 @@ from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_oute
 
 import transformer.core.vfe_utils as _vfe_utils_mod
 from transformer.core.vfe_utils import (
+    kl_diagnostics_enabled as _kl_diagnostics_enabled,
     SIGMA_EPS,
     TRANSPORT_JITTER,
     KL_CEIL_BASE,
@@ -1176,6 +1177,8 @@ def _fused_attention_and_vfe_gradients_block_diag(
         # branch would force on every block of every E-step iteration.
         _eye_d = torch.eye(d, device=Omega_block.device, dtype=Omega_block.dtype)
         _nan_mask = torch.isnan(Omega_block).any(dim=-1).any(dim=-1)  # (B, N, N)
+        if _kl_diagnostics_enabled() and _nan_mask.any():
+            _nr("fused_vfe_omega_nan", count=int(_nan_mask.sum().item()))
         Omega_block = torch.where(
             _nan_mask.unsqueeze(-1).unsqueeze(-1),
             _eye_d.expand_as(Omega_block),
@@ -1202,13 +1205,19 @@ def _fused_attention_and_vfe_gradients_block_diag(
         # values — it leaves +/-inf untouched, so this is NOT equivalent
         # to a bare nan_to_num() (which would also replace inf with ~3.4e38
         # and then log() of that produces spurious KL ≈ 88).
+        _sigma_nan = torch.isnan(sigma_j_transported)
+        if _kl_diagnostics_enabled() and _sigma_nan.any():
+            _nr("fused_vfe_sigma_t_nan", count=int(_sigma_nan.sum().item()))
         sigma_j_transported = torch.where(
-            torch.isnan(sigma_j_transported),
+            _sigma_nan,
             torch.full_like(sigma_j_transported, 1.0),
             sigma_j_transported,
         )
+        _mu_nan = torch.isnan(mu_j_transported)
+        if _kl_diagnostics_enabled() and _mu_nan.any():
+            _nr("fused_vfe_mu_t_nan", count=int(_mu_nan.sum().item()))
         mu_j_transported = torch.where(
-            torch.isnan(mu_j_transported),
+            _mu_nan,
             torch.zeros_like(mu_j_transported),
             mu_j_transported,
         )

@@ -1094,3 +1094,103 @@ class TestAlphaC0CorrectionWired:
         assert captured['alpha_c0'] is None, (
             f'alpha_c0 should be None for fixed alpha; got {captured["alpha_c0"]!r}'
         )
+
+
+class TestFusedUnfusedEquivalence:
+    """The fused E-step kernel
+    (``_fused_attention_and_vfe_gradients_block_diag``) must produce
+    *numerically equivalent* (μ, σ, φ) updates to the unfused
+    ``compute_kl_attention`` + ``compute_vfe_gradients_gpu`` pair under
+    matched gating. This is the safety net for the wiring change in
+    ``vfe/e_step.py``: pytest's existing tests check that the path is
+    callable, but not that its output matches what the unfused path
+    would have computed.
+    """
+
+    def test_fused_matches_unfused_on_default_config(self):
+        import torch
+        from transformer.vfe.config import VFEConfig
+        from transformer.vfe.model import VFEModel
+        from transformer.core.types import BeliefState
+        import transformer.vfe.e_step as estep_mod
+
+        torch.manual_seed(0)
+
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=2,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+        )
+        m = VFEModel(cfg)
+        m.eval()
+        e_step = m.stack.blocks[0].e_step
+
+        B, N, K = 2, 6, cfg.embed_dim
+        n_gen = m.generators.shape[0]
+        beliefs = BeliefState(
+            mu=torch.randn(B, N, K),
+            sigma=torch.ones(B, N, K) * 0.5,
+            phi=torch.zeros(B, N, n_gen),
+        )
+        priors = BeliefState(
+            mu=torch.zeros(B, N, K),
+            sigma=torch.ones(B, N, K),
+            phi=torch.zeros(B, N, n_gen),
+        )
+
+        # Run 1: default — fused path active.
+        with torch.no_grad():
+            out_fused = e_step(beliefs, priors)
+
+        # Run 2: monkey-patch the fused kernel to raise, forcing the
+        # unfused fallback branch. We can't just flip the gating bool
+        # because the gate is local to forward(); the cleanest force is
+        # to make the fused entry undefined.
+        orig_fused = estep_mod._fused_attention_and_vfe_gradients_block_diag
+
+        class _RouteToUnfused(Exception):
+            pass
+
+        def _raise(*args, **kwargs):
+            raise _RouteToUnfused
+
+        try:
+            estep_mod._fused_attention_and_vfe_gradients_block_diag = _raise
+            # Wrap forward to catch the sentinel and fall through to unfused.
+            # Simpler: temporarily flip _can_use_fused via a subclass-shaped
+            # patch. The fused gate inside forward() reads several VFEEStep
+            # attributes — the cleanest disable is to set one of them to a
+            # value the gate rejects. exact_diagonal_transport=True flips
+            # _can_use_fused to False without altering KL semantics on the
+            # default config (the lift path also produces correct gradients).
+            # Actually safer: stash the original and overwrite the bound flag.
+            saved_exact = e_step.exact_diagonal_transport
+            estep_mod._fused_attention_and_vfe_gradients_block_diag = orig_fused
+            e_step.exact_diagonal_transport = True  # forces unfused branch
+            with torch.no_grad():
+                out_unfused = e_step(beliefs, priors)
+        finally:
+            estep_mod._fused_attention_and_vfe_gradients_block_diag = orig_fused
+            e_step.exact_diagonal_transport = saved_exact
+
+        # The two paths share the same underlying math (Omega·μ, Omega·Σ·Omegaᵀ,
+        # softmax over -KL/τ) but build Omega in different code paths and
+        # apply the floor on sigma_t at slightly different intermediate stages.
+        # Tolerance reflects float32 accumulation order, not algorithmic drift.
+        assert torch.allclose(out_fused.mu, out_unfused.mu, atol=5e-4, rtol=5e-3), (
+            f"μ drift between fused and unfused paths exceeds tolerance: "
+            f"max abs diff = {(out_fused.mu - out_unfused.mu).abs().max().item():.3e}"
+        )
+        assert torch.allclose(out_fused.sigma, out_unfused.sigma, atol=5e-4, rtol=5e-3), (
+            f"σ drift between fused and unfused paths exceeds tolerance: "
+            f"max abs diff = {(out_fused.sigma - out_unfused.sigma).abs().max().item():.3e}"
+        )
+        assert torch.allclose(out_fused.phi, out_unfused.phi, atol=5e-4, rtol=5e-3), (
+            f"φ drift between fused and unfused paths exceeds tolerance: "
+            f"max abs diff = {(out_fused.phi - out_unfused.phi).abs().max().item():.3e}"
+        )

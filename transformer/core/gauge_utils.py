@@ -13,7 +13,12 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from math_utils.numerical_monitor import record as _nr
-from transformer.core.vfe_utils import KL_CEIL_BASE, KL_CEIL_SCALE, spd_eigfloor
+from transformer.core.vfe_utils import (
+    KL_CEIL_BASE,
+    KL_CEIL_SCALE,
+    spd_eigfloor,
+    kl_diagnostics_enabled as _kl_diagnostics_enabled,
+)
 
 # KL divergence ceiling: kl_max = max(KL_CEIL_BASE, KL_CEIL_SCALE * dim).
 # Single source of truth is vfe_utils.py.
@@ -93,11 +98,15 @@ def stable_matrix_exp_pair(
     # Clamp Frobenius norm to prevent overflow in matrix_exp.
     # Gradient flows through the scaling factor, so φ still gets
     # signal to shrink when it exceeds the cap. The multiply is a no-op
-    # when scale == 1.0, so we apply it unconditionally — the previous
-    # `if (scale < 1.0).any(): _nr(...)` was a host sync per unique block
-    # dim per E-step iteration purely for the diagnostic counter.
+    # when scale == 1.0, so we apply it unconditionally. The host-syncing
+    # diagnostic counter (was always-on, fired `.any()` + `.sum().item()`
+    # every call) is now gated behind the diagnostics flag.
     mat_norm = matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
     scale = (max_norm / mat_norm).clamp(max=1.0)
+    if _kl_diagnostics_enabled():
+        _clamped = scale < 1.0
+        if _clamped.any():
+            _nr("matexp_norm_clamp", count=int(_clamped.sum().item()))
     matrix = matrix * scale
 
     d = matrix.shape[-1]
