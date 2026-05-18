@@ -109,7 +109,6 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,
     'prior_handoff_sigma':      0.0,
-    'prior_handoff_phi':        False,
 
     # === Covariance ===
     'diagonal_covariance':      True,
@@ -143,7 +142,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'decode_tau':               1.0,
 
     # === Normalization ===
-    'norm_type':                'centered_mahalnorm',
+    'norm_type':                'layernorm',
     'normalize_ce_by_dim':      True,
 
     # === Training ===

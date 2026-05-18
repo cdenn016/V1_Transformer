@@ -23,6 +23,13 @@ from transformer.vfe.model import VFEModel
 
 logger = logging.getLogger(__name__)
 
+try:
+    from tqdm.auto import tqdm as _tqdm
+    _HAS_TQDM = True
+except ImportError:  # tqdm optional — falls back to a plain range + print
+    _tqdm = None
+    _HAS_TQDM = False
+
 
 def _format_duration(secs: float) -> str:
     """Compact human-readable duration: '42s', '5m23s', '1h05m', '2d03h'."""
@@ -173,6 +180,95 @@ class VFETrainer:
             else:
                 norms['other'] += g ** 2
         return {k: math.sqrt(v) for k, v in norms.items()}
+
+    @torch.no_grad()
+    def _attention_summary(self) -> Dict[str, float]:
+        r"""Summary statistics over the most recent attention/KL matrices.
+
+        Reads ``_last_attention`` (``beta``) and ``_last_kl_matrix`` directly
+        from every block's E-step. Both tensors are written unconditionally
+        on the final E-step iteration (``vfe/e_step.py:531-533``) — independent
+        of ``track_layer_diagnostics`` — so this works on every forward
+        without enabling the expensive ``.item()`` diagnostics dict.
+
+        Returns:
+            Dict with keys ``beta_kl`` (mean of beta * KL, the per-pair
+            alignment contribution before the lambda_align scaling),
+            ``beta_mean``, ``attn_entropy`` (-sum beta log beta), and
+            ``attn_concentration`` (mean max-beta-per-row). Empty if no
+            attention has been computed yet.
+        """
+        blocks = list(self.model.stack.blocks)
+        if not blocks:
+            return {}
+        beta_kl_vals: List[float] = []
+        beta_mean_vals: List[float] = []
+        entropy_vals: List[float] = []
+        conc_vals: List[float] = []
+        for b in blocks:
+            beta = getattr(b.e_step, '_last_attention', None)
+            kl = getattr(b.e_step, '_last_kl_matrix', None)
+            if beta is None or kl is None:
+                continue
+            beta_kl_vals.append((beta * kl).mean().item())
+            beta_mean_vals.append(beta.mean().item())
+            beta_safe = beta.clamp(min=1e-10)
+            entropy_vals.append((-(beta_safe * beta_safe.log()).sum(-1).mean()).item())
+            conc_vals.append(beta.max(dim=-1)[0].mean().item())
+        if not beta_kl_vals:
+            return {}
+
+        def _mean(xs: List[float]) -> float:
+            return sum(xs) / len(xs)
+        return {
+            'beta_kl':            _mean(beta_kl_vals),
+            'beta_mean':          _mean(beta_mean_vals),
+            'attn_entropy':       _mean(entropy_vals),
+            'attn_concentration': _mean(conc_vals),
+        }
+
+    @torch.no_grad()
+    def _generate_sample(
+        self,
+        prompt: str = "The",
+        max_new_tokens: int = 30,
+        temperature: float = 0.9,
+        top_k: int = 30,
+        display_chars: int = 100,
+    ) -> str:
+        """Generate a short text sample to eyeball that the model is learning.
+
+        Uses ``dataset.encode`` / ``dataset.decode`` from the training dataset
+        and ``VFEModel.generate`` (top-k temperature sampling). Returns the
+        decoded text truncated to ``display_chars`` characters. Returns the
+        empty string on any failure so a broken sampler never aborts the
+        validation block.
+        """
+        ds = self.train_loader.dataset
+        if not (hasattr(ds, 'encode') and hasattr(ds, 'decode')):
+            return ""
+        try:
+            prompt_ids = ds.encode(prompt)
+            if not prompt_ids:
+                return ""
+            prompt_tensor = torch.tensor(
+                [prompt_ids], device=self.device, dtype=torch.long,
+            )
+            was_training = self.model.training
+            self.model.eval()
+            generated = self.model.generate(
+                prompt_ids=prompt_tensor,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_k=top_k,
+            )
+            if was_training:
+                self.model.train()
+            text = ds.decode(generated[0])
+            text = " ".join(text.split())   # collapse whitespace for one-line display
+            return text[:display_chars]
+        except Exception as e:   # never abort training on a sampling glitch
+            return f"<sample failed: {type(e).__name__}: {e}>"
 
     def _collect_e_step_diagnostics(self) -> Dict[str, float]:
         """Collect E-step diagnostics aggregated across all layers.
@@ -744,7 +840,38 @@ class VFETrainer:
 
         best_val_loss = float('inf')
 
-        for step in range(num_steps):
+        # On Windows the default console codec (cp1252) cannot encode the
+        # Greek letter β used in the log/validation format. Reconfigure
+        # stdout/stderr to UTF-8 with replacement so the bar + tqdm.write
+        # never raise UnicodeEncodeError mid-training. No-op on platforms
+        # where the codec already handles it.
+        import sys as _sys
+        for _stream in (_sys.stdout, _sys.stderr):
+            _reconf = getattr(_stream, 'reconfigure', None)
+            if callable(_reconf):
+                try:
+                    _reconf(encoding='utf-8', errors='replace')
+                except Exception:
+                    pass
+
+        # tqdm bar (with timed bar updates so tqdm.write interleaves above
+        # the bar; the bar itself shows progress, rate, ETA).
+        if _HAS_TQDM:
+            pbar = _tqdm(
+                range(num_steps),
+                desc="Training",
+                dynamic_ncols=True,
+                mininterval=0.5,
+                leave=True,
+            )
+            _write = pbar.write
+            _iter = pbar
+        else:
+            pbar = None
+            _write = print
+            _iter = range(num_steps)
+
+        for step in _iter:
             # Get next batch (with tuple or dict support)
             try:
                 batch = next(data_iter)
@@ -768,47 +895,49 @@ class VFETrainer:
             self._log_to_csv(step + 1, metrics, B, N)
             self._log_to_pub_tracker(step + 1, metrics)
 
-            # Console logging
+            # Console logging: bare line, no asctime prefix — matches the
+            # core/training format. Printed via tqdm.write so the progress
+            # bar redraws cleanly underneath each log line.
             if (step + 1) % log_interval == 0:
-                elapsed = time.time() - t0
-                steps_per_sec = (step + 1) / elapsed
-                remaining_steps = max(0, num_steps - (step + 1))
-                eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0.0
+                attn = self._attention_summary()
+                beta_kl = attn.get('beta_kl', float('nan'))
                 msg = (
-                    f"step {step+1}/{num_steps} | "
-                    f"loss {metrics['loss']:.4f} | "
-                    f"ppl {metrics['ppl']:.1f} | "
-                    f"lr {metrics['lr']:.2e} | "
-                    f"{steps_per_sec:.1f} steps/s | "
-                    f"elap {_format_duration(elapsed)} | "
-                    f"eta {_format_duration(eta)}"
+                    f"Step {step+1}/{num_steps} | "
+                    f"Loss: {metrics['loss']:.4f} | "
+                    f"CE: {metrics['ce']:.4f} | "
+                    f"β: {beta_kl:.4f} | "
+                    f"PPL: {metrics['ppl']:.1f}"
                 )
-                if 'attention_entropy' in metrics:
-                    msg += f" | H(β) {metrics['attention_entropy']:.2f}"
-                if 'attention_entropy_loss' in metrics:
-                    msg += f" | F_H {metrics['attention_entropy_loss']:.3f}"
-                if 'sigma_q_mean' in metrics:
-                    msg += f" | σ_q {metrics['sigma_q_mean']:.3f}"
-                logger.info(msg)
+                _write(msg)
 
             # Periodic evaluation
             if self.val_loader is not None and (step + 1) % eval_interval == 0:
                 val_metrics = self.evaluate()
-                # Visual separation: blank line before and after the val block.
-                # print() bypasses the logging formatter so the blank line is
-                # truly empty (no timestamp prefix).
-                print()
-                logger.info(
-                    f"  val_loss {val_metrics['val_loss']:.4f} | "
-                    f"val_ppl {val_metrics['val_ppl']:.1f} | "
-                    f"val_bpc {val_metrics['val_bpc']:.3f}"
-                )
+                # Attention summary is fresh because evaluate() just ran a
+                # forward pass on the val batch (e_step.py:531-533).
+                attn = self._attention_summary()
+                sample_text = self._generate_sample()
+
+                _write("")  # blank line above the block
+                _write(f"  Validation @ step {step+1}:")
+                _write(f"    Loss: {val_metrics['val_loss']:.4f}")
+                _write(f"    CE: {val_metrics['val_loss']:.4f}")
+                _write(f"    PPL: {val_metrics['val_ppl']:.2f}")
+                _write(f"    BPC: {val_metrics['val_bpc']:.3f}")
+                if attn:
+                    _write(
+                        f"    Attn entropy: {attn['attn_entropy']:.3f} | "
+                        f"concentration: {attn['attn_concentration']:.3f}"
+                    )
+                if sample_text:
+                    _write(f"    Sample: {sample_text}...")
+                _write("")  # blank line below the block
+
                 # Save publication-quality attention β heatmap. β is fresh
                 # because evaluate() just ran the model forward, populating
                 # block.e_step._last_attention. Plot failures are caught
                 # internally; never aborts training.
                 self._plot_attention_patterns(step + 1)
-                print()
 
                 # Record validation in publication tracker
                 if self._pub_tracker is not None:
@@ -836,6 +965,9 @@ class VFETrainer:
             # Periodic checkpoints
             if self.output_dir and (step + 1) % checkpoint_interval == 0:
                 self._save_checkpoint(step + 1)
+
+        if pbar is not None:
+            pbar.close()
 
         total_time = time.time() - t0
         logger.info(f"Training complete: {num_steps} steps in {total_time:.1f}s")

@@ -48,7 +48,7 @@ config = {
     
     'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
     
-    'lambda_align':             10.0,       # Direct attention coupling (β · ∂KL/∂θ)
+    'lambda_align':             1.0,       # Direct attention coupling (β · ∂KL/∂θ)
     'lambda_soft':              0.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
     
     'kappa':                    1.0,       # Attention temperature
@@ -58,7 +58,6 @@ config = {
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,       # μ damping (1.0 = full flow, <1 = smoother)
     'prior_handoff_sigma':      0.0,       # Σ handoff (0.0 = frozen, >0 = blends posterior)
-    'prior_handoff_phi':        False,     # Deprecated/no-op — phi flows via beliefs, not priors
 
 
     # === Covariance ===
@@ -115,14 +114,14 @@ config = {
     'sigma_max':                12.0,
     'bch_order':                3,          # BCH truncation (1=additive, ≥2=commutator terms)
     
-    'use_autograd_mu_sigma':    False,
-    'use_equivariant_head_mixer':   False,
-    'gauge_covariant_ridge':  False,
+    'use_autograd_mu_sigma':       False,
+    'use_equivariant_head_mixer':  False,
+    'gauge_covariant_ridge':       False,
     
     
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            2000,
+    'eval_interval':            1000,
     'checkpoint_interval':      25000,
 }
 
