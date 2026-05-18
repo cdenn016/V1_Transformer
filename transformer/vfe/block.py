@@ -72,6 +72,14 @@ def _resolve_vfe_norm(norm_type: str, dim: int) -> Optional[nn.Module]:
     if norm_type == 'centered_mahalnorm':
         return CenteredMahalanobisNorm(dim)
     if norm_type == 'rmsnorm':
+        warnings.warn(
+            "VFE norm_type='rmsnorm' has a learnable elementwise scale gamma "
+            "that breaks O(K) gauge equivariance even though sqrt(mean(mu**2)) "
+            "is itself O(K)-invariant. Use 'mahalnorm' or 'centered_mahalnorm' "
+            "for the gauge-equivariant path; 'rmsnorm' is intended for ablation only.",
+            UserWarning,
+            stacklevel=2,
+        )
         return RMSNorm(dim)
     if norm_type == 'layernorm':
         return _LayerNormSigmaAdapter(dim)

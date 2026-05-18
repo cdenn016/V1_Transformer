@@ -190,7 +190,7 @@ EM_CONFIG = {
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
-    'normalize_ce_by_dim':        True,
+    'normalize_ce_by_dim':        False,
     'ce_label_smoothing':         0.0,    # Label smoothing on CE loss only; PPL stays un-smoothed
 
     'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension
@@ -211,7 +211,7 @@ EM_CONFIG = {
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
-    'E_lambda_belief':            9,    # E-step belief alignment weight
+    'E_lambda_belief':            10,    # E-step belief alignment weight
     'E_lambda_softmax':           0,
        
     # === E-step Learning Rates ===
@@ -232,9 +232,9 @@ EM_CONFIG = {
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.1,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
     'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
-    'M_phi_lr':                   0.002,    # M-step gauge frame embeddings (φ) 0.002
+    'M_phi_lr':                   0.0025,    # M-step gauge frame embeddings (φ) 0.002
     
     # === M-step Other LR's (AdamW parameter groups) ===
     'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
@@ -276,7 +276,7 @@ EM_CONFIG = {
 
 
     # === Logging ===
-    'log_interval':               200,
+    'log_interval':               100,
     'eval_interval':              2000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 4000,

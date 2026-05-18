@@ -66,7 +66,7 @@ class VFEConfig:
     # (more compute, mathematically exact). For SO(K), diagonal is lossless.
     diagonal_covariance: bool = True     # True = (B,N,K), False = (B,N,K,K)
     isotropic_covariance: bool = False   # If True, force Σ = σ²I (scalar variance × identity)
-    exact_diagonal_transport: bool = True   # Lift diagonal σ to full for exact Ω@Σ@Ω^T transport
+    exact_diagonal_transport: bool = False   # Lift diagonal σ to full for exact Ω@Σ@Ω^T transport
     sigma_max: float = 5.0              # Upper bound on sigma
     sigma_init: float = 1.0             # Initial covariance scale
     sigma_aggregation: str = 'mixture'   # 'mixture' or 'precision' (for aggregate_beliefs utility; not used in gradient-based E-step)
@@ -97,11 +97,11 @@ class VFEConfig:
     # theory gap documented in VFE_Transformer_Idea.md. Non-'off' values require
     # full covariance and are rejected at __post_init__ under diagonal σ.
     use_rope: bool = True
-    rope_base: float = 10000.0
+    rope_base: float = 100.0
     rope_full_gauge: RopeFullGaugeMode = 'off'  # 'off' | 'vfe_only' | 'both'. vfe/ currently
                                                 # treats any non-'off' value identically; tri-state
                                                 # differentiation is reserved for a future change.
-    bch_order: int = 1                   # BCH truncation order (1=additive)
+    bch_order: int = 3                   # BCH truncation order (1=additive)
 
     # === Embedding init ===
     mu_init_std: float = 1.0             # Std for base_mu initialization
@@ -184,7 +184,7 @@ class VFEConfig:
     #   is a linear output projection from K dimensions to vocabulary size").
     #   Encode still uses the gauge-orbit PriorBank — the toggle controls
     #   only the decode side.
-    use_prior_bank: bool = True
+    use_prior_bank: bool = False
 
     # === Training ===
     learning_rate: float = 3e-4
@@ -224,7 +224,7 @@ class VFEConfig:
 
     # === Runtime (set after construction, not serialized) ===
     generators: Optional[torch.Tensor] = field(default=None, repr=False)
-    device: str = 'cpu'
+    device: str = 'cuda'
 
     # --- Derived (computed in __post_init__) ---
 
