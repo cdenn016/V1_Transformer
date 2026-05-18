@@ -526,7 +526,7 @@ For Gaussian distributions specifically, the KL divergence has closed form:
 \label{eq:gaussian_kl}
 \end{equation}
 
-This formula will be used extensively for computing belief and prior alignment terms.
+This formula will be used extensively for computing belief and prior alignment terms; the associated Fisher information matrix on the Gaussian fiber, the matrix exponential identities for $\mathrm{SO}(3)$ transport, and the Cholesky parameterisation of positive-definite covariances used in the numerical implementation are collected with their derivations in Appendix~\ref{app:math}, and the gradient-flow analysis of the resulting covariance fixed-point equation is in Appendix~\ref{app:covariance_dynamics}.
 
 \subsection{Cross-Scale Shadows: Priors and Hyper-priors as Cross-Scale Constructs}
 \label{sec:cross_scale_shadows}
@@ -787,7 +787,7 @@ For Gaussian beliefs $q_j = \mathcal{N}(\mu_j, \Sigma_j)$ with $G = \mathrm{SO}(
 
 There are two distinct invariances at play here, and we want to keep them apart. The \emph{global diagonal redundancy} is a single right-translation $U_i \mapsto U_i g$ applied to all agents with the \emph{same} $g \in G$, under which $\Omega_{ij} = U_i U_j^{-1} \mapsto U_i g g^{-1} U_j^{-1} = \Omega_{ij}$ is invariant. This is the redundancy of the overall labelling of the gauge orbit and is the version we use throughout the body of this manuscript when we say "the framework is gauge-invariant." The \emph{full local gauge freedom} of a principal bundle is a stronger statement: independent left-translations $U_i \mapsto g_i U_i$ for each agent (the standard lattice-gauge convention used in the discrete Regime~II construction of Section~\ref{sec:discrete_regime_ii}), with corresponding transformations of the transported quantities so that $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ and $q_j \mapsto \rho(g_j) q_j$, under which $\Omega_{ij} q_j$ acquires $\rho(g_i)$ on the left and the pairwise KL $\mathrm{KL}(q_i \| \Omega_{ij} q_j)$ becomes invariant by KL invariance under common pushforward. The two paragraphs use different group actions deliberately: the global diagonal action is taken as a right-translation so that $\Omega_{ij}$ is pointwise invariant (the strongest possible redundancy statement), while the full local action is taken as the lattice-gauge left-translation so that $\Omega_{ij}$ transforms as a link variable in the standard sense. The two are not conjugate as actions on $G^{|I|}$ for non-abelian $G$; they are genuinely distinct symmetries that happen to coincide on observables (KL pairings and class functions of closed loops) by KL invariance under common pushforward. The body construction is consistent with the local invariance under the standard transformation laws, but we do not claim our central derivations exploit it; we use the global diagonal redundancy as the working notion of gauge invariance and flag the full local case where it matters.
 
-The consequence of the global diagonal redundancy is that only relative gauge frames matter. Individual frames $\phi_i$ play two distinct roles in this manuscript -- a redundant labelling role (Role A) and a cognitive-state role (Role B), discussed in Section~\ref{sec:agents_as_sections} -- and we use "gauge-invariant" for quantities that are unchanged under both the global diagonal redundancy and the full local gauge action, while "gauge-covariant" is reserved for quantities that transform according to a specified representation. The Lie-algebra additive form $\phi_i \mapsto \phi_i + \xi$ coincides with the group-level form only when $\xi$ commutes with each $\phi_i$ (since the Baker--Campbell--Hausdorff expansion $\exp(\phi_i + \xi) = \exp(\phi_i)\exp(\xi)\exp(-\tfrac12 [\phi_i, \xi]) \cdots$ collapses to $\exp(\phi_i)\exp(\xi)$ only when the commutator vanishes), so the additive shift is the genuine gauge transformation only for abelian gauge groups or for $\xi$ in the centre. For the non-abelian groups used here, the group-level form $U_i \mapsto U_i g$ is the correct statement of the global gauge redundancy. The relative pairing $U_i U_j^{-1}$ is gauge-invariant under the global diagonal action $U_i \mapsto U_i g$ and gauge-covariant (transforming as $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$) under the independent agent-wise lattice-gauge action $U_i \mapsto g_i U_i$, in the same way that, in general relativity, individual coordinate systems are arbitrary while coordinate-invariant quantities like proper time are physically meaningful.
+The consequence of the global diagonal redundancy is that only relative gauge frames matter. Individual frames $\phi_i$ play two distinct roles in this manuscript -- a redundant labelling role (Role A) and a cognitive-state role (Role B), discussed in Section~\ref{sec:agents_as_sections} -- and we use "gauge-invariant" for quantities that are unchanged under both the global diagonal redundancy and the full local gauge action, while "gauge-covariant" is reserved for quantities that transform according to a specified representation. The single most consequential downstream use of this distinction is the recovery of the Lahav-Neemeh Alice/Bob isomorphism (Eq.~\ref{eq:alice_bob_composition} in Section~\ref{sec:lahav_convergence}) as a composition of two transports of the form $\Omega_{ab} = \exp(\phi_a)\exp(-\phi_b)$, where the inter-agent factor lives in the global-diagonal sector and the cross-scale factor in the full local action: a derivation that would not survive if "gauge-invariant" and "gauge-covariant" were not held apart at the level we are insisting on here. The Lie-algebra additive form $\phi_i \mapsto \phi_i + \xi$ coincides with the group-level form only when $\xi$ commutes with each $\phi_i$ (since the Baker--Campbell--Hausdorff expansion $\exp(\phi_i + \xi) = \exp(\phi_i)\exp(\xi)\exp(-\tfrac12 [\phi_i, \xi]) \cdots$ collapses to $\exp(\phi_i)\exp(\xi)$ only when the commutator vanishes), so the additive shift is the genuine gauge transformation only for abelian gauge groups or for $\xi$ in the centre. For the non-abelian groups used here, the group-level form $U_i \mapsto U_i g$ is the correct statement of the global gauge redundancy. The relative pairing $U_i U_j^{-1}$ is gauge-invariant under the global diagonal action $U_i \mapsto U_i g$ and gauge-covariant (transforming as $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$) under the independent agent-wise lattice-gauge action $U_i \mapsto g_i U_i$, in the same way that, in general relativity, individual coordinate systems are arbitrary while coordinate-invariant quantities like proper time are physically meaningful.
 
 \subsubsection{Connection Forms and Parallel Transport}
 \label{sec:connection_forms}
@@ -1250,7 +1250,7 @@ Extending to continuous fields over the base manifold $\mathcal{C}$ and includin
 \begin{aligned}
 \mathcal{F}[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}, \{\beta_{ij}\}, \{\gamma_{ij}\}]
 &= \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \\
-&\quad + \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc \\
+&\quad + \lambda_h \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \Big[\beta_{ij}(c)  \mathrm{KL}(q_i \| \Omega_{ij} q_j) + \tau \beta_{ij}(c) \log\tfrac{\beta_{ij}(c)}{\tilde{\pi}_{ij}(c)}\Big] dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \Big[\gamma_{ij}(c)  \mathrm{KL}(s_i \| \tilde{\Omega}_{ij} s_j) + \tau \gamma_{ij}(c) \log\tfrac{\gamma_{ij}(c)}{\tilde{\pi}^{(s)}_{ij}(c)}\Big] dc \\
 &\quad - \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)]  dc,
@@ -1259,7 +1259,7 @@ Extending to continuous fields over the base manifold $\mathcal{C}$ and includin
 \label{eq:free_energy_functional_final}
 \end{equation}
 
-where the pair-presence-absorbed prior is $\tilde{\pi}_{ij}(c) := \chi_{ij}(c)\pi_{ij}(c) / \sum_k \chi_{ik}(c)\pi_{ik}(c)$ (and analogously $\tilde{\pi}^{(s)}_{ij}$). Differentiating the row-Lagrangian $L_i = \int \sum_j[\beta_{ij}\mathrm{KL}(q_i \| \Omega_{ij} q_j) + \tau\beta_{ij}\log(\beta_{ij}/\tilde{\pi}_{ij})] - \lambda_i(c)(\sum_j \beta_{ij} - 1)$ and solving the row-normalisation constraint $\sum_j \beta_{ij}(c) = 1$ yields the closed-form softmax
+where the pair-presence-absorbed prior is $\tilde{\pi}_{ij}(c) := \chi_{ij}(c)\pi_{ij}(c) / \sum_k \chi_{ik}(c)\pi_{ik}(c)$ (and analogously $\tilde{\pi}^{(s)}_{ij}$), and $\lambda_h > 0$ is the hyper-prior weight on the model-channel term, taken as $\lambda_h = 1$ in the standard active-inference reading and set to $\lambda_h = 0$ in the frozen-slow-subsystem regime of the simulations reported in Section~\ref{sec:meta_agent_emergence}. The same $\lambda_h$ appears at every scale in the renormalisation-group free energy of Section~\ref{sec:meta_agent_rg}, where it controls the cross-scale model-channel coupling on the model fiber. Differentiating the row-Lagrangian $L_i = \int \sum_j[\beta_{ij}\mathrm{KL}(q_i \| \Omega_{ij} q_j) + \tau\beta_{ij}\log(\beta_{ij}/\tilde{\pi}_{ij})] - \lambda_i(c)(\sum_j \beta_{ij} - 1)$ and solving the row-normalisation constraint $\sum_j \beta_{ij}(c) = 1$ yields the closed-form softmax
 \begin{equation}
 \beta_{ij}^*(c) =
 \frac{
@@ -3429,6 +3429,7 @@ Alice's first-person phenomenal state is the section $\sigma_{\mathrm{Alice}}^{(
 \underbrace{\exp(\phi_{\mathrm{Bob}}^{(N)}) \exp(-\phi_{\mathrm{Alice}}^{(N)})}_{\text{inter-agent, scale-}N}
 \cdot
 \underbrace{\exp(\phi_{\mathrm{Alice}}^{(N)}) \exp(-\phi_{i}^{(N-k)})}_{\text{cross-scale, Alice-internal}},
+\label{eq:alice_bob_composition}
 \end{equation}
 where $\phi_i^{(N-k)}$ is the frame of an Alice-neuron and the cross-scale piece is fixed by the consensus-aggregation construction of $\phi_{\mathrm{Alice}}^{(N)}$ from its constituents (Section~\ref{sec:participatory}). The cross-scale factor is what relates Alice's first-person scale-$N$ section to the scale-$(N-k)$ neural substrate Bob actually probes; the inter-agent factor is what carries the result into Bob's frame. Lahav and Neemeh's single-scale Alice/Bob isomorphism is recovered as the special case in which both observers and the observed system are taken at the same scale and the cross-scale factor reduces to the identity. The structural map their account asserts is, in the present framework, a derived composition rather than a posited isomorphism, and the formalism specifies exactly which two transports it is built from.
 
@@ -4080,15 +4081,17 @@ This is a matrix-valued fixed-point equation coupling all agents: each agent's p
 
 \subsubsection{Homogeneous limit}
 
-In the homogenous limit we assume
+In the homogeneous limit we assume
 
 (i) all agents are identical, so $\Sigma_i = \Sigma_\infty$ for all $i$,
 
 (ii) $\Omega_{ij} \approx I$ (weak misalignment),
 
-(iii) $\Sigma_{p,i} = \Sigma_0$ (shared prior).
+(iii) $\Sigma_{p,i} = \Sigma_0$ (shared prior),
 
-Then \eqref{eq:sigma_fixed_point_beta} becomes
+(iv) $\Lambda_{o_i} = 0$ (observation-free limit, sensory channel inactive).
+
+Assumption (iv) is required for the clean conclusion below; the general case $\Lambda_{o_i} > 0$ replaces $\Sigma_0^{-1}$ by $\Sigma_0^{-1} + \Lambda_{o_i}$ on the right-hand side and produces the observation-modified equilibrium $\Sigma_\infty = (\Sigma_0^{-1} + \Lambda_{o_i})^{-1}$ in place of the bare $\Sigma_\infty = \Sigma_0$. Under (i)--(iv), \eqref{eq:sigma_fixed_point_beta} becomes
 
 \begin{equation}
 \Sigma_\infty^{-1}
@@ -4101,7 +4104,7 @@ Then \eqref{eq:sigma_fixed_point_beta} becomes
 \Sigma_\infty = \Sigma_0.
 \end{equation}
 
-Hence, in a perfectly symmetric population, the equilibrium covariance reproduces the shared prior.
+Hence, in a perfectly symmetric observation-free population, the equilibrium covariance reproduces the shared prior.
 
 \subsubsection{Alignment-dominated regime}
 
@@ -4361,7 +4364,7 @@ Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
 \mathcal{D}(q,p)
 = \int p(c)f\left(\frac{q(c)}{p(c)}\right)dc,
 \]
-with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Let $B := \sum_j \beta_{ij}$ be the total alignment coupling for agent $i$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app}. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
+with $f$ \emph{real-analytic on $(0, \infty)$}, convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. The real-analyticity hypothesis is used in Step~3 of the proof to extend pointwise identification of $f'(t)$ from any open subinterval of attainable ratios to all of $(0, \infty)$ by analytic continuation; without it, the conclusion holds only on the attainable subinterval, not as the global identification stated below. Let $B := \sum_j \beta_{ij}$ be the total alignment coupling for agent $i$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app}. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
 \begin{equation}
 q_i^*(c) \propto p_i(c)^{1/(1+B)}\prod_{j}\bigl[\Omega_{ij}(c)q_j(c)\bigr]^{\beta_{ij}/(1+B)}
 \label{eq:geometric_mean_target_app}
