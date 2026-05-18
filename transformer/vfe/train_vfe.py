@@ -33,7 +33,7 @@ config = {
     'max_seq_len':              64,
     'max_steps':                15000,
 
-    'use_prior_bank':           False,
+    'use_prior_bank':           True,
     'mask_self_attention':      False,
     
     'E_learnable_alpha':        True,
@@ -162,14 +162,16 @@ if __name__ == '__main__':
 
     # Build dataloaders
     logging.info(f"Loading dataset: {DATASET}")
-    train_loader, val_loader, vocab_size = create_dataloaders(
+    train_loader, val_loader, test_loader, vocab_size = create_dataloaders(
         max_seq_len=config['max_seq_len'],
         batch_size=config['batch_size'],
         vocab_size=config.get('vocab_size'),
         dataset=DATASET,
+        include_test=True,
     )
     logging.info(f"Dataset loaded: vocab_size={vocab_size}, "
-                 f"train_batches={len(train_loader)}, val_batches={len(val_loader)}")
+                 f"train_batches={len(train_loader)}, val_batches={len(val_loader)}, "
+                 f"test_batches={len(test_loader)}")
 
     # Override vocab_size from tokenizer
     config['vocab_size'] = vocab_size
@@ -188,7 +190,9 @@ if __name__ == '__main__':
     # Train
     trainer = VFETrainer(
         model, cfg, train_loader,
-        val_loader=val_loader, device=DEVICE,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        device=DEVICE,
         output_dir=output_dir,
     )
     trainer.train(num_steps=cfg.max_steps)

@@ -71,6 +71,7 @@ class VFETrainer:
         cfg: VFEConfig,
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
+        test_loader: Optional[DataLoader] = None,
         device: str = 'cpu',
         output_dir: Optional[str] = None,
         generate_figures: bool = True,
@@ -79,6 +80,7 @@ class VFETrainer:
         self.cfg = cfg
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.test_loader = test_loader
         self.device = device
         self.generate_figures = generate_figures
 
@@ -612,6 +614,104 @@ class VFETrainer:
             'val_bpc': avg_ce / math.log(2),
         }
 
+    @torch.no_grad()
+    def run_test_evaluation(self, max_samples: int = 128000) -> Dict[str, float]:
+        r"""Final end-of-training evaluation on the held-out test split.
+
+        Mirrors the publication path's ``run_test_evaluation`` in
+        ``experiment_runner.py:119-239``: token-weighted CE across up to
+        ``max_samples`` test samples (default 128000 = ~2000 batches at
+        ``batch_size=64``, matching the publication default for consistency
+        across configs with different batch sizes), then reports test PPL,
+        BPC (corrected by ``tokens_per_char`` when available), random
+        baseline ``= vocab_size``, and improvement factor. Uses the same
+        ``VFEModel.forward`` path as ``evaluate()`` — pure CE, no VFE
+        regularizer rescaling — so the reported test loss is directly
+        comparable to ``val_loss`` from the periodic evaluations.
+
+        Returns an empty dict if ``self.test_loader`` is ``None``.
+        """
+        loader = self.test_loader
+        if loader is None:
+            return {}
+
+        logger.info("=" * 70)
+        logger.info("FINAL TEST SET EVALUATION")
+        logger.info("=" * 70)
+        logger.info(f"  Evaluating up to {max_samples} samples...")
+
+        self.model.eval()
+        total_ce_tokens = 0.0
+        total_tokens = 0
+        total_samples = 0
+        num_batches = 0
+
+        for batch in loader:
+            if total_samples >= max_samples:
+                break
+            if isinstance(batch, (list, tuple)):
+                input_ids = batch[0].to(self.device)
+                target_ids = batch[1].to(self.device)
+            else:
+                input_ids = batch['input_ids'].to(self.device)
+                target_ids = batch['target_ids'].to(self.device)
+
+            _, _, ce_for_log = self.model(input_ids, targets=target_ids)
+            n_tokens = (target_ids != -100).sum().item()
+            total_ce_tokens += ce_for_log.item() * n_tokens
+            total_tokens += n_tokens
+            total_samples += input_ids.shape[0]
+            num_batches += 1
+
+            if num_batches % 100 == 0:
+                logger.info(
+                    f"  Evaluated {total_samples}/{max_samples} samples "
+                    f"({num_batches} batches)..."
+                )
+
+        test_ce = total_ce_tokens / max(total_tokens, 1)
+        test_ppl = math.exp(min(test_ce, 20.0))
+        # BPC = (CE_nats / ln 2) * tokens_per_char. The tokens-per-char ratio
+        # comes from the test loader's dataset; when unavailable we fall back
+        # to bits-per-token with a one-time warning, matching the publication
+        # path's bpc_from_dataset behavior.
+        from transformer.training.bpc import bpc_from_dataset
+        test_bpc = bpc_from_dataset(
+            test_ce, loader, fallback_key='vfe_run_test_evaluation',
+        )
+        random_ppl = float(self.cfg.vocab_size)
+        improvement = (random_ppl / test_ppl) if test_ppl > 0 else 0.0
+
+        logger.info(
+            f"Test Set Results ({total_samples} samples across "
+            f"{num_batches} batches):"
+        )
+        logger.info(f"  Cross-entropy loss: {test_ce:.4f}")
+        logger.info(f"  Perplexity:         {test_ppl:.2f}")
+        logger.info(f"  Bits per character: {test_bpc:.3f}")
+        logger.info(f"  Random baseline:    {random_ppl:.0f}")
+        logger.info(f"  Improvement:        {improvement:.1f}x better than random")
+        logger.info("=" * 70)
+
+        results = {
+            'test_loss': test_ce,
+            'test_ppl': test_ppl,
+            'test_bpc': test_bpc,
+            'random_ppl': random_ppl,
+            'improvement': improvement,
+            'num_samples': total_samples,
+            'num_batches': num_batches,
+        }
+
+        if self.output_dir is not None:
+            import json
+            out_path = self.output_dir / 'test_results.json'
+            with open(out_path, 'w') as f:
+                json.dump(results, f, indent=2)
+            logger.info(f"  Test results saved: {out_path}")
+
+        return results
+
     # Columns the vfe/ training path cannot populate. They depend on
     # PublicationTrainer-only instrumentation (_compute_phi_diagnostics in
     # experiment_runner.py:439, _VFE_GRAD_DEBUG in core/vfe_utils.py, and
@@ -1063,6 +1163,13 @@ class VFETrainer:
         # Save final checkpoint
         if self.output_dir:
             self._save_checkpoint(num_steps)
+
+        # Final test-set evaluation. Run once after training completes and
+        # only if a test_loader was supplied (the click-to-run entry point
+        # at train_vfe.py opts in via include_test=True). Mirrors the
+        # publication path at experiment_runner.py:2234-2241.
+        if self.test_loader is not None:
+            self.run_test_evaluation()
 
         # Save publication tracker history
         if self._pub_tracker and self.output_dir:
