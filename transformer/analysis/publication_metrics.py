@@ -1227,8 +1227,12 @@ class PublicationMetrics:
         if self.semantic_tracker.should_record(step):
             try:
                 self.semantic_tracker.record(model, step)
-            except Exception:
-                pass  # Silent — trajectory is diagnostic, not critical
+            except (ValueError, RuntimeError, KeyError, AttributeError) as exc:
+                # Diagnostic trajectory is non-critical; log at debug so failures
+                # are visible to verbose runs but do not interrupt training.
+                logging.getLogger(__name__).debug(
+                    "Semantic trajectory snapshot failed at step %d: %s", step, exc,
+                )
 
     def run_final_semantic_analysis(self, model: Any, verbose: bool = True) -> Dict[str, Any]:
         """

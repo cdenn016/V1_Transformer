@@ -204,26 +204,32 @@ class TrainingConfig:
 
     # ==========================================================================
     # Gauge Group
+    # --------------------------------------------------------------------------
+    # NOTE: gauge_mode, gauge_param, isotropic_covariance below are MIRROR-ONLY
+    # fields. Architecture lives in the flat config dict consumed by
+    # BlockConfig.from_config — assigning these on a TrainingConfig instance
+    # has no runtime effect. They are preserved here only for callers that
+    # construct a TrainingConfig and read the dataclass for display/logging.
     # ==========================================================================
-    gauge_mode: str =           'learned'    # 'learned', 'trivial', 'constant'
-    gauge_param: str =           'phi'       # 'phi' or 'omega'
+    gauge_mode: str =           'learned'    # 'learned', 'trivial', 'constant' (mirror-only)
+    gauge_param: str =           'phi'       # 'phi' or 'omega' (mirror-only)
     omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
     omega_trust_region: float =  0.3
     omega_det_penalty: float =   0.0          # λ · mean (log|det Ω_h|)² regularizer (keeps Ω invertible under gauge_param='omega'; unused for 'phi')
-    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript)
+    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript) (mirror-only)
 
     # ==========================================================================
-    # Positional Encoding
+    # Positional Encoding (mirror-only — set via flat config dict)
     # ==========================================================================
-    use_rope: bool =   True       # RoPE: SO(2)^{K/2} position rotations on μ
-    rope_base: float = 75
+    use_rope: bool =   True       # RoPE: SO(2)^{K/2} position rotations on μ (mirror-only)
+    rope_base: float = 75                                           # (mirror-only)
 
     # ==========================================================================
-    # Model Architecture (for creation, not training)
+    # Model Architecture (mirror-only — set via flat config dict)
     # ==========================================================================
-    embed_dim: int =  128
-    n_layers: int =   4
-    vocab_size: int = 50257  # GPT-2 tokenizer size
+    embed_dim: int =  128                                           # (mirror-only)
+    n_layers: int =   4                                             # (mirror-only)
+    vocab_size: int = 50257  # GPT-2 tokenizer size                  (mirror-only)
 
     # ==========================================================================
     # Gauge Geometry: Phi gradient preconditioning (M-step)

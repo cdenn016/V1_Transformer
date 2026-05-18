@@ -157,9 +157,11 @@ def main():
         print("\nPlease edit CHECKPOINT_PATH at the top of this file.")
         return
 
-    # Load model
+    # Load model. trusted=True opts into the legacy pickle path required by
+    # self-saved checkpoints (config dataclass embedded as a non-tensor
+    # object that weights_only=True refuses).
     print(f"Loading model from {CHECKPOINT_PATH}...")
-    model, config = load_model(CHECKPOINT_PATH)
+    model, config = load_model(CHECKPOINT_PATH, trusted=True)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
     model.eval()

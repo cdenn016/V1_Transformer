@@ -772,9 +772,12 @@ def _compute_vfe_gradients_block_diagonal_diag(
     for block_idx, d in enumerate(irrep_dims):
         block_end = block_start + d
 
-        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d) raw
-        mu_block_rope = mu_q_rope[:, :, block_start:block_end].contiguous() if use_rope else mu_block
-        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
+        # Slices on the last dim are non-contiguous; the downstream einsums
+        # accept non-contiguous inputs natively, so we skip the .contiguous()
+        # copy (each was a B*N*d allocation per block per E-step iteration).
+        mu_block = mu_q[:, :, block_start:block_end]                     # (B, N, d) raw
+        mu_block_rope = mu_q_rope[:, :, block_start:block_end] if use_rope else mu_block
+        sigma_block = sigma_q_safe[:, :, block_start:block_end]          # (B, N, d)
 
         # Block Omega: (B, N, N, d, d) — direct construction for numerical precision
         Omega_block = torch.einsum(
@@ -1149,10 +1152,11 @@ def _fused_attention_and_vfe_gradients_block_diag(
     for block_idx, d in enumerate(irrep_dims):
         block_end = block_start + d
 
-        # Use RoPE-rotated mu for KL/attention, raw mu for gradients
-        mu_block_rope = mu_q_rope[:, :, block_start:block_end].contiguous()
-        mu_block = mu_q[:, :, block_start:block_end].contiguous()
-        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()
+        # Use RoPE-rotated mu for KL/attention, raw mu for gradients.
+        # Skip .contiguous(): downstream einsums handle non-contiguous slices.
+        mu_block_rope = mu_q_rope[:, :, block_start:block_end]
+        mu_block = mu_q[:, :, block_start:block_end]
+        sigma_block = sigma_q_safe[:, :, block_start:block_end]
 
         # Build Omega ONCE for this block
         Omega_block = torch.einsum(
@@ -1164,19 +1168,19 @@ def _fused_attention_and_vfe_gradients_block_diag(
         # phi that slipped through the stability layer, the NaN propagates
         # into sigma_j_transported (clamp() does not replace NaN) and then
         # into the KL / softmax / gradient chain, corrupting the whole
-        # batch.  Replace Omega rows containing NaN with identity so the
+        # batch. Replace Omega rows containing NaN with identity so the
         # offending pair contributes zero KL and zero gradient rather than
-        # poisoning everything downstream.  Mirrors the NaN guard in
+        # poisoning everything downstream. Mirrors the NaN guard in
         # kl_computation._kl_kernel_dense and gauge_utils fused KL kernels.
-        if torch.isnan(Omega_block).any():
-            _nr("fused_vfe_omega_nan")
-            _eye_d = torch.eye(d, device=Omega_block.device, dtype=Omega_block.dtype)
-            _nan_mask = torch.isnan(Omega_block).any(dim=-1).any(dim=-1)  # (B, N, N)
-            Omega_block = torch.where(
-                _nan_mask.unsqueeze(-1).unsqueeze(-1),
-                _eye_d.expand_as(Omega_block),
-                Omega_block,
-            )
+        # Unconditional torch.where avoids the host sync that an `.any()`
+        # branch would force on every block of every E-step iteration.
+        _eye_d = torch.eye(d, device=Omega_block.device, dtype=Omega_block.dtype)
+        _nan_mask = torch.isnan(Omega_block).any(dim=-1).any(dim=-1)  # (B, N, N)
+        Omega_block = torch.where(
+            _nan_mask.unsqueeze(-1).unsqueeze(-1),
+            _eye_d.expand_as(Omega_block),
+            Omega_block,
+        )
 
         # Transport (use RoPE mu for KL computation)
         mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block_rope)
@@ -1192,27 +1196,22 @@ def _fused_attention_and_vfe_gradients_block_diag(
         ).clamp(min=_sigma_floor)
 
         # Second-line guard: clamp() cannot remove NaN, only out-of-range
-        # finite values.  If Omega was finite but the einsum produced NaN
+        # finite values. If Omega was finite but the einsum produced NaN
         # from an extreme sigma_block, mask it out so kl / beta / gradients
-        # stay finite.  REVERTED 2026-04-08: previous unconditional
-        # nan_to_num() call used default posinf/neginf which replaced +/-inf
-        # with ~3.4e38, then log(3.4e38) ≈ 88 produced huge spurious KL
-        # contributions and corrupted training. The conditional path only
-        # runs when NaN is actually present and avoids this trap.
-        if torch.isnan(sigma_j_transported).any():
-            _nr("fused_vfe_sigma_t_nan")
-            sigma_j_transported = torch.where(
-                torch.isnan(sigma_j_transported),
-                torch.full_like(sigma_j_transported, 1.0),
-                sigma_j_transported,
-            )
-        if torch.isnan(mu_j_transported).any():
-            _nr("fused_vfe_mu_t_nan")
-            mu_j_transported = torch.where(
-                torch.isnan(mu_j_transported),
-                torch.zeros_like(mu_j_transported),
-                mu_j_transported,
-            )
+        # stay finite. Unconditional torch.where over isnan only swaps NaN
+        # values — it leaves +/-inf untouched, so this is NOT equivalent
+        # to a bare nan_to_num() (which would also replace inf with ~3.4e38
+        # and then log() of that produces spurious KL ≈ 88).
+        sigma_j_transported = torch.where(
+            torch.isnan(sigma_j_transported),
+            torch.full_like(sigma_j_transported, 1.0),
+            sigma_j_transported,
+        )
+        mu_j_transported = torch.where(
+            torch.isnan(mu_j_transported),
+            torch.zeros_like(mu_j_transported),
+            mu_j_transported,
+        )
 
         # Divergence computation (for attention weights β)
         mu_block_i_rope = mu_block_rope[:, :, None, :]  # broadcast, no clone needed

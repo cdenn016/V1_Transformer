@@ -50,17 +50,19 @@ def save_checkpoint(
     print(f"Saved checkpoint to {save_path}")
 
 
-def load_checkpoint(checkpoint_path: str, device: str = 'cpu', trusted: bool = True) -> Dict[str, Any]:
+def load_checkpoint(checkpoint_path: str, device: str = 'cpu', trusted: bool = False) -> Dict[str, Any]:
     """
     Load a raw checkpoint dictionary.
 
     Args:
         checkpoint_path: Path to checkpoint file
         device: Device to load tensors to
-        trusted: If True (default), uses weights_only=False which permits
-            arbitrary code execution via pickle. Set to False for untrusted
-            checkpoints to use weights_only=True (safe but may fail on
-            checkpoints containing non-tensor objects like configs).
+        trusted: SAFE BY DEFAULT (False). When False, uses
+            ``weights_only=True`` which forbids arbitrary code execution at
+            unpickle time. Set to True only for checkpoints you produced
+            yourself (the project's own ``save_checkpoint`` embeds the
+            config dataclass and other non-tensor objects that
+            ``weights_only=True`` will reject).
 
     Returns:
         checkpoint: Dictionary with model_state_dict, config, etc.
@@ -73,7 +75,7 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu', trusted: bool = T
     return checkpoint
 
 
-def load_model(checkpoint_path: str, trusted: bool = True) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
+def load_model(checkpoint_path: str, trusted: bool = False) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
     """
     Load a trained GaugeTransformerLM from checkpoint.
 
@@ -246,14 +248,14 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None) ->
     return None
 
 
-def load_checkpoint_info(checkpoint_path: str, trusted: bool = True) -> Dict[str, Any]:
+def load_checkpoint_info(checkpoint_path: str, trusted: bool = False) -> Dict[str, Any]:
     """
     Load metadata from a checkpoint without instantiating the model.
 
     Args:
         checkpoint_path: Path to checkpoint file.
-        trusted: If True (default), uses weights_only=False. Set to False
-            for untrusted checkpoints (see load_checkpoint docstring).
+        trusted: SAFE BY DEFAULT (False). See ``load_checkpoint`` for the
+            full security note. Set to True only for self-saved checkpoints.
 
     Returns:
         Dict with keys: config, epoch, step, has_optimizer, n_parameters.

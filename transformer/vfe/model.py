@@ -6,6 +6,30 @@ VFEModel: full gauge-theoretic VFE transformer.
 No nn.Linear in default config — PriorBank IS the decoder (Law 3).
 No targets in E-step — beliefs inferred from context only (Law 1).
 All transport uses sandwich product (Law 2).
+
+Implementation note — outer M-step minimises CE + aux, not full F.
+================================================================
+The training objective assembled in ``forward()`` is
+
+    loss = ce_loss + 0.5 * mass_phi * ||phi||^2 + sum(block._aux_hyperparam_loss)
+
+NOT the manuscript free-energy functional F. The manuscript F's
+``alpha * KL(q || p)`` and ``sum_ij beta_ij * KL(q_i || Omega_ij q_j)``
+terms enter this loss only as *gradients* through the unrolled
+E-step iterations — they never appear as backward-graph-visible scalars
+the outer optimizer sees. The auxiliary scalar
+``_aux_hyperparam_loss`` exists solely to route gradients into the
+M-step hyperparameters (``raw_c0``, ``raw_b0``, ``log_kappa``) that the
+E-step inner loop reads but does not differentiate through.
+
+This is structurally amortised inference: the embedding parameters
+(``base_mu``, ``base_log_sigma``, ``phi_embed``) are tuned so that CE is
+small *after* the E-step has relaxed the beliefs, not by alternating
+E and M on the same F. The variational interpretation still holds —
+F appears in the inner loop's descent direction — but the outer loop
+is not minimising F directly. See ``transformer/vfe/e_step.py``
+module docstring for the term-by-term breakdown of what the E-step
+inner loop actually evaluates.
 """
 
 import math

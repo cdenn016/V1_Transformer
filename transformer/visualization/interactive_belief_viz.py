@@ -894,7 +894,8 @@ def run_full_visualization(
         if checkpoint_path is None:
             raise ValueError("Provide either model or checkpoint_path")
         from transformer.utils.checkpoint import load_model, get_tokenizer
-        model, config = load_model(checkpoint_path)
+        # trusted=True for self-saved checkpoints (config dataclass embedded).
+        model, config = load_model(checkpoint_path, trusted=True)
         tokenizer = get_tokenizer(config)
     else:
         config = model.config if hasattr(model, 'config') else {}

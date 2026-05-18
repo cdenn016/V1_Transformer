@@ -63,7 +63,7 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(normalized_shape))
         self.eps = eps
 
-    def forward(self, x: torch.Tensor, sigma: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
         return x / rms * self.weight
 
@@ -163,8 +163,8 @@ class MahalanobisNorm(nn.Module):
         # the downstream sqrt. None preserves the legacy ridge path.
         self.sigma_floor = sigma_floor
 
-    def forward(self, x: torch.Tensor, sigma: torch.Tensor = None,
-                exp_phi: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sigma: Optional[torch.Tensor] = None,
+                exp_phi: Optional[torch.Tensor] = None) -> torch.Tensor:
         r"""Normalize mu using the Mahalanobis norm with covariance sigma.
 
         Args:
@@ -290,9 +290,9 @@ class CenteredMahalanobisNorm(nn.Module):
         self.sigma_floor = sigma_floor
         self.return_residual = return_residual
 
-    def forward(self, x: torch.Tensor, sigma: torch.Tensor = None,
+    def forward(self, x: torch.Tensor, sigma: Optional[torch.Tensor] = None,
                 mu_prior: Optional[torch.Tensor] = None,
-                exp_phi: torch.Tensor = None) -> torch.Tensor:
+                exp_phi: Optional[torch.Tensor] = None) -> torch.Tensor:
         r"""Normalize ``x`` using the centered Mahalanobis norm.
 
         Args:
@@ -403,7 +403,7 @@ def _make_norm(norm_type: str, dim: int,
         )
 
 
-def _infer_gauge_group(generators):
+def _infer_gauge_group(generators: Optional[torch.Tensor]) -> Tuple[str, int]:
     """Infer gauge group and dimension from generators shape."""
     if generators is None:
         return 'SO3', 3

@@ -597,16 +597,21 @@ class TestFMonitorEnvelopeRouting:
     def test_lambda_softmax_zero_when_entropy_on(self, generators):
         """The E-step must pass lambda_softmax=0.0 to the gradient kernels
         when include_attention_entropy=True. Verified by monkey-patching
-        compute_vfe_gradients_gpu to capture the kwarg value."""
+        both the fused kernel (default route) and the unfused fallback so
+        the test passes regardless of which path the gating selects."""
         import transformer.vfe.e_step as e_step_mod
-        from transformer.core.vfe_gradients import compute_vfe_gradients_gpu
 
         captured = {}
-        original = e_step_mod.compute_vfe_gradients_gpu
+        orig_fused = e_step_mod._fused_attention_and_vfe_gradients_block_diag
+        orig_unfused = e_step_mod.compute_vfe_gradients_gpu
 
-        def spy(*args, **kwargs):
+        def fused_spy(*args, **kwargs):
             captured['lambda_softmax'] = kwargs.get('lambda_softmax')
-            return original(*args, **kwargs)
+            return orig_fused(*args, **kwargs)
+
+        def unfused_spy(*args, **kwargs):
+            captured['lambda_softmax'] = kwargs.get('lambda_softmax')
+            return orig_unfused(*args, **kwargs)
 
         cfg = VFEConfig(
             vocab_size=50,
@@ -622,16 +627,18 @@ class TestFMonitorEnvelopeRouting:
         model = VFEModel(cfg)
         token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
 
-        e_step_mod.compute_vfe_gradients_gpu = spy
+        e_step_mod._fused_attention_and_vfe_gradients_block_diag = fused_spy
+        e_step_mod.compute_vfe_gradients_gpu = unfused_spy
         try:
             _ = model(token_ids)
         finally:
-            e_step_mod.compute_vfe_gradients_gpu = original
+            e_step_mod._fused_attention_and_vfe_gradients_block_diag = orig_fused
+            e_step_mod.compute_vfe_gradients_gpu = orig_unfused
 
         assert captured.get('lambda_softmax') == 0.0, (
             f"Expected lambda_softmax=0.0 with include_attention_entropy=True, "
             f"got {captured.get('lambda_softmax')}. The envelope-routing fix "
-            f"at vfe/e_step.py:344 has regressed."
+            f"at vfe/e_step.py has regressed."
         )
 
     def test_lambda_softmax_passes_through_when_entropy_off(self, generators):
@@ -640,11 +647,16 @@ class TestFMonitorEnvelopeRouting:
         import transformer.vfe.e_step as e_step_mod
 
         captured = {}
-        original = e_step_mod.compute_vfe_gradients_gpu
+        orig_fused = e_step_mod._fused_attention_and_vfe_gradients_block_diag
+        orig_unfused = e_step_mod.compute_vfe_gradients_gpu
 
-        def spy(*args, **kwargs):
+        def fused_spy(*args, **kwargs):
             captured['lambda_softmax'] = kwargs.get('lambda_softmax')
-            return original(*args, **kwargs)
+            return orig_fused(*args, **kwargs)
+
+        def unfused_spy(*args, **kwargs):
+            captured['lambda_softmax'] = kwargs.get('lambda_softmax')
+            return orig_unfused(*args, **kwargs)
 
         cfg = VFEConfig(
             vocab_size=50,
@@ -660,16 +672,18 @@ class TestFMonitorEnvelopeRouting:
         model = VFEModel(cfg)
         token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
 
-        e_step_mod.compute_vfe_gradients_gpu = spy
+        e_step_mod._fused_attention_and_vfe_gradients_block_diag = fused_spy
+        e_step_mod.compute_vfe_gradients_gpu = unfused_spy
         try:
             _ = model(token_ids)
         finally:
-            e_step_mod.compute_vfe_gradients_gpu = original
+            e_step_mod._fused_attention_and_vfe_gradients_block_diag = orig_fused
+            e_step_mod.compute_vfe_gradients_gpu = orig_unfused
 
         assert captured.get('lambda_softmax') == 0.7, (
             f"Expected lambda_softmax=0.7 (legacy path), got "
             f"{captured.get('lambda_softmax')}. The envelope-routing fix "
-            f"at vfe/e_step.py:344 broke the legacy lambda_soft pass-through."
+            f"broke the legacy lambda_soft pass-through."
         )
 
 
@@ -743,16 +757,23 @@ class TestKeysideTotalDerivative:
 
     def test_analytic_kernel_default_path_unchanged(self, generators):
         """With ``use_autograd_mu_sigma=False`` (default), the analytic
-        path is still used. Guards against accidental regression that
-        flips the default."""
+        (non-autograd) path is still used. Either the fused block-diag
+        kernel or the unfused ``compute_vfe_gradients_gpu`` is acceptable;
+        what must not happen is a switch to the autograd path. Guards
+        against accidental regression that flips the default."""
         import transformer.vfe.e_step as e_step_mod
 
-        captured = {'n': 0}
-        original = e_step_mod.compute_vfe_gradients_gpu
+        captured = {'fused': 0, 'unfused': 0}
+        orig_fused = e_step_mod._fused_attention_and_vfe_gradients_block_diag
+        orig_unfused = e_step_mod.compute_vfe_gradients_gpu
 
-        def spy(*args, **kwargs):
-            captured['n'] += 1
-            return original(*args, **kwargs)
+        def fused_spy(*args, **kwargs):
+            captured['fused'] += 1
+            return orig_fused(*args, **kwargs)
+
+        def unfused_spy(*args, **kwargs):
+            captured['unfused'] += 1
+            return orig_unfused(*args, **kwargs)
 
         cfg = VFEConfig(
             vocab_size=50,
@@ -772,15 +793,19 @@ class TestKeysideTotalDerivative:
         model = VFEModel(cfg)
         token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
 
-        e_step_mod.compute_vfe_gradients_gpu = spy
+        e_step_mod._fused_attention_and_vfe_gradients_block_diag = fused_spy
+        e_step_mod.compute_vfe_gradients_gpu = unfused_spy
         try:
             _ = model(token_ids)
         finally:
-            e_step_mod.compute_vfe_gradients_gpu = original
+            e_step_mod._fused_attention_and_vfe_gradients_block_diag = orig_fused
+            e_step_mod.compute_vfe_gradients_gpu = orig_unfused
 
-        assert captured['n'] == cfg.n_e_steps, (
-            f"Expected {cfg.n_e_steps} analytic calls with default flag, "
-            f"got {captured['n']}"
+        total = captured['fused'] + captured['unfused']
+        assert total == cfg.n_e_steps, (
+            f"Expected {cfg.n_e_steps} analytic (non-autograd) gradient calls "
+            f"with default flag, got fused={captured['fused']} + "
+            f"unfused={captured['unfused']} = {total}"
         )
 
     def test_autograd_grad_mu_differs_from_analytic(self):
@@ -981,8 +1006,10 @@ class TestAlphaC0CorrectionWired:
         return cfg_lk, m
 
     def test_alpha_c0_is_passed_when_learnable(self, monkeypatch):
-        """When E_learnable_alpha=True, compute_vfe_gradients_gpu must receive
-        alpha_c0 != None so the product-rule correction fires."""
+        """When E_learnable_alpha=True, the gradient kernel must receive
+        alpha_c0 != None so the product-rule correction fires. Patches
+        both the fused and unfused kernels so the test is robust to the
+        gating that selects between them."""
         import torch
         cfg_lk, m = self._make_e_step(learnable_alpha=True)
         e_step = m.stack.blocks[0].e_step
@@ -990,13 +1017,19 @@ class TestAlphaC0CorrectionWired:
         captured = {'alpha_c0': 'NOT_CALLED'}
 
         import transformer.vfe.e_step as estep_mod
-        original = estep_mod.compute_vfe_gradients_gpu
+        orig_fused = estep_mod._fused_attention_and_vfe_gradients_block_diag
+        orig_unfused = estep_mod.compute_vfe_gradients_gpu
 
-        def spy(*args, **kwargs):
+        def fused_spy(*args, **kwargs):
             captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
-            return original(*args, **kwargs)
+            return orig_fused(*args, **kwargs)
 
-        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', spy)
+        def unfused_spy(*args, **kwargs):
+            captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
+            return orig_unfused(*args, **kwargs)
+
+        monkeypatch.setattr(estep_mod, '_fused_attention_and_vfe_gradients_block_diag', fused_spy)
+        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', unfused_spy)
 
         B, N, K = 2, 4, cfg_lk.embed_dim
         beliefs = BeliefState(
@@ -1023,7 +1056,7 @@ class TestAlphaC0CorrectionWired:
 
     def test_alpha_c0_is_none_when_fixed_alpha(self, monkeypatch):
         """When E_learnable_alpha=False, alpha is a constant; alpha_c0 must be
-        None so compute_vfe_gradients_gpu skips the (now spurious) correction."""
+        None so the gradient kernel skips the (now spurious) correction."""
         import torch
         cfg_lk, m = self._make_e_step(learnable_alpha=False)
         e_step = m.stack.blocks[0].e_step
@@ -1031,13 +1064,19 @@ class TestAlphaC0CorrectionWired:
         captured = {'alpha_c0': 'NOT_CALLED'}
 
         import transformer.vfe.e_step as estep_mod
-        original = estep_mod.compute_vfe_gradients_gpu
+        orig_fused = estep_mod._fused_attention_and_vfe_gradients_block_diag
+        orig_unfused = estep_mod.compute_vfe_gradients_gpu
 
-        def spy(*args, **kwargs):
+        def fused_spy(*args, **kwargs):
             captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
-            return original(*args, **kwargs)
+            return orig_fused(*args, **kwargs)
 
-        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', spy)
+        def unfused_spy(*args, **kwargs):
+            captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
+            return orig_unfused(*args, **kwargs)
+
+        monkeypatch.setattr(estep_mod, '_fused_attention_and_vfe_gradients_block_diag', fused_spy)
+        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', unfused_spy)
 
         B, N, K = 2, 4, cfg_lk.embed_dim
         beliefs = BeliefState(

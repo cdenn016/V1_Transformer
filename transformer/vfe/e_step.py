@@ -9,6 +9,43 @@ structurally impossible.
 
 Law 2 enforced: all transport goes through fused block-diagonal kernels
 which internally compute Omega @ Sigma @ Omega^T.
+
+Implementation note — F functional realized vs manuscript canonical.
+==================================================================
+The manuscript free-energy functional (``\\label{eq:free_energy_functional_final}``)
+has FIVE terms:
+
+    F = alpha * KL(q || p)                                      # self-coupling
+      + lambda_h * KL(s || h)                                   # hyper-prior
+      + sum_ij [ beta_ij * KL(q_i || Omega_ij q_j)
+                 + tau * beta_ij * log(beta_ij / pi_ij) ]       # belief coupling + entropy
+      + sum_ij [ gamma_ij * KL(s_i || Omega_ij s_j)
+                 + tau * gamma_ij * log(gamma_ij / pi^s_ij) ]   # model coupling + meta entropy
+      - E_q[log p(o | x)]                                       # observation likelihood
+
+This E-step assembles only THREE of those five terms in the inner-loop
+gradient:
+
+    alpha * KL(q || p)
+    sum_ij beta_ij * KL(q_i || Omega_ij q_j)
+    tau * beta_ij * log(beta_ij / pi_ij)        (when include_attention_entropy=True)
+
+The gamma-coupled model-coupling term (``sum_ij gamma_ij KL(s_i || Omega_ij s_j)``)
+and the hyper-prior term (``lambda_h * KL(s || h)``) are NOT implemented in this
+path — there is no gamma-attention parameter anywhere in the package, and
+``s`` does not exist as a separate distribution from ``q``. Treat the
+implemented F as a structural subset of the manuscript F; cross-layer
+"model coupling" is realised instead by the prior-handoff cascade in
+``transformer/vfe/stack.py`` (see "mean-only cascade" note there).
+
+Outer M-step (see ``transformer/vfe/model.py``) minimises cross-entropy
+plus a ``mass_phi * ||phi||^2`` regulariser plus
+``sum block._aux_hyperparam_loss``, NOT the converged-q value of F.
+The alpha*KL(q||p) and beta*KL terms enter the M-step only as gradients
+through the unrolled E-step iterations — this is structurally amortised
+inference (the embeddings are tuned so that CE is small after the E-step
+relaxes), not classical variational EM where E and M alternate on the
+same F functional.
 """
 
 from __future__ import annotations
@@ -29,6 +66,7 @@ from transformer.core.vfe_gradients import (
     compute_vfe_gradients_gpu,
     compute_natural_gradient_gpu,
     _compute_rope_full_gauge_gradient_per_head,
+    _fused_attention_and_vfe_gradients_block_diag,
 )
 from transformer.core.vfe_utils import (
     retract_sigma_e_step,
@@ -302,18 +340,25 @@ class VFEEStep(nn.Module):
         sigma_q: torch.Tensor,
         sigma_p: torch.Tensor,
         eps: float = 1e-6,
+        c0: Optional[torch.Tensor] = None,
+        b0: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Per-dimension Bayesian precision: :math:`\alpha_k = c_0 / (b_0 + \mathrm{KL}_k)`.
 
         Each belief dimension k gets its own precision via Gamma-Normal
         conjugacy, so different irrep blocks can learn different
-        regularization curves.
+        regularization curves. Passing ``c0`` / ``b0`` lets the E-step
+        outer scope hoist ``softplus(raw_c0)`` / ``softplus(raw_b0)`` and
+        reuse them across iterations rather than recomputing the activations
+        every call.
 
         Returns:
             alpha: ``(B, N, K)`` per-dimension precision.
         """
-        c0 = F.softplus(self.raw_c0)  # (K,)
-        b0 = F.softplus(self.raw_b0)  # (K,)
+        if c0 is None:
+            c0 = F.softplus(self.raw_c0)  # (K,)
+        if b0 is None:
+            b0 = F.softplus(self.raw_b0)  # (K,)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
 
@@ -518,8 +563,15 @@ class VFEEStep(nn.Module):
         # E-step iteration (plus once inside _update_phi).
         _kappa = self.effective_kappa
 
-        # Hoist iter-independent softplus(raw_c0) out of the loop.
+        # Hoist iter-independent softplus(raw_c0) / softplus(raw_b0) out of
+        # the loop — both are M-step parameters constant across E-step
+        # iterations; previously softplus(raw_b0) was recomputed each call
+        # to get_bayesian_alpha.
         alpha_c0_full_hoisted = self._get_alpha_c0()
+        if self.E_learnable_alpha:
+            alpha_b0_full_hoisted: Optional[torch.Tensor] = F.softplus(self.raw_b0)
+        else:
+            alpha_b0_full_hoisted = None
 
         # Bogacz 2017 invariant: F(t+1) <= F(t) for correct E-step descent.
         # Track the per-iteration scalar free energy so silent divergence is
@@ -554,7 +606,10 @@ class VFEEStep(nn.Module):
             # alpha_c0 is passed in. Without it, the descent direction is biased.
             alpha_c0_full = alpha_c0_full_hoisted
             if self.E_learnable_alpha:
-                alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
+                alpha_eff = self.get_bayesian_alpha(
+                    mu, mu_p, sigma, sigma_p,
+                    c0=alpha_c0_full_hoisted, b0=alpha_b0_full_hoisted,
+                )
 
             # Non-flat transport branch: precomputes pairwise (Ω_ij, Ω_ij^{-1})
             # per block from the bilinear connection + φ-exp cache, then drives
@@ -636,60 +691,95 @@ class VFEEStep(nn.Module):
                         block_start = block_end
                 kl_matrix = beta  # beta_h from last head (for diagnostics)
             else:
-                # Standard path: fused attention + gradient computation
-                beta, kl_matrix = compute_kl_attention(
-                    mu, sigma, phi, self.generators,
-                    self.irrep_dims, _kappa, mask,
-                    use_rope=self.use_rope,
-                    rope_base=self.rope_base,
-                    cached_block_exp_pairs=block_exp_pairs,
-                    enforce_orthogonal=self.enforce_orthogonal,
-                    mask_self_attention=self.mask_self_attention,
-                    exact_diagonal_transport=self.exact_diagonal_transport,
+                # Fused path: single-pass β + ∇F computation when the gating
+                # conditions of `_fused_attention_and_vfe_gradients_block_diag`
+                # are met. Eliminates the duplicate Omega construction that
+                # the separate `compute_kl_attention` + `compute_vfe_gradients_gpu`
+                # pair performs (each E-step iteration previously built Omega
+                # twice; the fused path builds it once).
+                _can_use_fused = (
+                    is_diagonal
+                    and self.irrep_dims is not None
+                    and not self.exact_diagonal_transport
+                    and not self.use_autograd_mu_sigma
                 )
-
-                if self.use_autograd_mu_sigma:
-                    # Total-derivative path: autograd through compute_kl_attention
-                    # captures BOTH query-side and key-side contributions to
-                    # dF/dmu_k, matching the phi-update mechanism. See
-                    # _compute_mu_sigma_grad_autograd docstring.
-                    grad_mu, grad_sigma = self._compute_mu_sigma_grad_autograd(
-                        mu=mu, sigma=sigma,
+                if _can_use_fused:
+                    beta, grad_mu, grad_sigma, kl_matrix = _fused_attention_and_vfe_gradients_block_diag(
+                        mu_q=mu, sigma_q=sigma,
                         mu_p=mu_p, sigma_p=sigma_p,
-                        phi=phi,
-                        alpha_eff=alpha_eff,
-                        block_exp_pairs=block_exp_pairs,
-                        mask=mask,
-                        kappa=_kappa,
-                        eps=eps,
-                        is_diagonal=is_diagonal,
-                    )
-                else:
-                    grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                        mu_q=mu,
-                        sigma_q=sigma,
-                        mu_p=mu_p,
-                        sigma_p=sigma_p,
-                        beta=beta,
-                        phi=phi,
-                        generators=self.generators,
+                        phi=phi, generators=self.generators,
                         alpha=alpha_eff,
-                        alpha_c0=alpha_c0_full,
-                        alpha_div=self.alpha_divergence,
                         lambda_belief=self.lambda_align,
-                        # See rope-branch envelope-identity comment above.
+                        # Envelope identity: the entropy term and softmax-
+                        # coupling term cancel at the β fixed point, so the
+                        # σβ·KL gradient is zero when the entropy term is in F.
                         lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
                         kappa=_kappa,
                         eps=eps,
-                        compute_sigma_align_grad=True,
                         irrep_dims=self.irrep_dims,
+                        compute_sigma_align_grad=True,
                         enforce_orthogonal=self.enforce_orthogonal,
+                        alpha_c0=alpha_c0_full,
                         cached_block_exp_pairs=block_exp_pairs,
+                        mask=mask,
+                        mask_self_attention=self.mask_self_attention,
                         use_rope=self.use_rope,
                         rope_base=self.rope_base,
-                        exact_diagonal_transport=self.exact_diagonal_transport,
-                        gauge_covariant_ridge=self.gauge_covariant_ridge,
+                        return_kl=True,
+                        alpha_div=self.alpha_divergence,
                     )
+                else:
+                    # Fallback: separate β + gradient passes (rebuilds Omega
+                    # internally). Used for autograd μ/σ, exact-diagonal
+                    # transport, full-cov, or unspecified irrep_dims.
+                    beta, kl_matrix = compute_kl_attention(
+                        mu, sigma, phi, self.generators,
+                        self.irrep_dims, _kappa, mask,
+                        use_rope=self.use_rope,
+                        rope_base=self.rope_base,
+                        cached_block_exp_pairs=block_exp_pairs,
+                        enforce_orthogonal=self.enforce_orthogonal,
+                        mask_self_attention=self.mask_self_attention,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+
+                    if self.use_autograd_mu_sigma:
+                        grad_mu, grad_sigma = self._compute_mu_sigma_grad_autograd(
+                            mu=mu, sigma=sigma,
+                            mu_p=mu_p, sigma_p=sigma_p,
+                            phi=phi,
+                            alpha_eff=alpha_eff,
+                            block_exp_pairs=block_exp_pairs,
+                            mask=mask,
+                            kappa=_kappa,
+                            eps=eps,
+                            is_diagonal=is_diagonal,
+                        )
+                    else:
+                        grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                            mu_q=mu,
+                            sigma_q=sigma,
+                            mu_p=mu_p,
+                            sigma_p=sigma_p,
+                            beta=beta,
+                            phi=phi,
+                            generators=self.generators,
+                            alpha=alpha_eff,
+                            alpha_c0=alpha_c0_full,
+                            alpha_div=self.alpha_divergence,
+                            lambda_belief=self.lambda_align,
+                            lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
+                            kappa=_kappa,
+                            eps=eps,
+                            compute_sigma_align_grad=True,
+                            irrep_dims=self.irrep_dims,
+                            enforce_orthogonal=self.enforce_orthogonal,
+                            cached_block_exp_pairs=block_exp_pairs,
+                            use_rope=self.use_rope,
+                            rope_base=self.rope_base,
+                            exact_diagonal_transport=self.exact_diagonal_transport,
+                            gauge_covariant_ridge=self.gauge_covariant_ridge,
+                        )
 
             # 2b. Monotone free-energy check (diagonal covariance only).
             # Gated by monitor_monotonicity OR track_layer_diagnostics — the
@@ -845,7 +935,7 @@ class VFEEStep(nn.Module):
         is_diagonal: bool,
         mask: Optional[torch.Tensor],
         eps: float,
-        kappa: "Optional[torch.Tensor | float]" = None,
+        kappa: "torch.Tensor | float",
     ) -> torch.Tensor:
         r"""Compute phi gradient via autograd and retract.
 
@@ -867,7 +957,7 @@ class VFEEStep(nn.Module):
             # kl_matrix share the same autograd subgraph through phi_for_grad.
             # The product rule decomposition below uses .detach() to route
             # gradients along exactly one of the two paths per term.
-            _kappa = kappa if kappa is not None else self.effective_kappa
+            _kappa = kappa
             # Omega exponentials are rebuilt inside compute_kl_attention from
             # phi_for_grad — the caller's block_exp_pairs cache cannot be
             # reused here because it was built from a phi leaf that is not in

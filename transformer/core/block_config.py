@@ -393,6 +393,26 @@ class BlockConfig:
                 "block mixer is the principled commutant replacement. Choose one."
             )
 
+        # Standalone use_output_projection=True (without the mixers above):
+        # W_O ∈ R^{K×K} is applied to μ_agg only inside the attention sublayer,
+        # leaving Σ untransformed. The (μ, Σ) pair then sits in two different
+        # frames and the downstream KL becomes ill-defined under any gauge
+        # action. The mixer flags above are the equivariant replacements;
+        # warn when the user opted for the bare linear without setting either.
+        if self.use_output_projection and not (
+            self.use_equivariant_head_mixer or self.use_block_equivariant_mixer
+        ):
+            import warnings as _warnings
+            _warnings.warn(
+                "use_output_projection=True applies W_O ∈ R^{K×K} to μ only; "
+                "Σ is not transformed, which breaks the gauge sandwich "
+                "invariant Σ_t = Ω Σ Ω^T. Prefer use_equivariant_head_mixer "
+                "(post-concat) or use_block_equivariant_mixer (post-FFN) — "
+                "both are Schur-commutant and preserve equivariance.",
+                category=RuntimeWarning,
+                stacklevel=2,
+            )
+
     # The old 5-flag system (amortized_inference / amortize_sigma /
     # exact_phi_grad / em_phi_mode / implicit_em) is fully internalized.
     # External callers should configure via ``em_mode`` only; the per-mode

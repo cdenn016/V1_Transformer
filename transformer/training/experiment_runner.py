@@ -653,7 +653,10 @@ class PublicationTrainer(FastTrainer):
                             preview = decoded[:80] + \
                                 ('...' if len(decoded) > 80 else '')
                             seq_info = f"Step {step}, Text: {preview}"
-                        except Exception:
+                        except (ValueError, TypeError, AttributeError, UnicodeDecodeError):
+                            # Decode is purely diagnostic for attention-pattern
+                            # display; fall back to raw token IDs rather than
+                            # interrupting the training loop.
                             seq_info = f"Step {step}, Tokens: { input_ids[0, :20].tolist()}..."
                     else:
                         seq_info = f"Step {step}, Tokens: { input_ids[0, :20].tolist()}..."

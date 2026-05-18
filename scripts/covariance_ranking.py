@@ -124,7 +124,7 @@ def main():
         print("Set CHECKPOINT_PATH at the top of this script.")
         sys.exit(1)
 
-    model, config = load_model(str(checkpoint_path))
+    model, config = load_model(str(checkpoint_path), trusted=True)
     model.eval()
 
     dataset_name = DATASET or config.get('dataset', 'wikitext-103')

@@ -21,7 +21,19 @@ without affecting gauge transport.
 """
 
 import torch
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, TypedDict
+
+
+class TransportDict(TypedDict, total=False):
+    """Return shape of ``compute_transport_operators`` / ``...direct``.
+
+    ``exp_phi``, ``exp_neg_phi``, ``Omega`` are always present;
+    ``exp_delta`` appears only when ``connection_delta`` is supplied.
+    """
+    exp_phi: torch.Tensor       # (B, N, K, K)
+    exp_neg_phi: torch.Tensor   # (B, N, K, K)
+    Omega: torch.Tensor         # (B, N, N, K, K)
+    exp_delta: torch.Tensor     # (B, N, N, K, K), optional
 
 from transformer.core.gauge_utils import (
     stable_matrix_exp_pair,
@@ -188,18 +200,19 @@ def _apply_rope_to_covariance(
 
     # Build R(θ_i) ∈ R^{N, K, K} as a sparse block-diagonal rotation:
     # for each i, R has 2x2 blocks on the (2k, 2k+1) pairs and identity
-    # elsewhere (last dim untouched if K is odd).
+    # elsewhere (last dim untouched if K is odd). Vectorised assembly via
+    # advanced indexing (one launch each for the four block-element groups)
+    # avoids the per-frequency Python loop that previously scatter-wrote
+    # K/2 times per call.
     R = torch.zeros(N, K, K, device=sigma_full.device, dtype=sigma_full.dtype)
-    # Identity on the last dim if K is odd
     if K % 2 == 1:
         R[:, K - 1, K - 1] = 1.0
-    for k in range(half_K):
-        c = cos_angles[:, k]   # (N,)
-        s = sin_angles[:, k]   # (N,)
-        R[:, 2 * k,     2 * k    ] =  c
-        R[:, 2 * k,     2 * k + 1] = -s
-        R[:, 2 * k + 1, 2 * k    ] =  s
-        R[:, 2 * k + 1, 2 * k + 1] =  c
+    _even = torch.arange(half_K, device=sigma_full.device) * 2
+    _odd = _even + 1
+    R[:, _even, _even] = cos_angles                              # cos on (2k, 2k)
+    R[:, _even, _odd] = -sin_angles                              # -sin on (2k, 2k+1)
+    R[:, _odd, _even] = sin_angles                               #  sin on (2k+1, 2k)
+    R[:, _odd, _odd] = cos_angles                                #  cos on (2k+1, 2k+1)
 
     # R Σ R^T per position: (N, K, K) acts on (B, N, K, K) along the
     # trailing two dims, broadcasting over batch.
@@ -262,7 +275,7 @@ def compute_transport_operators(
     connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local connection
     cocycle_relaxation: float = 0.0,  # Scale factor for connection_delta: 0=flat, 1=fully non-flat
     **kwargs,  # generators_are_skew: Optional[bool] — pre-computed skew-symmetry flag
-) -> dict:
+) -> TransportDict:
     """
     Precompute transport operators for caching when phi is fixed.
 
@@ -412,7 +425,7 @@ def compute_transport_operators_direct(
     connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local
     generators: Optional[torch.Tensor] = None,  # needed only for non-flat connection
     cocycle_relaxation: float = 0.0,
-) -> dict:
+) -> TransportDict:
     """
     Compute transport operators from direct GL(K) group elements (no matrix_exp).
 

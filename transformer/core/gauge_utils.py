@@ -92,11 +92,12 @@ def stable_matrix_exp_pair(
     """
     # Clamp Frobenius norm to prevent overflow in matrix_exp.
     # Gradient flows through the scaling factor, so φ still gets
-    # signal to shrink when it exceeds the cap.
+    # signal to shrink when it exceeds the cap. The multiply is a no-op
+    # when scale == 1.0, so we apply it unconditionally — the previous
+    # `if (scale < 1.0).any(): _nr(...)` was a host sync per unique block
+    # dim per E-step iteration purely for the diagnostic counter.
     mat_norm = matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
     scale = (max_norm / mat_norm).clamp(max=1.0)
-    if (scale < 1.0).any():
-        _nr("matexp_norm_clamp", count=int((scale < 1.0).sum().item()))
     matrix = matrix * scale
 
     d = matrix.shape[-1]

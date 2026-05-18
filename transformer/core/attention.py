@@ -279,6 +279,11 @@ def compute_attention_weights(
     # =========================================================================
     # Exact diagonal transport: lift diagonal σ to full and use full-cov paths.
     # KL output is (B,N,N) regardless, so no output conversion needed.
+    # PERFORMANCE: this materialises a (B, N, K, K) tensor where only the
+    # diagonal `sigma_t_kk = sum_l Omega_kl^2 * sigma_l` is mathematically
+    # needed. For large K this is a K-fold memory blowup; the cheaper path
+    # is `torch.einsum('bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_diag)`.
+    # Left in lift form because it is off by default (opt-in research path).
     # =========================================================================
     if exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3:
         sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) → (B, N, K, K)
