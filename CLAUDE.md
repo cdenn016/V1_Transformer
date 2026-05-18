@@ -64,7 +64,7 @@ F = alpha * KL(q_i || p_i)                                          # self-coupl
   - E_q[log p(o | x)]                                               # observation likelihood
 ```
 
-`tau = kappa * sqrt(K)` is the effective softmax temperature. The `tau * beta_ij * log(beta_ij/pi_ij)` term is the attention-distribution entropy with uniform prior `pi_ij = 1/N`; it is required for the softmax β to be a stationary point of F (without it the row-Lagrangian gives a delta, not softmax). Manuscript line 1261 explicitly distinguishes the canonical F from the "entropy-suppressed surrogate" `sum β KL` — their gradients differ by `-tau^{-1} Cov_β(KL, ∇KL)`.
+`tau = kappa * sqrt(K)` is the effective softmax temperature. The `tau * beta_ij * log(beta_ij/pi_ij)` term is the attention-distribution entropy with uniform prior `pi_ij = 1/N`; it is required for the softmax β to be a stationary point of F (without it the row-Lagrangian gives a delta, not softmax). The canonical F vs "entropy-suppressed surrogate" `sum β KL` distinction is made explicitly in `Attention/GL(K)_attention.tex` at lines 766, 855, and 1354 (the surrogate is acknowledged again in `Attention/GL(K)_supplementary.tex` §B.1) — their gradients differ by `-tau^{-1} Cov_β(KL, ∇KL)`.
 
 **Attention**: `beta_ij = softmax(-KL(q_i || Omega_ij * q_j) / (kappa * sqrt(K)))` — `kappa` is a learnable hyperparameter; the `sqrt(K)` factor is intentional dimension scaling on top of `kappa` (analogous to scaled dot-product attention).
 
