@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 from math_utils.numerical_monitor import record as _nr
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def _per_pos_stats(t: torch.Tensor) -> Tuple[float, float, float]:
     )
 
 
-def _aggregate_multihead_vfe_debug(d: Dict[str, float], irrep_dims) -> None:
+def _aggregate_multihead_vfe_debug(d: Dict[str, float], irrep_dims: Optional[Sequence[int]]) -> None:
     r"""Aggregate per-head VFE debug metrics into base keys for plotting.
 
     In multi-head VFE mode, gradient functions write base keys (e.g. ``grad_mu_self``)
@@ -864,15 +864,26 @@ class IterationSnapshot:
     grad_sigma_norm: float = 0.0
 
 
-_global_recorder: Optional[Any] = None
+class RecorderProtocol(Protocol):
+    """Structural type for a trajectory recorder.
+
+    Any object implementing ``record_step`` and ``start_forward`` satisfies
+    the protocol. Used by ``set_global_recorder`` to type the global hook
+    without forcing analysis-layer code to inherit a base class.
+    """
+    def record_step(self, *args: Any, **kwargs: Any) -> None: ...
+    def start_forward(self, *args: Any, **kwargs: Any) -> None: ...
 
 
-def get_global_recorder() -> Optional[Any]:
+_global_recorder: Optional[RecorderProtocol] = None
+
+
+def get_global_recorder() -> Optional[RecorderProtocol]:
     """Return the global trajectory recorder, or None if not set."""
     return _global_recorder
 
 
-def set_global_recorder(recorder: Any) -> None:
+def set_global_recorder(recorder: Optional[RecorderProtocol]) -> None:
     """Register a trajectory recorder from the analysis layer."""
     global _global_recorder
     _global_recorder = recorder
@@ -894,8 +905,11 @@ def apply_natural_gradient_step(
     eps: float,
     effective_lr: float,
     isotropic_covariance: bool,
-    compute_natural_gradient_fn,
-) -> dict:
+    compute_natural_gradient_fn: Callable[
+        [torch.Tensor, torch.Tensor, torch.Tensor, float],
+        Tuple[torch.Tensor, torch.Tensor],
+    ],
+) -> Dict[str, torch.Tensor]:
     r"""Compute natural gradients, clamp, apply trust region, and return update.
 
     This is the core STEP 3 + STEP 4 of the VFE E-step: Fisher projection,

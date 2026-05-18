@@ -14,6 +14,24 @@ Sigma freezing is architecturally enforced — priors.sigma is never
 reassigned from the posterior. priors.phi is likewise never consumed by
 VFEEStep (phi is initialised from beliefs.phi each layer), so phi is
 held at the embedding value in the prior state.
+
+Implementation note — mean-only cascade vs canonical hierarchical VI.
+====================================================================
+Under the default ``prior_handoff_rho=1.0, prior_handoff_sigma=0.0``,
+only the posterior MEAN of layer L flows into the prior of layer L+1;
+the posterior VARIANCE and the posterior GAUGE FRAME are discarded and
+the prior at L+1 reuses the embedding sigma and embedding phi. This is
+a *point-estimate handoff*, not the full distributional handoff that
+canonical hierarchical variational inference (Friston 2017; Parr,
+Pezzulo, Friston 2022; Blei, Kucukelbir, Jordan 2017) prescribes.
+
+Effect: cross-layer uncertainty about ``s_l`` is dropped at every
+boundary — layer L+1's KL(q^{L+1} || prior) treats the embedding sigma
+as ground truth even though layer L's posterior has refined it. The
+codepath for full handoff exists (``prior_handoff_sigma>0`` triggers
+the SPD eigenvalue floor branch), but the default is point-passing.
+Set ``prior_handoff_sigma=1.0`` (and a matching mechanism for phi if
+desired) to recover the canonical scheme.
 """
 
 from __future__ import annotations
@@ -98,19 +116,21 @@ class VFEStack(nn.Module):
                 if new_prior_sigma.dim() == 3:
                     new_prior_sigma = new_prior_sigma.clamp(min=1e-4, max=self.sigma_max)
                 else:
-                    # Full-cov: symmetrize and enforce SPD via diagonal floor.
-                    # Clamping only the diagonal does not guarantee PD; we
-                    # symmetrize the blended tensor and add an epsilon*I term.
+                    # Full-cov: symmetrize and lift to SPD via an out-of-place
+                    # eigenvalue floor (preserves autograd; an in-place indexed
+                    # write into an autograd-attached intermediate would trip
+                    # PyTorch's version counter and either error at backward
+                    # or silently corrupt gradients).
                     new_prior_sigma = 0.5 * (
                         new_prior_sigma + new_prior_sigma.transpose(-1, -2)
                     )
-                    diag_idx = torch.arange(
-                        new_prior_sigma.shape[-1], device=new_prior_sigma.device
+                    eigvals, eigvecs = torch.linalg.eigh(new_prior_sigma)
+                    eigvals = eigvals.clamp(min=1e-4, max=self.sigma_max)
+                    new_prior_sigma = (
+                        eigvecs @ torch.diag_embed(eigvals) @ eigvecs.transpose(-1, -2)
                     )
-                    new_prior_sigma[..., diag_idx, diag_idx] = (
-                        new_prior_sigma[..., diag_idx, diag_idx].clamp(
-                            min=1e-4, max=self.sigma_max
-                        )
+                    new_prior_sigma = 0.5 * (
+                        new_prior_sigma + new_prior_sigma.transpose(-1, -2)
                     )
 
             # priors.phi is never consumed by VFEEStep (phi is initialised

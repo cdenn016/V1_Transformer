@@ -812,6 +812,13 @@ from transformer.training.experiment_runner import (
 # =============================================================================
 
 def main():
+    # DOCUMENTED EXCEPTION to CLAUDE.md "NO CLI ARGUMENTS" hard constraint.
+    # This entry point is the single sanctioned argparse user of the project —
+    # it spans seven publication training modes (standard / em / hebbian /
+    # pure_vfe / attention-only / ffn-only / hybrid) and switches between
+    # them based on the user's --mode selection. New entry points must still
+    # follow the click-to-run pattern; this one is grandfathered for
+    # publication-run convenience and should not be replicated.
     import argparse
     import json
 

@@ -100,7 +100,7 @@ def get_model_and_config():
     if ckpt is not None:
         print(f"Found checkpoint: {ckpt}")
         from transformer.utils.checkpoint import load_model
-        model, config = load_model(str(ckpt))
+        model, config = load_model(str(ckpt), trusted=True)
         return model, config, ckpt
     else:
         print("No checkpoint found — using fresh model with random weights.")

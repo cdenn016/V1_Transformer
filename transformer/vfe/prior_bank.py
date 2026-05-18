@@ -117,7 +117,13 @@ class VFEPriorBank(nn.Module):
         self.phi_embed = nn.Embedding(V, n_gen)
         nn.init.normal_(self.phi_embed.weight, mean=0.0, std=cfg.phi_scale)
 
-        # Learnable decode temperature
+        # Learnable decode temperature. The canonical Gaussian-cluster
+        # decode is `logits = -KL(q || pi_v) / tau`. This module instead
+        # computes `logits = -c * KL(q || pi_v) / tau` with a learnable
+        # `c = exp(decode_log_scale)` clamped to `[exp(-3), exp(3)] ~ [0.05, 20]`.
+        # Equivalent to a learnable scalar softmax temperature on top of
+        # the canonical form. Initialised at 0 (c=1), so untrained models
+        # match the documented decode; the parameter drifts during training.
         self.decode_log_scale = nn.Parameter(torch.zeros(1))
 
         # Decode cache (invalidated each forward pass)

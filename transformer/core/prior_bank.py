@@ -456,7 +456,10 @@ class PriorBank(nn.Module):
         self,
         token_ids: torch.Tensor,  # (B, N) or (V,) for all vocab
         only_forward: bool = False,  # True for decode (no A⁻¹ needed)
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    ]:
         """
         Get prior (μ, σ, φ) for given tokens.
 

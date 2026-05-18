@@ -25,6 +25,7 @@ Usage
 """
 
 from enum import Enum
+import os
 from typing import List, Optional
 
 import torch
@@ -37,6 +38,20 @@ from transformer.core.gauge_utils import (
 )
 
 
+# Toggles the observational `_nr("kl_nonfinite")` / `_nr("kl_saturated")`
+# instrumentation in `safe_kl_clamp`. Each fires a host-side `.any()` +
+# `.sum().item()` sync per pairwise-KL call. Off by default — set
+# VFE_KL_DIAGNOSTICS=1 or call enable_kl_diagnostics() to turn on during
+# diagnostic sweeps.
+_KL_DIAGNOSTICS_ENABLED: bool = bool(int(os.environ.get("VFE_KL_DIAGNOSTICS", "0")))
+
+
+def enable_kl_diagnostics(enabled: bool = True) -> None:
+    """Toggle the host-sync KL diagnostic counters at runtime."""
+    global _KL_DIAGNOSTICS_ENABLED
+    _KL_DIAGNOSTICS_ENABLED = bool(enabled)
+
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -45,6 +60,7 @@ __all__ = [
     "KLMode",
     "compute_kl_matrix",
     "safe_kl_clamp",
+    "enable_kl_diagnostics",
 ]
 
 
@@ -89,13 +105,16 @@ def safe_kl_clamp(
         Clamped tensor, same shape and device as *kl*.
     """
     # Saturation counter: how many entries hit the NaN/inf → kl_max path,
-    # or the upper clamp ceiling. Observational only.
+    # or the upper clamp ceiling. Observational only — each call forces a
+    # host-side sync via `.any()` + `.sum().item()`, so it is gated behind
+    # _KL_DIAGNOSTICS_ENABLED (see module-level toggle).
     _nonfinite = ~torch.isfinite(kl)
-    if _nonfinite.any():
-        _nr("kl_nonfinite", count=int(_nonfinite.sum().item()))
-    _at_ceiling = kl >= kl_max
-    if _at_ceiling.any():
-        _nr("kl_saturated", count=int(_at_ceiling.sum().item()))
+    if _KL_DIAGNOSTICS_ENABLED:
+        if _nonfinite.any():
+            _nr("kl_nonfinite", count=int(_nonfinite.sum().item()))
+        _at_ceiling = kl >= kl_max
+        if _at_ceiling.any():
+            _nr("kl_saturated", count=int(_at_ceiling.sum().item()))
     if propagate_nonfinite:
         # Preserve NaN/±inf; only clamp finite entries to [0, kl_max].
         finite_clamped = kl.clamp(min=0.0, max=kl_max)
@@ -116,8 +135,8 @@ def _kl_kernel_dense(
     kl_max: float,
     eps: float,
     alpha_div: float = 1.0,
-    exp_phi_q: torch.Tensor = None,   # (..., K, K) local frame at q (optional)
-    exp_phi_t: torch.Tensor = None,   # (..., K, K) local frame at t (optional)
+    exp_phi_q: Optional[torch.Tensor] = None,   # (..., K, K) local frame at q (optional)
+    exp_phi_t: Optional[torch.Tensor] = None,   # (..., K, K) local frame at t (optional)
     sigma_floor: Optional[float] = None,
     spd_floor_mode: str = 'eigclamp',
     enable_spd_diagnostics: bool = False,

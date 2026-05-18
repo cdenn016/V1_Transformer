@@ -156,10 +156,13 @@ class FastTrainer:
             print(f"    Output:           {config.M_output_lr}")
             print(f"{'='*70}\n")
 
-        # Resume from checkpoint if specified
+        # Resume from checkpoint if specified.
+        # Self-saved resume checkpoints contain config dataclasses and
+        # optimizer state — non-tensor objects rejected by weights_only=True,
+        # so we opt into the legacy pickle path with trusted=True here.
         if config.resume_from is not None:
             print(f"  Resuming from checkpoint: {config.resume_from}")
-            self.load_checkpoint(config.resume_from)
+            self.load_checkpoint(config.resume_from, trusted=True)
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer — delegates to optimizer.py (single source of truth)."""
@@ -551,16 +554,18 @@ class FastTrainer:
 
         return path
 
-    def load_checkpoint(self, checkpoint_path: str, trusted: bool = True):
+    def load_checkpoint(self, checkpoint_path: str, trusted: bool = False):
         """
         Load training checkpoint to resume training.
 
         Args:
             checkpoint_path: Path to checkpoint file (e.g., checkpoint_step_179999.pt)
-            trusted: When True (default), allows pickle-based loads. Set False
-                to refuse code-execution-equivalent loads from hostile
-                checkpoints; expect failure on configs that contain non-tensor
-                fields. Mirrors `transformer.utils.checkpoint.load_checkpoint`.
+            trusted: SAFE BY DEFAULT (False) — uses ``weights_only=True`` which
+                forbids arbitrary code execution at unpickle. Set True only
+                when loading self-saved training checkpoints (the project's
+                training-state pickles contain optimizer-state objects and
+                config dataclasses that ``weights_only=True`` rejects).
+                Mirrors ``transformer.utils.checkpoint.load_checkpoint``.
         """
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=not trusted)
 

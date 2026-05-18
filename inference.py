@@ -63,7 +63,8 @@ class GaugeTransformerInference:
         self.device = torch.device(device)
 
         print(f"Loading model from {checkpoint_path}...")
-        self.model, self.config = load_model(checkpoint_path)
+        # trusted=True for self-saved checkpoints (config dataclass + non-tensor objects).
+        self.model, self.config = load_model(checkpoint_path, trusted=True)
         self.model = self.model.to(self.device)
         self.model.eval()
 

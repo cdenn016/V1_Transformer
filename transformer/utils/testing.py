@@ -193,8 +193,8 @@ def diagnose():
     print("DIAGNOSIS COMPLETE")
     print("=" * 80)
 
-    # KEY INSIGHT check
-    print("\n[KEY INSIGHT]")
+    # Gauge-fixed-prior diagnostic
+    print("\n[Gauge-fixed prior diagnostic]")
     print("With gauge_fixed_priors=True:")
     print("  - mu_i = R_i @ mu_base  where R_i = exp(phi_i @ G)")
     print("  - Omega_ij = R_i @ R_j^{-1}")

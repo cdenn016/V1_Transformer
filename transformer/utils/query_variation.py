@@ -171,7 +171,7 @@ CHECKPOINT_PATH: Optional[str] = None  # e.g. 'checkpoints_publication/.../best_
 TRUSTED_CHECKPOINT: bool = True  # See ``trusted_checkpoint`` arg below.
 
 
-def main(checkpoint_path: Optional[str] = None, trusted_checkpoint: bool = True):
+def main(checkpoint_path: Optional[str] = None, trusted_checkpoint: bool = False):
     """
     Run query variation and belief-space analysis on a trained checkpoint.
 
@@ -181,9 +181,10 @@ def main(checkpoint_path: Optional[str] = None, trusted_checkpoint: bool = True)
     Args:
         checkpoint_path: Path to model checkpoint. If None, falls back to the
             module-level ``CHECKPOINT_PATH`` constant.
-        trusted_checkpoint: If True (default), allows pickle-based loads.
-            Set False to refuse arbitrary code execution from hostile
-            checkpoints (will fail on configs that contain non-tensor fields).
+        trusted_checkpoint: SAFE BY DEFAULT (False). Uses ``weights_only=True``
+            which refuses arbitrary code execution at unpickle. Set True only
+            when loading self-saved checkpoints that need the embedded config
+            dataclass / non-tensor objects.
     """
     if checkpoint_path is None:
         checkpoint_path = CHECKPOINT_PATH
@@ -192,6 +193,11 @@ def main(checkpoint_path: Optional[str] = None, trusted_checkpoint: bool = True)
         print("ERROR: No checkpoint path provided.")
         print("Edit CHECKPOINT_PATH at the top of this file and re-run.")
         return
+
+    # Canonicalise the user-provided path. Resolving first prevents a
+    # crafted "../../etc/passwd"-style path from sneaking through later
+    # joins / existence checks.
+    checkpoint_path = str(Path(checkpoint_path).expanduser().resolve())
 
     print("Loading model...")
 

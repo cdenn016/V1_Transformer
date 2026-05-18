@@ -255,8 +255,8 @@ def main(checkpoint_path: Optional[str] = None):
     print(f"BELIEF SPACE VISUALIZATION")
     print(f"{'='*70}\n")
 
-    # Load model
-    model, config = load_model(checkpoint_path)
+    # Load model (trusted=True for self-saved checkpoints with non-tensor config).
+    model, config = load_model(checkpoint_path, trusted=True)
 
     # Get tokenizer from model's dataset
     print("\nExtracting tokenizer...")

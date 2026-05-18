@@ -61,7 +61,7 @@ class TestCheckpointRoundtrip:
         try:
             save_checkpoint(model, None, config, epoch=5, step=1000,
                             save_path=save_path)
-            ckpt = load_checkpoint(save_path)
+            ckpt = load_checkpoint(save_path, trusted=True)
             assert 'model_state_dict' in ckpt
             assert 'config' in ckpt
 
@@ -90,7 +90,7 @@ class TestCheckpointRoundtrip:
         try:
             save_checkpoint(model, None, config, epoch=3, step=500,
                             save_path=save_path)
-            ckpt = load_checkpoint(save_path)
+            ckpt = load_checkpoint(save_path, trusted=True)
             for key in ['vocab_size', 'embed_dim', 'n_layers']:
                 assert ckpt['config'][key] == config[key], \
                     f"Config key {key} mismatch"
@@ -108,7 +108,7 @@ class TestCheckpointRoundtrip:
         try:
             save_checkpoint(model, None, config, epoch=7, step=2000,
                             save_path=save_path)
-            ckpt = load_checkpoint(save_path)
+            ckpt = load_checkpoint(save_path, trusted=True)
             assert ckpt['epoch'] == 7
             assert ckpt['step'] == 2000
         finally:
@@ -125,7 +125,7 @@ class TestCheckpointRoundtrip:
         try:
             save_checkpoint(model, None, config, epoch=1, step=100,
                             save_path=save_path, best_val_loss=2.5)
-            ckpt = load_checkpoint(save_path)
+            ckpt = load_checkpoint(save_path, trusted=True)
             assert ckpt['best_val_loss'] == 2.5
         finally:
             os.unlink(save_path)
@@ -155,7 +155,7 @@ class TestCheckpointInfo:
         try:
             save_checkpoint(model, None, config, epoch=2, step=300,
                             save_path=save_path)
-            info = load_checkpoint_info(save_path)
+            info = load_checkpoint_info(save_path, trusted=True)
             assert info['epoch'] == 2
             assert info['step'] == 300
             assert 'config' in info

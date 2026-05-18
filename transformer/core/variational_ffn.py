@@ -103,11 +103,7 @@ from transformer.core.vfe_gradients import (
     compute_natural_gradient_gpu,
     _compute_rope_full_gauge_gradient_per_head,
 )
-from transformer.core.gauge_preconditioner import (
-    apply_cartan_preconditioning,
-    apply_killing_form_natural_gradient,
-    apply_pullback_natural_gradient,
-)
+from transformer.core.phi_evolution import precondition_phi_gradient
 
 
 # retract_spd_torch and retract_spd_diagonal_torch are imported from vfe_utils above.
@@ -904,41 +900,19 @@ class VariationalFFNDynamic(nn.Module):
         grad_phi: torch.Tensor,   # (..., n_gen)
         phi: torch.Tensor,        # (..., n_gen)
     ) -> torch.Tensor:
+        """Delegate to :func:`phi_evolution.precondition_phi_gradient`.
+
+        Single dispatcher shared with ``transformer/vfe/e_step.py``.
         """
-        Apply phi gradient preconditioning based on self.phi_natural_gradient mode.
-
-        Modes:
-            'clip': Simple norm clipping to 10.0 (no geometric awareness)
-            'cartan': Cartan decomposition with fixed sym_dampening=0.1
-            'killing': Killing form natural gradient (position-independent, no free params)
-            'pullback': Full pullback metric through exp (position-dependent, exact)
-
-        Args:
-            grad_phi: Raw Euclidean gradient ∂F/∂φ^a
-            phi: Current gauge frame coordinates (needed for 'pullback' mode)
-
-        Returns:
-            Preconditioned gradient, same shape as grad_phi
-        """
-        if self.phi_natural_gradient == 'cartan':
-            return apply_cartan_preconditioning(grad_phi, self._phi_preconditioner)
-
-        elif self.phi_natural_gradient == 'killing':
-            return apply_killing_form_natural_gradient(grad_phi, self._phi_preconditioner)
-
-        elif self.phi_natural_gradient == 'pullback':
-            return apply_pullback_natural_gradient(
-                grad_phi, phi, self.generators,
-                self._structure_constants, self._gram,
-            )
-
-        else:  # 'clip' (default)
-            grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-            return torch.where(
-                grad_phi_norm > 10.0,
-                grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                grad_phi
-            )
+        return precondition_phi_gradient(
+            grad_phi=grad_phi,
+            phi=phi,
+            mode=self.phi_natural_gradient,
+            preconditioner=self._phi_preconditioner,
+            generators=self.generators,
+            structure_constants=self._structure_constants,
+            gram=self._gram,
+        )
 
     def _get_eye(self, d: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         r"""Return a cached ``torch.eye(d)`` on ``(device, dtype)``.
@@ -1304,8 +1278,19 @@ class VariationalFFNDynamic(nn.Module):
             if self.include_attention_entropy:
                 # Manuscript F = β·KL + τ_eff·β·log(β/π) direct form; lambda_softmax ignored.
                 # Per-head live kappa_h carries the κ-gradient when learnable_head_kappa=True.
-                # Uniform-irrep assumption: uses irrep_dims[0] for √d_h.
+                # Uniform-irrep assumption: uses irrep_dims[0] for √d_h. Mixed-irrep configs
+                # must route through the block-diagonal path (which uses per-head d_h);
+                # the assert below catches a silent mis-scaling that would otherwise hit
+                # every irrep block whose d_h disagrees with irrep_dims[0].
                 _beta_safe = beta_phi.clamp(min=1e-30)
+                if self.irrep_dims and len(set(self.irrep_dims)) > 1:
+                    raise ValueError(
+                        f"include_attention_entropy=True with non-uniform irrep_dims "
+                        f"{self.irrep_dims} is unsupported in this dispatch path "
+                        "(it would scale every head by sqrt(irrep_dims[0]) instead of "
+                        "the head-local sqrt(d_h)). Route through the block-diagonal "
+                        "fused path or use uniform irrep_dims."
+                    )
                 _d_h_canon = self.irrep_dims[0] if self.irrep_dims else 1
                 _sqrt_dh = math.sqrt(max(_d_h_canon, 1))
                 _bk_term = (beta_phi * kl_matrix).sum()
@@ -2392,9 +2377,9 @@ class VariationalFFNDynamic(nn.Module):
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
-        beta: torch.Tensor = None, # (B, n_heads, N, N) - UNUSED, kept for API compat
-        mu_prior: torch.Tensor = None,    # (B, N, K) - embedding priors
-        phi: torch.Tensor = None,         # (B, N, phi_dim) - gauge frames
+        beta: Optional[torch.Tensor] = None, # (B, n_heads, N, N) - UNUSED, kept for API compat
+        mu_prior: Optional[torch.Tensor] = None,    # (B, N, K) - embedding priors
+        phi: Optional[torch.Tensor] = None,         # (B, N, phi_dim) - gauge frames
         sigma: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) if diagonal
         mask: Optional[torch.Tensor] = None,   # (B, N, N) - causal mask
         token_ids: Optional[torch.Tensor] = None,  # (B, N) - token IDs for PriorBank lookup

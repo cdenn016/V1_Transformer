@@ -19,7 +19,7 @@ from transformer.data import create_dataloaders
 from transformer.train import compute_free_energy_loss
 
 
-def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50, trusted: bool = True):
+def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50, trusted: bool = False):
     """
     Load a GaugeTransformerLM checkpoint and evaluate on the validation split.
 
@@ -221,7 +221,9 @@ def main() -> None:
                 print(f"  - {f}")
         return
 
-    evaluate_checkpoint(str(checkpoint_path), CONFIG['max_batches'])
+    # Self-saved checkpoints embed the config dataclass — opt into the
+    # pickle path (refused by the new weights_only=True default).
+    evaluate_checkpoint(str(checkpoint_path), CONFIG['max_batches'], trusted=True)
 
 
 if __name__ == '__main__':
