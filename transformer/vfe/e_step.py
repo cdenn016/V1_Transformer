@@ -55,6 +55,107 @@ from transformer.vfe.omega_direct import (
 )
 
 
+def _diag_kl(
+    mu_q: torch.Tensor,
+    mu_p: torch.Tensor,
+    sigma_q: torch.Tensor,
+    sigma_p: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    r"""Per-dimension :math:`\mathrm{KL}(q\|p)` for diagonal Gaussians.
+
+    .. math::
+        \mathrm{KL}_k = \tfrac{1}{2}\,\bigl(\sigma_{q,k}/\sigma_{p,k}
+        + (\mu_{q,k}-\mu_{p,k})^2/\sigma_{p,k}
+        - 1 + \log\sigma_{p,k} - \log\sigma_{q,k}\bigr)
+
+    Both :math:`\sigma_q` and :math:`\sigma_p` are floored at ``eps`` before
+    division and ``log``. Returns the per-dim tensor of shape
+    ``(..., K)``; callers sum (over K, or over (N, K), or over all axes) as needed.
+    """
+    _sp = sigma_p.clamp(min=eps)
+    _sq = sigma_q.clamp(min=eps)
+    return 0.5 * (
+        _sq / _sp
+        + (mu_q - mu_p) ** 2 / _sp
+        - 1.0
+        + _sp.log()
+        - _sq.log()
+    )
+
+
+def _f_monotone_step(
+    *,
+    mu_q: torch.Tensor,
+    mu_p: torch.Tensor,
+    sigma_q: torch.Tensor,
+    sigma_p: torch.Tensor,
+    eps: float,
+    beta_det: torch.Tensor,
+    kl_det: torch.Tensor,
+    alpha_eff,
+    kappa,
+    dim_scale: float,
+    include_attention_entropy: bool,
+    lambda_align: float,
+    f_history: List[float],
+    f_prev: Optional[float],
+    f_abs_tol: float,
+    f_rel_tol: float,
+    iter_idx: int,
+    label: str,
+) -> float:
+    r"""Single diagonal-covariance F-monotone scalar check.
+
+    Computes :math:`F_t = \alpha \sum \mathrm{KL}(q\|p)
+        + \lambda_{\text{align}} \sum \beta_{ij} \mathrm{KL}_{ij}
+        + (\text{optional}) \,\tau \sum \beta \log \beta` (entropy term),
+    appends to ``f_history``, and emits a ``RuntimeWarning`` when
+    ``f_t > f_prev + tol`` (monotone descent violation). All ``.item()``
+    syncs are concentrated here — callers should already be in
+    ``torch.no_grad()``.
+
+    Returns the new scalar ``f_t`` (caller assigns to ``f_prev``).
+    """
+    kl_qp_sum = _diag_kl(mu_q, mu_p, sigma_q, sigma_p, eps=eps).sum()
+    _alpha_scalar = (
+        float(alpha_eff.detach().mean().item())
+        if isinstance(alpha_eff, torch.Tensor)
+        else float(alpha_eff)
+    )
+    f_align_sum = (beta_det * kl_det).sum()
+    if include_attention_entropy:
+        _kappa_scalar = (
+            float(kappa.detach().item())
+            if isinstance(kappa, torch.Tensor)
+            else float(kappa)
+        )
+        _beta_safe = beta_det.clamp(min=1e-30)
+        f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
+        f_align_total = (
+            float(f_align_sum.item())
+            + _kappa_scalar * dim_scale * float(f_ent_sum.item())
+        )
+    else:
+        f_align_total = float(f_align_sum.item())
+    f_t = (
+        _alpha_scalar * float(kl_qp_sum.item())
+        + float(lambda_align) * f_align_total
+    )
+    f_history.append(f_t)
+    if f_prev is not None:
+        _tol = max(f_abs_tol, f_rel_tol * abs(f_prev))
+        if f_t > f_prev + _tol:
+            warnings.warn(
+                f"{label} iter {iter_idx}: F increased "
+                f"{f_prev:.6f} -> {f_t:.6f} (delta={f_t - f_prev:.2e}). "
+                f"Monotone descent violated; check e_*_lr or conditioning.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+    return f_t
+
+
 class VFEEStep(nn.Module):
     r"""Iterative VFE minimization on :math:`(\mu, \Sigma, \phi)`.
 
@@ -117,6 +218,12 @@ class VFEEStep(nn.Module):
         self.mask_self_attention = cfg.mask_self_attention
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.track_layer_diagnostics = getattr(cfg, 'track_layer_diagnostics', False)
+        # F-monotone monitor: records F at every iter and warns on non-monotone
+        # descent. Fires .item() CUDA syncs per iter when on; default off.
+        self.monitor_monotonicity = getattr(cfg, 'monitor_monotonicity', False)
+        # Hoist embed_dim scale used by the attention-entropy term and a few
+        # diagnostic expressions; static value, no need to recompute per iter.
+        self._dim_scale = math.sqrt(max(cfg.embed_dim, 1))
         self.use_autograd_mu_sigma = getattr(cfg, 'use_autograd_mu_sigma', False)
         self.gauge_group = cfg.gauge_group
         self.phi_preconditioner_mode = cfg.phi_preconditioner
@@ -219,8 +326,8 @@ class VFEEStep(nn.Module):
         return c0 / (b0 + kl_k)  # (B, N, K)
 
     @property
-    def effective_kappa(self):
-        r"""Resolve kappa: learned (clamped) or fixed scalar."""
+    def effective_kappa(self) -> 'torch.Tensor | float':
+        r"""Resolve kappa: learned (clamped) ``torch.Tensor`` or fixed ``float``."""
         if self._learnable_kappa:
             k = torch.exp(self.log_kappa)
             k0 = self._kappa_init
@@ -259,7 +366,11 @@ class VFEEStep(nn.Module):
         sigma = beliefs.sigma
         phi = beliefs.phi
         mu_p = priors.mu
-        sigma_p = priors.sigma
+        # sigma_p is an M-step parameter — the E-step reads it but must not
+        # write gradients to it (CLAUDE.md). Detach at extraction so any
+        # downstream KL / alpha computation cannot accidentally route gradient
+        # back into priors.sigma during the E-step inner iterations.
+        sigma_p = priors.sigma.detach()
 
         is_diagonal = self.diagonal_covariance
         eps = 1e-6
@@ -450,65 +561,27 @@ class VFEEStep(nn.Module):
                     )
 
             # 2b. Monotone free-energy check (diagonal covariance only).
-            # F(t) is measured at the belief state AT THE START of this
-            # iteration, before any update. Compared against F(t-1) measured
-            # at the previous iteration's entry state.  Off-manifold detour:
-            # alpha_eff may be a Tensor (E_learnable_alpha), so we reduce it
-            # to a scalar via .mean() for the bookkeeping.
+            # Runs unconditionally on the diagonal path because downstream
+            # diagnostics (``_last_diagnostics['f_history']``) and the
+            # regression test ``test_f_history_populated_with_entropy`` depend
+            # on f_history being populated whenever ``track_layer_diagnostics``
+            # is on. The ``.item()`` CUDA syncs cost is real but documented.
             if is_diagonal:
                 with torch.no_grad():
-                    _sp = sigma_p.clamp(min=eps)
-                    _sq = sigma.clamp(min=eps)
-                    kl_qp_sum = 0.5 * (
-                        _sq / _sp
-                        + (mu - mu_p) ** 2 / _sp
-                        - 1.0
-                        + _sp.log()
-                        - _sq.log()
-                    ).sum()
-                    if isinstance(alpha_eff, torch.Tensor):
-                        _alpha_scalar = float(alpha_eff.detach().mean().item())
-                    else:
-                        _alpha_scalar = float(alpha_eff)
-                    _beta_det = beta.detach()
-                    f_align_sum = (_beta_det * kl_matrix.detach()).sum()
-                    # Manuscript Eq. eq:free_energy_functional_final:
-                    #   F_align = lambda * [(beta * KL).sum() + tau * (beta * log(beta/pi)).sum()]
-                    # The entropy term must enter the monotone monitor when
-                    # include_attention_entropy=True; otherwise the monitor
-                    # tracks a different objective than the one being descended
-                    # and emits false-positive monotonicity violations.
-                    # Uniform prior pi = 1/N; log N is an additive constant
-                    # dropped here to match the alignment_loss in _update_phi.
-                    if self.include_attention_entropy:
-                        _kappa_scalar = float(_kappa.detach().item()) if isinstance(_kappa, torch.Tensor) else float(_kappa)
-                        _dim_scale = math.sqrt(max(self.embed_dim, 1))
-                        _beta_safe = _beta_det.clamp(min=1e-30)
-                        f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
-                        f_align_total = float(f_align_sum.item()) + _kappa_scalar * _dim_scale * float(f_ent_sum.item())
-                    else:
-                        f_align_total = float(f_align_sum.item())
-                    f_t = (
-                        _alpha_scalar * float(kl_qp_sum.item())
-                        + float(self.lambda_align) * f_align_total
+                    f_prev = _f_monotone_step(
+                        mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
+                        eps=eps,
+                        beta_det=beta.detach(), kl_det=kl_matrix.detach(),
+                        alpha_eff=alpha_eff, kappa=_kappa,
+                        dim_scale=self._dim_scale,
+                        include_attention_entropy=self.include_attention_entropy,
+                        lambda_align=self.lambda_align,
+                        f_history=f_history, f_prev=f_prev,
+                        f_abs_tol=f_monotone_abs_tol,
+                        f_rel_tol=f_monotone_rel_tol,
+                        iter_idx=t,
+                        label="E-step",
                     )
-                    f_history.append(f_t)
-                    if f_prev is not None:
-                        _tol = max(
-                            f_monotone_abs_tol,
-                            f_monotone_rel_tol * abs(f_prev),
-                        )
-                        if f_t > f_prev + _tol:
-                            warnings.warn(
-                                f"E-step iter {t}: F increased "
-                                f"{f_prev:.6f} -> {f_t:.6f} "
-                                f"(delta={f_t - f_prev:.2e}). Monotone "
-                                f"descent violated; check e_*_lr or "
-                                f"conditioning.",
-                                RuntimeWarning,
-                                stacklevel=2,
-                            )
-                    f_prev = f_t
 
             # 3. Optional: add active inference gradients
             if active_inference_fn is not None:
@@ -544,12 +617,15 @@ class VFEEStep(nn.Module):
                         'beta_std': beta.std().item(),
                         'kl_mean': kl_matrix.mean().item(),
                         'kl_max': kl_matrix.max().item(),
-                        'attention_entropy': -(beta.clamp(min=1e-10) * beta.clamp(min=1e-10).log()).sum(-1).mean().item(),
-                        'attention_entropy_loss': (
-                            (_kappa * math.sqrt(max(self.embed_dim, 1))
-                             * (beta.clamp(min=1e-30) * beta.clamp(min=1e-30).log()).sum()).item()
-                            if self.include_attention_entropy else 0.0
-                        ),
+                        # Share the clamp+log between both entropy metrics — the
+                        # log dominates the FLOP count here.
+                        **(lambda _bsafe, _blog: {
+                            'attention_entropy': float((-(_bsafe * _blog).sum(-1).mean()).item()),
+                            'attention_entropy_loss': (
+                                float((_kappa * self._dim_scale * (_bsafe * _blog).sum()).item())
+                                if self.include_attention_entropy else 0.0
+                            ),
+                        })(beta.clamp(min=1e-30), beta.clamp(min=1e-30).log()),
                         'attention_concentration': beta.max(dim=-1)[0].mean().item(),
                         # Covariance health
                         'sigma_q_mean': sigma.mean().item(),
@@ -564,9 +640,7 @@ class VFEEStep(nn.Module):
                     }
                     # Per-dimension KL(q*||p) for prior-belief gap
                     if is_diagonal:
-                        sp = sigma_p.clamp(min=eps)
-                        sq = sigma.clamp(min=eps)
-                        kl_qp = 0.5 * (sq / sp + (mu - mu_p)**2 / sp - 1 + sp.log() - sq.log())
+                        kl_qp = _diag_kl(mu, mu_p, sigma, sigma_p, eps=eps)
                         self._last_diagnostics['prior_belief_kl_mean'] = kl_qp.sum(-1).mean().item()
                         self._last_diagnostics['prior_belief_kl_max'] = kl_qp.sum(-1).max().item()
                         self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std().item()
@@ -615,7 +689,11 @@ class VFEEStep(nn.Module):
                     phi, mu, sigma, is_diagonal, mask, eps, _kappa,
                 )
             else:
-                phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, block_exp_pairs, _kappa)
+                # block_exp_pairs is intentionally not forwarded — _update_phi
+                # must rebuild Omega from a fresh phi leaf for the autograd
+                # path. The dead arg is dropped from the call to make this
+                # explicit.
+                phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi)
 
@@ -627,7 +705,6 @@ class VFEEStep(nn.Module):
         is_diagonal: bool,
         mask: Optional[torch.Tensor],
         eps: float,
-        cached_block_exp_pairs: Optional[list] = None,
         kappa: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Compute phi gradient via autograd and retract.
@@ -651,12 +728,10 @@ class VFEEStep(nn.Module):
             # The product rule decomposition below uses .detach() to route
             # gradients along exactly one of the two paths per term.
             _kappa = kappa if kappa is not None else self.effective_kappa
-            # NOTE: cached_block_exp_pairs is intentionally NOT forwarded
-            # here. The cache was built from `phi` (not `phi_for_grad`) so
-            # passing it would detach Omega from the phi autograd path and
-            # zero out d/dphi alignment_loss. compute_kl_attention must
-            # recompute the exponentials from `phi_for_grad` to keep the
-            # gradient subgraph live.
+            # Omega exponentials are rebuilt inside compute_kl_attention from
+            # phi_for_grad — the caller's block_exp_pairs cache cannot be
+            # reused here because it was built from a phi leaf that is not in
+            # this subgraph.
             beta_phi, kl_h = compute_kl_attention(
                 mu.detach(), sigma.detach() if sigma is not None else None,
                 phi_for_grad, self.generators,
@@ -681,8 +756,7 @@ class VFEEStep(nn.Module):
                 # Verified by tests/test_entropy_envelope.py: production config matches
                 # the envelope prediction to ~1e-18 for any λ_soft.
                 beta_safe = beta_phi.clamp(min=1e-30)
-                _dim_scale = math.sqrt(max(self.embed_dim, 1))
-                _F = (beta_phi * kl_h).sum() + _kappa * _dim_scale * (beta_safe * beta_safe.log()).sum()
+                _F = (beta_phi * kl_h).sum() + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()
                 alignment_loss = self.lambda_align * _F
             else:
                 # Legacy product-rule decomposition — entropy-suppressed surrogate path.
@@ -725,10 +799,10 @@ class VFEEStep(nn.Module):
         mu_p: torch.Tensor,
         sigma_p: torch.Tensor,
         phi: torch.Tensor,
-        alpha_eff,
-        block_exp_pairs: Optional[list],
+        alpha_eff: 'torch.Tensor | float',
+        block_exp_pairs: Optional[List[Tuple[torch.Tensor, Optional[torch.Tensor]]]],
         mask: Optional[torch.Tensor],
-        kappa,
+        kappa: 'torch.Tensor | float',
         eps: float,
         is_diagonal: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -776,15 +850,7 @@ class VFEEStep(nn.Module):
             _kappa_d = kappa.detach() if isinstance(kappa, torch.Tensor) else kappa
 
             # Self-coupling: alpha * KL(q_i || p_i), diagonal Gaussians.
-            _sp = sigma_p_d.clamp(min=eps)
-            _sq = sigma_g.clamp(min=eps)
-            kl_qp_per_dim = 0.5 * (
-                _sq / _sp
-                + (mu_g - mu_p_d) ** 2 / _sp
-                - 1.0
-                + _sp.log()
-                - _sq.log()
-            )  # (B, N, K)
+            kl_qp_per_dim = _diag_kl(mu_g, mu_p_d, sigma_g, sigma_p_d, eps=eps)  # (B, N, K)
 
             if self.E_learnable_alpha:
                 # Reconstruct alpha inside the autograd graph so the product-rule
@@ -852,8 +918,8 @@ class VFEEStep(nn.Module):
         sigma_p: torch.Tensor,
         mask: Optional[torch.Tensor],
         eps: float,
-        kappa,
-        alpha_eff,
+        kappa: 'torch.Tensor | float',
+        alpha_eff: 'torch.Tensor | float',
         alpha_c0_full,
         block_exp_pairs: list,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list]:
@@ -906,12 +972,7 @@ class VFEEStep(nn.Module):
             _kappa_d = kappa.detach() if isinstance(kappa, torch.Tensor) else kappa
 
             # Self-coupling α · KL(q || p), per-dim diagonal.
-            _sp = sigma_p_d.clamp(min=eps)
-            _sq = sigma_g.clamp(min=eps)
-            kl_qp_per_dim = 0.5 * (
-                _sq / _sp + (mu_g - mu_p_d) ** 2 / _sp
-                - 1.0 + _sp.log() - _sq.log()
-            )
+            kl_qp_per_dim = _diag_kl(mu_g, mu_p_d, sigma_g, sigma_p_d, eps=eps)
             if self.E_learnable_alpha:
                 alpha_in_graph = self.get_bayesian_alpha(
                     mu_g, mu_p_d, sigma_g, sigma_p_d,
@@ -961,7 +1022,7 @@ class VFEEStep(nn.Module):
         is_diagonal: bool,
         mask: Optional[torch.Tensor],
         eps: float,
-        kappa,
+        kappa: 'torch.Tensor | float',
     ) -> torch.Tensor:
         r"""φ retraction step with non-flat transport.
 
@@ -997,10 +1058,9 @@ class VFEEStep(nn.Module):
 
             if self.include_attention_entropy:
                 beta_safe = beta_phi.clamp(min=1e-30)
-                _dim_scale = math.sqrt(max(self.embed_dim, 1))
                 _F = (
                     (beta_phi * kl_h).sum()
-                    + _kappa * _dim_scale * (beta_safe * beta_safe.log()).sum()
+                    + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()
                 )
                 alignment_loss = self.lambda_align * _F
             else:
@@ -1146,12 +1206,7 @@ class VFEEStep(nn.Module):
                 _kappa_d = _kappa.detach() if isinstance(_kappa, torch.Tensor) else _kappa
 
                 # Self-coupling α · KL(q || p) — independent of Ω.
-                _sp = sigma_p_d.clamp(min=eps)
-                _sq = sigma_g.clamp(min=eps)
-                kl_qp_per_dim = 0.5 * (
-                    _sq / _sp + (mu_g - mu_p_d) ** 2 / _sp
-                    - 1.0 + _sp.log() - _sq.log()
-                )
+                kl_qp_per_dim = _diag_kl(mu_g, mu_p_d, sigma_g, sigma_p_d, eps=eps)
                 if self.E_learnable_alpha:
                     alpha_in_graph = self.get_bayesian_alpha(
                         mu_g, mu_p_d, sigma_g, sigma_p_d,
@@ -1202,50 +1257,24 @@ class VFEEStep(nn.Module):
                         g_h = torch.zeros_like(omega[h][0])
                     grad_omega.append(g_h)
 
-            # 3. F-monotone monitor (detached, scalar).
+            # 3. F-monotone monitor (detached, scalar). Runs unconditionally
+            # on the omega-direct path so f_history is available to
+            # ``_last_diagnostics`` whenever ``track_layer_diagnostics`` is on.
             with torch.no_grad():
-                kl_qp_sum = 0.5 * (
-                    sigma.clamp(min=eps) / sigma_p.clamp(min=eps)
-                    + (mu - mu_p) ** 2 / sigma_p.clamp(min=eps)
-                    - 1.0
-                    + sigma_p.clamp(min=eps).log()
-                    - sigma.clamp(min=eps).log()
-                ).sum()
-                _alpha_scalar = (
-                    float(alpha_eff.detach().mean().item())
-                    if isinstance(alpha_eff, torch.Tensor)
-                    else float(alpha_eff)
+                f_prev = _f_monotone_step(
+                    mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
+                    eps=eps,
+                    beta_det=beta_det, kl_det=kl_det,
+                    alpha_eff=alpha_eff, kappa=_kappa,
+                    dim_scale=self._dim_scale,
+                    include_attention_entropy=self.include_attention_entropy,
+                    lambda_align=self.lambda_align,
+                    f_history=f_history, f_prev=f_prev,
+                    f_abs_tol=f_monotone_abs_tol,
+                    f_rel_tol=f_monotone_rel_tol,
+                    iter_idx=t,
+                    label="E-step (omega-direct)",
                 )
-                f_align_sum = (beta_det * kl_det).sum()
-                if self.include_attention_entropy:
-                    _kappa_scalar = (
-                        float(_kappa.detach().item())
-                        if isinstance(_kappa, torch.Tensor)
-                        else float(_kappa)
-                    )
-                    _dim_scale = math.sqrt(max(self.embed_dim, 1))
-                    _beta_safe = beta_det.clamp(min=1e-30)
-                    f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
-                    f_align_total = (
-                        float(f_align_sum.item())
-                        + _kappa_scalar * _dim_scale * float(f_ent_sum.item())
-                    )
-                else:
-                    f_align_total = float(f_align_sum.item())
-                f_t = (
-                    _alpha_scalar * float(kl_qp_sum.item())
-                    + float(self.lambda_align) * f_align_total
-                )
-                f_history.append(f_t)
-                if f_prev is not None:
-                    _tol = max(f_monotone_abs_tol, f_monotone_rel_tol * abs(f_prev))
-                    if f_t > f_prev + _tol:
-                        warnings.warn(
-                            f"E-step (omega-direct) iter {t}: F increased "
-                            f"{f_prev:.6f} -> {f_t:.6f} (delta={f_t - f_prev:.2e}).",
-                            RuntimeWarning, stacklevel=2,
-                        )
-                f_prev = f_t
 
             # 4. Active inference (callback returns Euclidean grads on μ, σ).
             if active_inference_fn is not None:

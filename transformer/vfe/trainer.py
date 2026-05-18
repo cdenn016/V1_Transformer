@@ -73,12 +73,14 @@ class VFETrainer:
         val_loader: Optional[DataLoader] = None,
         device: str = 'cpu',
         output_dir: Optional[str] = None,
+        generate_figures: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.cfg = cfg
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self.generate_figures = generate_figures
 
         # Optimizer with per-type learning rates
         self.optimizer = self._build_optimizer()
@@ -162,24 +164,45 @@ class VFETrainer:
         return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
-        """Compute gradient norms per parameter group (after backward, before step)."""
-        norms = {'total': 0.0, 'mu': 0.0, 'sigma': 0.0, 'phi': 0.0, 'ffn': 0.0, 'other': 0.0}
+        """Compute gradient norms per parameter group (after backward, before step).
+
+        Groups parameter gradients by name, then computes one ``norm()`` per
+        group on the concatenated flat vector — previously ran one
+        ``.norm().item()`` per parameter (one CUDA sync each), now one
+        ``.tolist()`` call at the end (one sync total).
+        """
+        groups: Dict[str, List[torch.Tensor]] = {
+            'mu': [], 'sigma': [], 'phi': [], 'ffn': [], 'other': [],
+        }
         for name, param in self.model.named_parameters():
             if param.grad is None:
                 continue
-            g = param.grad.data.norm().item()
-            norms['total'] += g ** 2
+            g = param.grad.data.flatten()
             if 'base_mu' in name:
-                norms['mu'] += g ** 2
+                groups['mu'].append(g)
             elif 'base_log_sigma' in name or 'decode_log_scale' in name:
-                norms['sigma'] += g ** 2
+                groups['sigma'].append(g)
             elif 'phi_embed' in name or 'pos_phi' in name:
-                norms['phi'] += g ** 2
+                groups['phi'].append(g)
             elif 'e_step' in name:
-                norms['ffn'] += g ** 2
+                groups['ffn'].append(g)
             else:
-                norms['other'] += g ** 2
-        return {k: math.sqrt(v) for k, v in norms.items()}
+                groups['other'].append(g)
+
+        group_norms: List[torch.Tensor] = []
+        keys: List[str] = []
+        for k, tensors in groups.items():
+            keys.append(k)
+            if tensors:
+                group_norms.append(torch.cat(tensors).norm())
+            else:
+                group_norms.append(torch.zeros((), device=next(self.model.parameters()).device))
+        # Total is the L2 of the per-group norms.
+        all_norms = torch.stack(group_norms + [torch.stack(group_norms).norm()])
+        values = all_norms.tolist()  # single CUDA sync
+        out = {k: values[i] for i, k in enumerate(keys)}
+        out['total'] = values[-1]
+        return out
 
     @torch.no_grad()
     def _attention_summary(self) -> Dict[str, float]:
@@ -201,30 +224,30 @@ class VFETrainer:
         blocks = list(self.model.stack.blocks)
         if not blocks:
             return {}
-        beta_kl_vals: List[float] = []
-        beta_mean_vals: List[float] = []
-        entropy_vals: List[float] = []
-        conc_vals: List[float] = []
+        # Stack the four per-block statistics into one tensor and pull all
+        # numbers back to CPU in a single .tolist() call — previously fired
+        # four .item() syncs per block (so 16 for n_layers=4).
+        per_block: List[torch.Tensor] = []
         for b in blocks:
             beta = getattr(b.e_step, '_last_attention', None)
             kl = getattr(b.e_step, '_last_kl_matrix', None)
             if beta is None or kl is None:
                 continue
-            beta_kl_vals.append((beta * kl).mean().item())
-            beta_mean_vals.append(beta.mean().item())
             beta_safe = beta.clamp(min=1e-10)
-            entropy_vals.append((-(beta_safe * beta_safe.log()).sum(-1).mean()).item())
-            conc_vals.append(beta.max(dim=-1)[0].mean().item())
-        if not beta_kl_vals:
+            per_block.append(torch.stack([
+                (beta * kl).mean(),
+                beta.mean(),
+                -(beta_safe * beta_safe.log()).sum(-1).mean(),
+                beta.max(dim=-1)[0].mean(),
+            ]))
+        if not per_block:
             return {}
-
-        def _mean(xs: List[float]) -> float:
-            return sum(xs) / len(xs)
+        means = torch.stack(per_block).mean(dim=0).tolist()  # single sync
         return {
-            'beta_kl':            _mean(beta_kl_vals),
-            'beta_mean':          _mean(beta_mean_vals),
-            'attn_entropy':       _mean(entropy_vals),
-            'attn_concentration': _mean(conc_vals),
+            'beta_kl':            means[0],
+            'beta_mean':          means[1],
+            'attn_entropy':       means[2],
+            'attn_concentration': means[3],
         }
 
     @torch.no_grad()
@@ -384,7 +407,7 @@ class VFETrainer:
         Reads from ``block.e_step._last_attention`` (populated in
         ``vfe/e_step.py`` at the end of the final E-step iteration).
         """
-        if self.output_dir is None:
+        if self.output_dir is None or not self.generate_figures:
             return
         try:
             import numpy as np
@@ -738,6 +761,8 @@ class VFETrainer:
         """Generate publication figures at end of training."""
         if self._pub_tracker is None or self.output_dir is None:
             return
+        if not self.generate_figures:
+            return
         try:
             from transformer.analysis.publication_metrics import PublicationFigures
             fig_dir = self.output_dir / 'figures'
@@ -762,6 +787,16 @@ class VFETrainer:
                 logger.info(f"VFE dynamics figures saved to {vfe_fig_dir}")
             except Exception as e:
                 logger.warning(f"VFE dynamics figure generation failed: {e}")
+
+        # plot_training_curves / plot_gradient_norms_split return Figure
+        # objects that they savefig'd but did not close — close everything
+        # left behind so figures don't accumulate across runs (the
+        # "More than 20 figures have been opened" RuntimeWarning).
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except ImportError:
+            pass
 
     def _log_vfe_dynamics_to_csv(self, step: int, metrics: Dict[str, float]) -> None:
         """Append VFE-specific columns to the metrics CSV."""
@@ -849,9 +884,13 @@ class VFETrainer:
         for _stream in (_sys.stdout, _sys.stderr):
             _reconf = getattr(_stream, 'reconfigure', None)
             if callable(_reconf):
+                # Narrow exception list — UnicodeEncodeError is the realistic
+                # failure on Windows consoles; AttributeError covers reduced
+                # stream wrappers. Anything else (KeyboardInterrupt, OSError)
+                # should propagate.
                 try:
                     _reconf(encoding='utf-8', errors='replace')
-                except Exception:
+                except (AttributeError, ValueError, UnicodeError):
                     pass
 
         # tqdm bar (with timed bar updates so tqdm.write interleaves above

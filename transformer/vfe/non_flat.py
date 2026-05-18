@@ -231,15 +231,19 @@ class VFENonFlatConnection(nn.Module):
     def W(self) -> torch.Tensor:
         r"""Antisymmetric, block-masked bilinear forms ``(n_gen, K, K)``.
 
-        Computed at every call so :class:`torch.optim` sees gradients flowing
-        through the antisymmetrization + masking. Both are linear operations,
-        so no autograd subtlety.
+        Cached per-(version of W_raw) so the antisymmetrization runs once per
+        optimizer step instead of three times per E-step iteration. Autograd
+        fan-out from the cached tensor is the standard pattern — gradients
+        accumulate at W_raw across the multiple downstream consumers.
         """
-        # Block mask first (zeros out cross-block entries), then antisymmetrize.
-        # The order doesn't matter mathematically — both are linear and the
-        # block mask preserves the (transpose ↔ matrix) action within blocks.
+        cache_key = self.W_raw._version
+        if getattr(self, '_W_cache_key', -1) == cache_key:
+            return self._W_cache
         W_masked = self.W_raw * self.W_block_mask
-        return 0.5 * (W_masked - W_masked.transpose(-1, -2))
+        result = 0.5 * (W_masked - W_masked.transpose(-1, -2))
+        self._W_cache_key = cache_key
+        self._W_cache = result
+        return result
 
     # -- forward --------------------------------------------------------------
 
@@ -274,24 +278,16 @@ class VFENonFlatConnection(nn.Module):
         delta = self.strength * delta
 
         # Per-edge Frobenius clamp on ‖δ_ij · G‖_F.
-        # Upper bound (Cauchy–Schwarz on the Lie-algebra norm):
-        #   ‖δ · G‖_F² ≤ Σ_a |δ_a|² · ‖G_a‖_F²
-        # Compute this bound and rescale per-edge if it exceeds δ_max².
-        # Use the bound rather than the exact norm to avoid materializing the
-        # generator Gram matrix. Conservative ⇒ never over-clamps.
+        # Upper bound (Cauchy–Schwarz): ‖δ · G‖_F² ≤ Σ_a |δ_a|² · ‖G_a‖_F².
+        # Closed-form scale: clamp(fro_bound_sq, min=δ_max²) gives a tensor
+        # equal to δ_max² where below the bound (so scale = 1) and equal to
+        # fro_bound_sq where above (so scale = δ_max / √fro_bound_sq < 1).
+        # Detached (no_grad) — straight-through w.r.t. autograd, matching the
+        # standard gradient-clip pattern.
         with torch.no_grad():
             fro_bound_sq = (delta ** 2 * self.g_fro_sq.view(1, 1, 1, -1)).sum(dim=-1)
-            # (B, N, N). 0 means the edge currently has δ = 0; no rescale needed.
-            scale = torch.ones_like(fro_bound_sq)
-            over = fro_bound_sq > self.per_edge_delta_max ** 2
-            if over.any():
-                scale = torch.where(
-                    over,
-                    self.per_edge_delta_max / fro_bound_sq.clamp(min=1e-30).sqrt(),
-                    scale,
-                )
-        # scale is detached (no_grad); applied multiplicatively. Treating it as
-        # a constant w.r.t. autograd matches the standard gradient-clip pattern.
+            denom = fro_bound_sq.clamp(min=self.per_edge_delta_max ** 2).sqrt()
+            scale = self.per_edge_delta_max / denom
         delta = delta * scale.unsqueeze(-1)
 
         # Mask: zero out masked edges. They wouldn't appear in attention anyway
@@ -535,137 +531,6 @@ def compute_kl_attention_pairwise(
     beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=eps)
     beta = beta / beta_sum
     return beta, kl_total
-
-
-# -----------------------------------------------------------------------------
-# Aggregation with pairwise Omega
-# -----------------------------------------------------------------------------
-
-
-def aggregate_beliefs_pairwise(
-    mu: torch.Tensor,
-    sigma: torch.Tensor,
-    beta: torch.Tensor,
-    omega_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
-    irrep_dims: List[int],
-    mode: str = 'mixture',
-    tile_size: int = 0,
-    eps: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    r"""Aggregate transported beliefs using pairwise Omega.
-
-    Same semantics as :func:`transformer.vfe.attention.aggregate_beliefs` but
-    consumes per-pair Omega tensors:
-
-    .. math::
-        \bar{\mu}_i^{(h)} = \sum_j \beta_{ij} \Omega^{(h)}_{ij} \mu_j^{(h)}
-
-    .. math::
-        \bar{\Sigma}_i^{(h)} = \begin{cases}
-            \sum_j \beta_{ij} \bigl[\mathrm{diag}(\Omega \Sigma_j \Omega^\top)
-                + (\Omega \mu_j - \bar{\mu})^2 \bigr]  & \text{mixture}\\[4pt]
-            \bigl[\sum_j \beta_{ij} \mathrm{diag}(\Omega \Sigma_j \Omega^\top)^{-1}\bigr]^{-1}
-                                                       & \text{precision}
-        \end{cases}
-
-    Args:
-        mu: ``(B, N, K)``.
-        sigma: ``(B, N, K)`` diagonal.
-        beta: ``(B, N, N)`` attention weights from
-            :func:`compute_kl_attention_pairwise`.
-        omega_pairs: ``[(Omega_h, Omega_inv_h)] × len(irrep_dims)``.
-        irrep_dims: Per-block dims.
-        mode: ``'mixture'`` or ``'precision'``.
-        tile_size: If positive, aggregate over the j-axis in chunks of this
-            many positions. Reduces peak memory at the cost of a Python loop.
-            Default 0 (no tiling).
-        eps: Variance floor.
-
-    Returns:
-        ``(mu_agg, sigma_agg)``, both ``(B, N, K)``.
-    """
-    if sigma.dim() != 3:
-        raise NotImplementedError(
-            "aggregate_beliefs_pairwise: full-cov path not wired yet; use "
-            "diagonal sigma or fall back to flat aggregate_beliefs."
-        )
-
-    B, N, K = mu.shape
-    mu_parts = []
-    sigma_parts = []
-    block_start = 0
-
-    for h, d_h in enumerate(irrep_dims):
-        block_end = block_start + d_h
-        Omega_h, _ = omega_pairs[h]   # (B, N, N, d_h, d_h)
-        mu_h = mu[..., block_start:block_end]
-        sigma_h = sigma[..., block_start:block_end].clamp(min=eps)
-
-        if tile_size <= 0:
-            # Full pairwise aggregation.
-            transported_mu = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)
-            transported_sigma = torch.einsum('bijkl,bjl->bijk', Omega_h ** 2, sigma_h)
-            mu_agg_h = torch.einsum('bij,bijd->bid', beta, transported_mu)
-
-            if mode == 'precision':
-                precision_ij = 1.0 / transported_sigma.clamp(min=eps)
-                precision_agg = torch.einsum('bij,bijd->bid', beta, precision_ij)
-                sigma_agg_h = 1.0 / precision_agg.clamp(min=eps)
-            else:
-                sigma_within = torch.einsum('bij,bijd->bid', beta, transported_sigma)
-                mu_dev = transported_mu - mu_agg_h.unsqueeze(2)
-                sigma_between = torch.einsum('bij,bijd->bid', beta, mu_dev ** 2)
-                sigma_agg_h = (sigma_within + sigma_between).clamp(min=eps)
-        else:
-            # Tiled j-axis aggregation: streams j in chunks of `tile_size`.
-            # Peak memory in the bottleneck (the (B, N, N, d_h, d_h) Omega)
-            # is unaffected here because Omega is already materialized by the
-            # caller, but the (B, N, N, d_h) per-tile message stays small,
-            # which matters when `mode='mixture'` would otherwise allocate
-            # mu_dev² at full (B, N, N, d_h). For real memory savings the
-            # *caller* should build Omega tile-by-tile too — exposed but not
-            # the primary win yet.
-            mu_agg_h = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype)
-            sigma_within = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype)
-            precision_acc = torch.zeros(B, N, d_h, device=mu.device, dtype=mu.dtype) if mode == 'precision' else None
-            # First pass: accumulate mean and (mode-specific) within-component term.
-            for jstart in range(0, N, tile_size):
-                jend = min(jstart + tile_size, N)
-                Om = Omega_h[:, :, jstart:jend]                       # (B, N, t, d_h, d_h)
-                mu_j = mu_h[:, jstart:jend]                           # (B, t, d_h)
-                sigma_j = sigma_h[:, jstart:jend]                     # (B, t, d_h)
-                trans_mu_t = torch.einsum('bijkl,bjl->bijk', Om, mu_j)
-                trans_sigma_t = torch.einsum('bijkl,bjl->bijk', Om ** 2, sigma_j)
-                beta_t = beta[:, :, jstart:jend]                      # (B, N, t)
-                mu_agg_h = mu_agg_h + torch.einsum('bij,bijd->bid', beta_t, trans_mu_t)
-                if mode == 'precision':
-                    precision_acc = precision_acc + torch.einsum(
-                        'bij,bijd->bid', beta_t, 1.0 / trans_sigma_t.clamp(min=eps)
-                    )
-                else:
-                    sigma_within = sigma_within + torch.einsum('bij,bijd->bid', beta_t, trans_sigma_t)
-            # Second pass for mixture mode: between-component variance.
-            if mode == 'precision':
-                sigma_agg_h = 1.0 / precision_acc.clamp(min=eps)
-            else:
-                sigma_between = torch.zeros_like(sigma_within)
-                for jstart in range(0, N, tile_size):
-                    jend = min(jstart + tile_size, N)
-                    Om = Omega_h[:, :, jstart:jend]
-                    mu_j = mu_h[:, jstart:jend]
-                    trans_mu_t = torch.einsum('bijkl,bjl->bijk', Om, mu_j)
-                    mu_dev_t = trans_mu_t - mu_agg_h.unsqueeze(2)
-                    beta_t = beta[:, :, jstart:jend]
-                    sigma_between = sigma_between + torch.einsum(
-                        'bij,bijd->bid', beta_t, mu_dev_t ** 2,
-                    )
-                sigma_agg_h = (sigma_within + sigma_between).clamp(min=eps)
-
-        mu_parts.append(mu_agg_h)
-        sigma_parts.append(sigma_agg_h)
-        block_start = block_end
-
-    return torch.cat(mu_parts, dim=-1), torch.cat(sigma_parts, dim=-1)
 
 
 # -----------------------------------------------------------------------------

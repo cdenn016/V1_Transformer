@@ -43,7 +43,6 @@ exceptions`` and the legacy mixer at ``transformer/core/attention.py``.
 
 from __future__ import annotations
 
-import warnings
 from collections import OrderedDict
 from typing import List, Tuple
 
@@ -232,30 +231,3 @@ class VFEHeadMixer(nn.Module):
                             sigma_out[..., sm:em, smp:emp] = acc
 
         return mu_out, sigma_out
-
-
-def _vfe_uses_tied_per_token_gauge(irrep_dims: List[int]) -> bool:
-    r"""Sanity helper: the /vfe path always uses one :math:`\phi_i \in R^{n_{gen}}`
-    per token, projected onto block-diagonal generators that act on each irrep
-    block. Heads within a token therefore share the same gauge frame.
-    Returns True unconditionally — the function exists so a future change to
-    /vfe's gauge layout has a single grep point to update this invariant.
-    """
-    return True
-
-
-def maybe_warn_independent_gauges(irrep_dims: List[int]) -> None:
-    r"""Emit CLAUDE.md's documented warning if a future /vfe change ever
-    introduces per-head independent gauge frames. The mixer's equivariance
-    argument relies on the tied-gauge condition.
-    """
-    if not _vfe_uses_tied_per_token_gauge(irrep_dims):
-        warnings.warn(
-            "VFEHeadMixer assumes a tied per-token gauge across heads of the "
-            "same irrep type, but the current /vfe gauge layout uses "
-            "per-head independent gauges. Mixer is strictly equivariant only "
-            "under tied gauges (see CLAUDE.md). The mixer will still run, but "
-            "its action no longer commutes with the gauge group action.",
-            UserWarning,
-            stacklevel=2,
-        )

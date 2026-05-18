@@ -57,6 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 
 # Add project root to sys.path so the absolute imports below resolve when
 # the file is run as a script from inside transformer/vfe/.
@@ -81,30 +82,39 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'vocab_size':               None,      # populated after dataloader build
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
-    'batch_size':               64,
-    'max_seq_len':              64,
-    'max_steps':                5000,
+    
+    'batch_size':               128,
+    
+    'max_seq_len':              32,
+    'max_steps':                2000,
 
     'use_prior_bank':           False,
-
+    'mask_self_attention':      False,
+    'E_learnable_alpha':        True,
+    'learnable_kappa':          False,
+    
+    'use_autograd_mu_sigma':       False,
+    'use_equivariant_head_mixer':  False,
+    'gauge_covariant_ridge':       False,
+    
     # === E-step dynamics ===
     'n_e_steps':                1,
     'n_layers':                 1,
 
+    'alpha_divergence':         1,
+
     'e_mu_lr':                  0.3,
     'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.05,
-
+   
     'alpha':                    1.0,
-    'alpha_divergence':         0.3,
-
-    'E_learnable_alpha':        True,
-
     'lambda_align':             1.0,
     'lambda_soft':              0.0,
+    'mass_phi':                 0.0,
 
     'kappa':                    1.0,
-    'learnable_kappa':          False,
+
+
 
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,
@@ -114,15 +124,16 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'diagonal_covariance':      True,
     'isotropic_covariance':     False,
     'exact_diagonal_transport': False,
-
+    'enforce_orthogonal':       False,
+    
+    
     # === Gauge geometry ===
     'gauge_group':              'GLK',
+    
     'phi_project_slk':          False,
     'phi_trace_clamp':          0.75,
-    'phi_preconditioner':       'killing',
-    'enforce_orthogonal':       False,
-    'mask_self_attention':      True,
-    'mass_phi':                 0.0,
+    
+    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
 
     # === Positional encoding ===
     'use_rope':                 True,
@@ -141,6 +152,13 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'epistemic_samples':        4,
     'decode_tau':               1.0,
 
+    'use_non_flat_transport':       False,
+    'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
+    'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+    'non_flat_tile_size':           0,    # 0 = no tiling; >0 = j-axis chunk size
+
+
+
     # === Normalization ===
     'norm_type':                'layernorm',
     'normalize_ce_by_dim':      True,
@@ -148,19 +166,24 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Training ===
     'learning_rate':            0.02,
     'weight_decay':             0.001,
+    
     'warmup_steps':             100,
     'grad_clip':                50.0,
     'sigma_max':                12.0,
+    
     'bch_order':                3,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  True,
+    'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       False,
 
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            1000,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
+
+    'track_layer_diagnostics':      False,
+    'monitor_monotonicity':         False,
 
     # === Driver-only (not VFEConfig fields) ===
     'dataset':                  'wikitext-103',
@@ -419,8 +442,8 @@ def run_single_vfe_experiment(
     cfg: Dict[str, Any],
     device: torch.device,
     run_dir: Path,
-    train_loader,
-    val_loader,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
     vocab_size: int,
     seed: int,
 ) -> Dict[str, Any]:
@@ -447,6 +470,13 @@ def run_single_vfe_experiment(
         val_loader=val_loader,
         device=str(device),
         output_dir=str(run_dir),
+        # Per-run training_curves / gradient_norms / vfe_dynamics figures
+        # (and periodic attention β heatmaps) are skipped: the ablation
+        # suite produces its own sweep-level plots in generate_plots().
+        # Suppressing them also avoids the "More than 20 figures open"
+        # RuntimeWarning that accumulated across runs (~4 leaked figures
+        # per call to trainer._generate_figures()).
+        generate_figures=False,
     )
     trainer.train(num_steps=vcfg.max_steps)
 
@@ -455,7 +485,11 @@ def run_single_vfe_experiment(
     if trainer._pub_tracker is not None:
         try:
             summary = trainer._pub_tracker.get_summary() or {}
-        except Exception:
+        except (AttributeError, KeyError, ValueError) as exc:
+            # Tracker can return empty/partial state if a run aborted before
+            # the first eval. Log loudly so a genuine bug doesn't get silently
+            # masked by an empty summary downstream.
+            print(f"  WARNING: _pub_tracker.get_summary() failed: {exc!r}")
             summary = {}
 
     best_val_ppl = summary.get('best_val_ppl')
@@ -494,7 +528,22 @@ def run_single_vfe_experiment(
 # =============================================================================
 
 def _sanitize_label(label: str) -> str:
-    return label.replace('=', '_').replace(' ', '_').replace('/', '_')
+    """Make `label` safe as a single filesystem path component.
+
+    Strips path separators (``/``, ``\\``), parent-directory tokens (``..``),
+    drive prefixes, and whitespace so a malformed sweep label cannot escape
+    its sweep directory via Path concatenation.
+    """
+    out = (
+        label.replace('=', '_')
+             .replace(' ', '_')
+             .replace('/', '_')
+             .replace('\\', '_')
+             .replace('..', '_')
+             .replace(':', '_')
+    )
+    # Strip leading separators so Path() does not treat the label as absolute.
+    return out.lstrip('._') or '_'
 
 
 def run_sweep(
@@ -502,8 +551,8 @@ def run_sweep(
     base_config: Dict[str, Any],
     device: torch.device,
     output_dir: Path,
-    train_loader,
-    val_loader,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
     vocab_size: int,
     seed: int = 6,
     max_steps_override: Optional[int] = None,
@@ -645,7 +694,11 @@ def analyze_sweep(sweep_dir: Path) -> Dict[str, Any]:
 
     df = pd.read_csv(csv_path)
     meta_path = sweep_dir / 'sweep_meta.json'
-    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+    else:
+        meta = {}
 
     print(f"\n{'=' * 70}")
     print(f"ANALYSIS: {meta.get('sweep_name', sweep_dir.name)}")
@@ -733,7 +786,11 @@ def generate_plots(output_dir: Path) -> None:
     for sweep_dir in sweep_dirs:
         df = pd.read_csv(sweep_dir / 'sweep_results.csv')
         meta_path = sweep_dir / 'sweep_meta.json'
-        meta = json.load(open(meta_path)) if meta_path.exists() else {}
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        else:
+            meta = {}
         sweep_name = meta.get('sweep_name', sweep_dir.name)
 
         valid = df[df['final_ppl'] < float('inf')].copy()
@@ -785,7 +842,12 @@ def generate_plots(output_dir: Path) -> None:
     all_bests = []
     for sweep_dir in sweep_dirs:
         df = pd.read_csv(sweep_dir / 'sweep_results.csv')
-        meta = json.load(open(sweep_dir / 'sweep_meta.json')) if (sweep_dir / 'sweep_meta.json').exists() else {}
+        meta_path = sweep_dir / 'sweep_meta.json'
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        else:
+            meta = {}
         valid = df[df['final_ppl'] < float('inf')]
         if valid.empty:
             continue
@@ -821,7 +883,9 @@ def generate_plots(output_dir: Path) -> None:
 # DATASET CONSTRUCTION (one set of loaders per sweep, reused across runs)
 # =============================================================================
 
-def _build_loaders(base_config: Dict[str, Any]):
+def _build_loaders(
+    base_config: Dict[str, Any],
+) -> Tuple[DataLoader, Optional[DataLoader], int]:
     """Build (train_loader, val_loader, vocab_size) from base_config."""
     return create_dataloaders(
         max_seq_len=int(base_config['max_seq_len']),

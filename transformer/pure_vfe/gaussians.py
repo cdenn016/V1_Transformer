@@ -630,17 +630,24 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
 # State-dependent prior precision (Eq. 16)
 # ---------------------------------------------------------------------------
 
-def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=0.0):
+def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=0.0,
+                          precomputed_kl=None):
     """
     α_i = c₀ / (b₀ + KL(q_i || p_i))
 
     With optional floor to prevent positive feedback loop where high KL
     reduces α, loosening the prior constraint and causing more drift.
 
+    Args:
+        precomputed_kl: Optional ``kl_divergence(mu, Sigma, prior_mu,
+            prior_Sigma)`` already computed by the caller — bypasses the
+            duplicate ``safe_inverse(prior_Sigma) + safe_logdet`` call.
+
     Returns: [B, N]
     """
-    kl = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)  # [B, N]
-    alpha = c0 / (b0 + kl.clamp(min=0.0))
+    if precomputed_kl is None:
+        precomputed_kl = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)
+    alpha = c0 / (b0 + precomputed_kl.clamp(min=0.0))
     if alpha_floor > 0:
         alpha = alpha.clamp(min=alpha_floor)
     return alpha
@@ -650,7 +657,8 @@ def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=
 # KL-based decoding (logits from prior bank)
 # ---------------------------------------------------------------------------
 
-def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0):
+def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0,
+                     prior_Sigma_inv_bank=None, prior_logdet_bank=None):
     """
     Compute logits for each vocabulary token via negative KL to prior.
 
@@ -662,11 +670,22 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0)
         prior_mu_bank: [V, K]
         prior_Sigma_bank: [V, K, K]
         decode_tau: temperature (>1 softens predictions, prevents overconfidence)
+        prior_Sigma_inv_bank: Optional precomputed ``safe_inverse(prior_Sigma_bank)``
+            of shape ``[V, K, K]``. The bank only changes during M-step;
+            callers that own the bank should cache this and invalidate on
+            update.
+        prior_logdet_bank: Optional precomputed ``safe_logdet(prior_Sigma_bank)``
+            of shape ``[V]``. Paired with ``prior_Sigma_inv_bank``.
 
     Returns: [B, N, V]
     """
     B, N, K = mu.shape
     V = prior_mu_bank.shape[0]
+
+    if prior_Sigma_inv_bank is None:
+        prior_Sigma_inv_bank = safe_inverse(prior_Sigma_bank)
+    if prior_logdet_bank is None:
+        prior_logdet_bank = safe_logdet(prior_Sigma_bank)
 
     # Process in chunks to manage memory: V can be ~50k
     chunk_size = min(V, 1024)
@@ -678,10 +697,9 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0)
         v_end = min(v_start + chunk_size, V)
         chunk_V = v_end - v_start
 
-        mu_v = prior_mu_bank[v_start:v_end]        # [cV, K]
-        Sig_v = prior_Sigma_bank[v_start:v_end]     # [cV, K, K]
-        Sig_v_inv = safe_inverse(Sig_v)             # [cV, K, K]
-        logdet_v = safe_logdet(Sig_v)               # [cV]
+        mu_v = prior_mu_bank[v_start:v_end]                     # [cV, K]
+        Sig_v_inv = prior_Sigma_inv_bank[v_start:v_end]         # [cV, K, K]
+        logdet_v = prior_logdet_bank[v_start:v_end]             # [cV]
 
         # KL(q_i || π_v) for each (i, v) pair
         # = ½[tr(Σ_v⁻¹ Σ_i) + (μ_v - μ_i)ᵀ Σ_v⁻¹ (μ_v - μ_i) - K + ln det Σ_v - ln det Σ_i]
