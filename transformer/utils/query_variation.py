@@ -14,6 +14,7 @@ rows) and belief-space separation (pairwise mu distances).
 import torch
 import numpy as np
 from pathlib import Path
+from typing import Optional
 import sys
 import json
 
@@ -164,7 +165,13 @@ def test_belief_similarity(model, input_ids):
             print(f"  Token {i}: {mu_batch[i, :5].cpu().numpy()}")
 
 
-def main(checkpoint_path: str = None, trusted_checkpoint: bool = True):
+# Click-to-run: set this constant and press Run. CLI flags removed
+# 2026-05-18 per CLAUDE.md "no CLI arguments" hard constraint.
+CHECKPOINT_PATH: Optional[str] = None  # e.g. 'checkpoints_publication/.../best_model.pt'
+TRUSTED_CHECKPOINT: bool = True  # See ``trusted_checkpoint`` arg below.
+
+
+def main(checkpoint_path: Optional[str] = None, trusted_checkpoint: bool = True):
     """
     Run query variation and belief-space analysis on a trained checkpoint.
 
@@ -172,23 +179,18 @@ def main(checkpoint_path: str = None, trusted_checkpoint: bool = True):
     (beta), then analyses query-side variation and mu-space separation.
 
     Args:
-        checkpoint_path: Path to model checkpoint. If None, uses CLI arg.
+        checkpoint_path: Path to model checkpoint. If None, falls back to the
+            module-level ``CHECKPOINT_PATH`` constant.
         trusted_checkpoint: If True (default), allows pickle-based loads.
             Set False to refuse arbitrary code execution from hostile
             checkpoints (will fail on configs that contain non-tensor fields).
     """
-    import argparse
-
     if checkpoint_path is None:
-        parser = argparse.ArgumentParser(description='Analyze query-side variation in attention')
-        parser.add_argument('checkpoint', type=str, nargs='?', default=None,
-                          help='Path to model checkpoint (best_model.pt)')
-        args = parser.parse_args()
-        checkpoint_path = args.checkpoint
+        checkpoint_path = CHECKPOINT_PATH
 
     if checkpoint_path is None:
         print("ERROR: No checkpoint path provided.")
-        print("Usage: python test_query_variation.py <path/to/best_model.pt>")
+        print("Edit CHECKPOINT_PATH at the top of this file and re-run.")
         return
 
     print("Loading model...")
@@ -267,7 +269,7 @@ def main(checkpoint_path: str = None, trusted_checkpoint: bool = True):
     model = GaugeTransformerLM(config)
 
     # Load model weights
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not trusted_checkpoint)
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
     else:

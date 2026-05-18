@@ -47,7 +47,7 @@ def build_ffn(learnable_lr: bool, mu_lr: float = 0.1, sigma_lr: float = 0.015):
     return ffn
 
 
-def main() -> None:
+def test_sigma_lr_learnable() -> None:
     print("=" * 70)
     print("σ LR independent-learnability test")
     print("=" * 70)
@@ -115,4 +115,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_sigma_lr_learnable()

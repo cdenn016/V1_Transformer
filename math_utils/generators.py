@@ -43,7 +43,7 @@ To use full GL(K), you would need to:
 import logging
 
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -2375,7 +2375,7 @@ def validate_generator_closure(
 def close_under_brackets(
     generators: np.ndarray,
     max_iter: int = 10,
-    max_dim: int = None,
+    max_dim: Optional[int] = None,
     tol: float = 1e-6,
 ) -> 'Tuple[np.ndarray, Dict]':
     r"""

@@ -633,44 +633,52 @@ def generate_all_vfe_figures(
 
 
 # =============================================================================
-# CLI entry point
+# Click-to-run entry point
 # =============================================================================
+# CLI flags removed 2026-05-18 per CLAUDE.md "no CLI arguments" hard constraint.
+# Edit the CONFIG dict below and press Run.
 
-if __name__ == '__main__':
-    import argparse
+CONFIG = {
+    'file':   'metrics.csv',       # Path to metrics CSV
+    'output': None,                # Output directory; None = <csv_parent>/vfe_dynamics_figures
+    'mode':   'all',               # 'all' | 'gradient' | 'covariance' | 'transport' | 'kl' | 'dashboard'
+    'smooth': 15,                  # Smoothing window
+}
 
-    parser = argparse.ArgumentParser(description='VFE Dynamics Visualization')
-    parser.add_argument('--file', type=str, required=True, help='Path to metrics.csv')
-    parser.add_argument('--output', type=str, default=None, help='Output directory')
-    parser.add_argument('--mode', type=str, default='all',
-                        choices=['all', 'gradient', 'covariance', 'transport', 'kl', 'dashboard'],
-                        help='Which figure to generate')
-    parser.add_argument('--smooth', type=int, default=15, help='Smoothing window')
-    args = parser.parse_args()
 
-    csv_path = Path(args.file)
+def main() -> None:
+    csv_path = Path(CONFIG['file'])
     if not csv_path.exists():
         print(f"Error: {csv_path} not found")
-        exit(1)
+        return
 
-    output_dir = Path(args.output) if args.output else csv_path.parent / 'vfe_dynamics_figures'
+    output_dir = (
+        Path(CONFIG['output']) if CONFIG['output']
+        else csv_path.parent / 'vfe_dynamics_figures'
+    )
+    mode = CONFIG['mode']
+    smooth = CONFIG['smooth']
 
-    if args.mode == 'all':
-        saved = generate_all_vfe_figures(csv_path, output_dir, args.smooth)
+    if mode == 'all':
+        saved = generate_all_vfe_figures(csv_path, output_dir, smooth)
         print(f"\nGenerated {len(saved)} figures in {output_dir}")
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
         data = load_vfe_metrics(csv_path)
         mode_map = {
-            'gradient': ('vfe_gradient_decomposition', plot_vfe_gradient_decomposition),
-            'covariance': ('covariance_health', plot_covariance_health),
-            'transport': ('transport_attention', plot_transport_attention),
-            'kl': ('kl_landscape', plot_kl_landscape),
-            'dashboard': ('vfe_dynamics_dashboard', plot_vfe_dynamics_dashboard),
+            'gradient':   ('vfe_gradient_decomposition', plot_vfe_gradient_decomposition),
+            'covariance': ('covariance_health',          plot_covariance_health),
+            'transport':  ('transport_attention',        plot_transport_attention),
+            'kl':         ('kl_landscape',               plot_kl_landscape),
+            'dashboard':  ('vfe_dynamics_dashboard',     plot_vfe_dynamics_dashboard),
         }
-        name, fn = mode_map[args.mode]
+        name, fn = mode_map[mode]
         path = output_dir / f'{name}.png'
-        fig = fn(data, save_path=path, smooth_window=args.smooth)
+        fig = fn(data, save_path=path, smooth_window=smooth)
         if fig is not None:
             plt.close(fig)
             print(f"Saved: {path}")
+
+
+if __name__ == '__main__':
+    main()

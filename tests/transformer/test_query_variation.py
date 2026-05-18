@@ -1,5 +1,5 @@
 """
-Tests for transformer.utils.test_query_variation
+Tests for transformer.utils.query_variation
 ==================================================
 
 Validates the query variation diagnostic: uniform vs diverse attention
@@ -20,7 +20,7 @@ class TestAnalyzeQueryVariation:
 
     def test_smoke_test(self, capsys):
         """Runs without error on synthetic attention weights."""
-        from transformer.utils.test_query_variation import analyze_query_variation
+        from transformer.utils.query_variation import analyze_query_variation
         B, H, N = 1, 2, 8
         beta = torch.softmax(torch.randn(B, H, N, N), dim=-1)
         analyze_query_variation(beta)
@@ -29,7 +29,7 @@ class TestAnalyzeQueryVariation:
 
     def test_uniform_detection(self, capsys):
         """All-equal rows produce near-zero L2 distances."""
-        from transformer.utils.test_query_variation import analyze_query_variation
+        from transformer.utils.query_variation import analyze_query_variation
         B, H, N = 1, 1, 6
         # Uniform attention: every row is 1/N
         beta = torch.ones(B, H, N, N) / N
@@ -40,7 +40,7 @@ class TestAnalyzeQueryVariation:
 
     def test_diverse_detection(self, capsys):
         """Random attention should show non-trivial variation."""
-        from transformer.utils.test_query_variation import analyze_query_variation
+        from transformer.utils.query_variation import analyze_query_variation
         B, H, N = 1, 2, 8
         # Random softmax attention — diverse by construction
         beta = torch.softmax(torch.randn(B, H, N, N) * 5.0, dim=-1)
@@ -50,7 +50,7 @@ class TestAnalyzeQueryVariation:
 
     def test_different_head_counts(self, capsys):
         """Works with varying H, N values."""
-        from transformer.utils.test_query_variation import analyze_query_variation
+        from transformer.utils.query_variation import analyze_query_variation
         for H, N in [(1, 4), (4, 8), (8, 16)]:
             beta = torch.softmax(torch.randn(1, H, N, N), dim=-1)
             analyze_query_variation(beta)
@@ -67,7 +67,7 @@ class TestBeliefSimilarity:
 
     def test_smoke_test(self, minimal_config, cpu_device, capsys):
         """Runs without error on a minimal model."""
-        from transformer.utils.test_query_variation import test_belief_similarity
+        from transformer.utils.query_variation import test_belief_similarity
         from transformer.core.model import GaugeTransformerLM
 
         model = GaugeTransformerLM(minimal_config).to(cpu_device)

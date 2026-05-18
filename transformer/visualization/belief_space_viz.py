@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from pathlib import Path
+from typing import Optional
 
 from transformer.utils.checkpoint import load_model, get_tokenizer
 from transformer.visualization.pub_style import set_pub_style
@@ -224,25 +225,25 @@ def compute_category_cohesion(mu_embeddings, token_categories):
     return cohesion_ratio
 
 
-def main(checkpoint_path: str = None):
+# Click-to-run: set this constant and press Run. CLI flags removed
+# 2026-05-18 per CLAUDE.md "no CLI arguments" hard constraint.
+CHECKPOINT_PATH: Optional[str] = None  # e.g. 'checkpoints_publication/.../best_model.pt'
+
+
+def main(checkpoint_path: Optional[str] = None):
     """
     Visualize token embeddings in belief space.
 
     Args:
-        checkpoint_path: Path to model checkpoint. If None, uses command line arg.
+        checkpoint_path: Path to model checkpoint. If None, falls back to the
+            module-level ``CHECKPOINT_PATH`` constant.
     """
-    import argparse
-
     if checkpoint_path is None:
-        parser = argparse.ArgumentParser(description='Visualize belief space embeddings')
-        parser.add_argument('checkpoint', type=str, nargs='?', default=None,
-                          help='Path to model checkpoint (best_model.pt)')
-        args = parser.parse_args()
-        checkpoint_path = args.checkpoint
+        checkpoint_path = CHECKPOINT_PATH
 
     if checkpoint_path is None:
         print("ERROR: No checkpoint path provided.")
-        print("Usage: python visualize_belief_space.py <path/to/best_model.pt>")
+        print("Edit CHECKPOINT_PATH at the top of belief_space_viz.py and re-run.")
         return
 
     if not Path(checkpoint_path).exists():

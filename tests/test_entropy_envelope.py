@@ -158,10 +158,21 @@ def autograd_code_gradients(
 # Test
 # -----------------------------------------------------------------------------
 
-def run_test() -> None:
+def test_entropy_envelope() -> None:
     torch.manual_seed(20260512)
+    # Save and restore the global default dtype: this test needs float64
+    # for envelope-theorem precision, but mutating the global default
+    # leaked into every downstream test in the suite (~128 failures in
+    # test_vfe_package.py that assume float32 default).
+    _prev_dtype = torch.get_default_dtype()
     torch.set_default_dtype(torch.float64)
+    try:
+        _run_entropy_envelope_body()
+    finally:
+        torch.set_default_dtype(_prev_dtype)
 
+
+def _run_entropy_envelope_body() -> None:
     K = 4
     N = 2
 
@@ -250,4 +261,4 @@ def run_test() -> None:
 
 
 if __name__ == "__main__":
-    run_test()
+    test_entropy_envelope()

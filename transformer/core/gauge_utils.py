@@ -19,6 +19,28 @@ from transformer.core.vfe_utils import KL_CEIL_BASE, KL_CEIL_SCALE, spd_eigfloor
 # Single source of truth is vfe_utils.py.
 KL_CEIL_MULT = KL_CEIL_SCALE  # alias for backward compat within this module
 
+# Bounded LRU cache for identity matrices to avoid re-allocating I_K every call
+# in Newton-Schulz orthogonalization. Keys are (K, device, dtype). Cap at 16
+# entries — well above the typical (K, device, dtype) cardinality of a single
+# training run (usually 1-3).
+_EYE_CACHE: Dict[Tuple[int, torch.device, torch.dtype], torch.Tensor] = {}
+_EYE_CACHE_MAX = 16
+
+
+def _cached_eye(K: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Return a cached ``torch.eye(K, device=device, dtype=dtype)`` tensor.
+
+    The returned tensor is a SHARED view; callers must not mutate it in place.
+    """
+    key = (K, device, dtype)
+    eye = _EYE_CACHE.get(key)
+    if eye is None:
+        if len(_EYE_CACHE) >= _EYE_CACHE_MAX:
+            _EYE_CACHE.pop(next(iter(_EYE_CACHE)))
+        eye = torch.eye(K, device=device, dtype=dtype)
+        _EYE_CACHE[key] = eye
+    return eye
+
 
 
 def stable_matrix_exp_pair(
@@ -120,7 +142,7 @@ def newton_schulz_orthogonalize(
         Orthogonalized matrices (..., K, K), approximately in O(K).
     """
     K = X.shape[-1]
-    eye = torch.eye(K, device=X.device, dtype=X.dtype)
+    eye = _cached_eye(K, X.device, X.dtype)
 
     # Rescale to bring singular values into convergence basin (0, √3).
     # Use Frobenius norm as an UPPER BOUND on the largest singular value

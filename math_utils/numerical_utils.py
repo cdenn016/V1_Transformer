@@ -10,6 +10,8 @@ Authors: Chris and Christine
 Created: November 2025
 """
 
+from typing import Dict, Optional, Tuple, Union
+
 import numpy as np
 
 
@@ -24,8 +26,8 @@ def kl_gaussian(
     Sigma_p: np.ndarray,
     eps: float = 1e-8,
     return_terms: bool = False,
-    use_gpu: bool = False
-):
+    use_gpu: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, np.ndarray]]]:
     """
     KL divergence KL(q||p) between Gaussians.
 
@@ -238,7 +240,7 @@ def safe_inv(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 def sanitize_sigma(Sigma: np.ndarray,
                    eps: float = 1e-6,  # Adaptive floor (scale-relative)
                    max_cond: float = 1e4,  # DECREASE from 1e6!
-                   max_eig: float = None) -> np.ndarray:
+                   max_eig: Optional[float] = None) -> np.ndarray:
     """
     Sanitize covariance matrix for numerical stability.
 

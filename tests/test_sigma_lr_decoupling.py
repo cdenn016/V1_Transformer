@@ -43,7 +43,7 @@ def run_one_retraction(sigma_lr: float, trust: float = 5.0) -> torch.Tensor:
     return sigma_new
 
 
-def main() -> None:
+def test_sigma_lr_decoupling() -> None:
     print("=" * 70)
     print("σ-LR decoupling smoke test")
     print("=" * 70)
@@ -78,4 +78,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_sigma_lr_decoupling()

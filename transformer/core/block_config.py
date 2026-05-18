@@ -249,9 +249,11 @@ class BlockConfig:
                 f"em_mode must be one of {list(_EM_MODE_TABLE.keys())}, got '{self.em_mode}'"
             )
         _flags = _EM_MODE_TABLE[self.em_mode]
-        self._amortized_inference = _flags['amortized_inference']
-        self._amortize_sigma = _flags['amortize_sigma']
-        self._exact_phi_grad = _flags['exact_phi_grad']
+        # ``_amortized_inference`` / ``_amortize_sigma`` / ``_exact_phi_grad``
+        # used to be cached on the dataclass here; removed 2026-05-17 because
+        # ``VariationalFFNDynamic.__init__`` re-derives them directly from
+        # ``_EM_MODE_TABLE[em_mode]`` and grep across the repo shows no other
+        # consumer. ``_em_phi_mode`` is retained — it is read on the next line.
         self._em_phi_mode = _flags['em_phi_mode']
 
         # M_phi_p: phi is an M-step parameter — must not evolve during E-step
@@ -269,7 +271,7 @@ class BlockConfig:
         # token-level visualizations.
         # Compatible mode for skip_attention=True: 'ift_phi'.
         _detaching_modes = {'em_phi_p', 'em_phi_q'}
-        if getattr(self, 'skip_attention', False) and self.em_mode in _detaching_modes:
+        if self.skip_attention and self.em_mode in _detaching_modes:
             import warnings as _warnings
             _warnings.warn(
                 f"em_mode={self.em_mode!r} combined with skip_attention=True will "
@@ -290,7 +292,7 @@ class BlockConfig:
         # force-disable the flag at block construction (blocks.py:501 reads
         # the flag through a `not self.skip_attention` guard) and warn here so
         # the user can correct their config.
-        if getattr(self, 'skip_attention', False) and self.use_equivariant_head_mixer:
+        if self.skip_attention and self.use_equivariant_head_mixer:
             import warnings as _warnings
             _warnings.warn(
                 "use_equivariant_head_mixer=True combined with skip_attention=True "

@@ -42,7 +42,7 @@ Date: November 2025
 # ===========================================================================
 
 import numpy as np
-from typing import Tuple, Optional
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from math_utils.numerical_utils import safe_inv
 
@@ -344,12 +344,12 @@ def pull_gaussian(
 # =============================================================================
 
 def push_gaussian_batch(
-    gaussians: list,
-    Omegas: list,
+    gaussians: List['GaussianDistribution'],
+    Omegas: List[np.ndarray],
     *,
     compute_precision: bool = False,
     eps: float = 1e-8,
-) -> list:
+) -> List['GaussianDistribution']:
     """
     Push multiple Gaussians with corresponding transports.
     
