@@ -9,6 +9,7 @@ plus gauge frames Ω_v ∈ GL(K_h) per head. Position encoding via RoPE.
 "Learning" = natural gradient on prior variables.
 """
 
+import dataclasses
 import math
 from typing import Optional
 
@@ -323,8 +324,15 @@ class PureVFETransformer:
         return model
 
     def to(self, device):
-        """Move all tensors to device."""
-        self.config.device = str(device)
+        """Move all tensors to device.
+
+        Replaces ``self.config`` with a new ``dataclasses.replace(...)`` copy
+        so a caller that retained the original config dataclass elsewhere is
+        not silently mutated. ``PureVFEConfig`` is a plain dataclass with
+        no ``frozen=True``, so the prior in-place mutation worked but broke
+        the principle of treating config objects as immutable.
+        """
+        self.config = dataclasses.replace(self.config, device=str(device))
         self.prior_mu = self.prior_mu.to(device)
         self.prior_Sigma = self.prior_Sigma.to(device)
         self.prior_Omega = self.prior_Omega.to(device)

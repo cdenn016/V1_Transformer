@@ -12,6 +12,7 @@ Mathematical reference:
 
 import math
 import warnings
+from typing import Any, Dict, Optional
 
 import torch
 
@@ -22,7 +23,12 @@ from .cuda_ext import get_cuda_ext
 # Safe linear algebra helpers
 # ---------------------------------------------------------------------------
 
-def safe_inverse(M, eps=1e-6, exp_phi=None):
+def safe_inverse(
+    M: torch.Tensor,
+    eps: float = 1e-6,
+    exp_phi: Optional[torch.Tensor] = None,
+    spd: bool = False,
+) -> torch.Tensor:
     """
     Robust matrix inverse with escalating regularization.
 
@@ -30,11 +36,26 @@ def safe_inverse(M, eps=1e-6, exp_phi=None):
     try bare inv, then eps*I, 100*eps*I, 10000*eps*I.
     CUDA raises RuntimeError (not LinAlgError) for singular matrices.
 
-    When ``exp_phi`` is provided (local gauge frame ``g = exp(phi)``),
-    the regularization ladder uses ``eps * (g g^T)`` instead of ``eps * I``,
-    making the regularized matrix transform exactly as ``h M h^T`` under
-    a gauge change ``g -> h g``.  Falls back to ``eps * I`` when ``None``.
+    Args:
+        M: ``(..., K, K)`` matrix (or batch).
+        eps: Base regularization scale for the escalation ladder.
+        exp_phi: When provided (local gauge frame ``g = exp(phi)``),
+            the regularization ladder uses ``eps * (g g^T)`` instead of
+            ``eps * I``, making the regularized matrix transform exactly
+            as ``h M h^T`` under a gauge change ``g -> h g``. Falls back to
+            ``eps * I`` when ``None``.
+        spd: When ``True``, ``M`` is guaranteed SPD by construction (Sigma /
+            prior_Sigma after retract_spd). Uses Cholesky + ``cholesky_inverse``
+            on the fast path — roughly 2× faster than LU on SPD matrices.
+            Falls back to the LU + escalation ladder if Cholesky fails.
     """
+    if spd:
+        try:
+            L = torch.linalg.cholesky(M)
+            return torch.cholesky_inverse(L)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            # Fall through to the LU + escalation path below.
+            pass
     try:
         return torch.linalg.inv(M)
     except (torch.linalg.LinAlgError, RuntimeError):
@@ -59,17 +80,20 @@ def safe_inverse(M, eps=1e-6, exp_phi=None):
                 return result
             except (torch.linalg.LinAlgError, RuntimeError):
                 continue
-        # Should never reach here, but final fallback
-        warnings.warn(
-            f"safe_inverse: all regularization levels failed "
-            f"(shape {list(M.shape)}), returning heavy regularization",
-            RuntimeWarning,
-            stacklevel=2,
+        # All regularization levels exhausted. Raise rather than return a
+        # silently-wrong heavily-regularized matrix — the prior fallback
+        # masked correctness bugs under repeated catastrophic conditioning.
+        raise RuntimeError(
+            f"safe_inverse: all regularization levels failed for matrix "
+            f"of shape {list(M.shape)} on device {M.device}. "
+            f"This indicates the input is structurally singular; check "
+            f"upstream conditioning (e.g., retract_spd / "
+            f"regularize_omega_conditioning) rather than retrying with "
+            f"more regularization."
         )
-        return torch.linalg.inv(M + (eps * 100000) * R_expanded)
 
 
-def safe_logdet(M):
+def safe_logdet(M: torch.Tensor) -> torch.Tensor:
     r"""Log-determinant via Cholesky for SPD matrices, slogdet fallback.
 
     CUDA raises RuntimeError (not LinAlgError) for non-PD matrices.
@@ -104,7 +128,7 @@ def safe_logdet(M):
         return torch.where(sign > 0, logabsdet, penalty)
 
 
-def symmetrize(M):
+def symmetrize(M: torch.Tensor) -> torch.Tensor:
     """Ensure matrix is symmetric: sym(M) = (M + Mᵀ)/2."""
     return 0.5 * (M + M.transpose(-2, -1))
 
@@ -113,7 +137,12 @@ def symmetrize(M):
 # Core KL divergence (full covariance)
 # ---------------------------------------------------------------------------
 
-def kl_divergence(mu_p, Sigma_p, mu_q, Sigma_q):
+def kl_divergence(
+    mu_p: torch.Tensor,
+    Sigma_p: torch.Tensor,
+    mu_q: torch.Tensor,
+    Sigma_q: torch.Tensor,
+) -> torch.Tensor:
     """
     KL(P || Q) for multivariate Gaussians with full covariance.
 
@@ -150,7 +179,12 @@ def kl_divergence(mu_p, Sigma_p, mu_q, Sigma_q):
 # Precomputation for efficient pairwise KL
 # ---------------------------------------------------------------------------
 
-def precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv=None):
+def precompute_tokens(
+    mu_h: torch.Tensor,
+    Sigma_h: torch.Tensor,
+    Omega: torch.Tensor,
+    Sigma_h_inv: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
     """
     Precompute per-token quantities for O(N² K²) pairwise KL.
 
@@ -196,8 +230,14 @@ def precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv=None):
     # P = Ωᵀ Σ⁻¹ Ω
     P = Om.transpose(-2, -1) @ Sig_inv @ Om                # [B, H, N, K_h, K_h]
 
-    # Log-determinants
+    # Log-determinants. Clamp ln|det Om| at the floor: a singular Omega
+    # would return -inf from slogdet, which propagates to NaN through
+    # ldc_q = 2·ln_det_Om - ln_det_Sig and into KL via inf - inf in the
+    # Mahalanobis term. The floor matches the conditioning-regularization
+    # target enforced by regularize_omega_conditioning after each E-step
+    # gauge update.
     _, ln_det_Om = torch.linalg.slogdet(Om)                # [B, H, N]
+    ln_det_Om = ln_det_Om.clamp(min=-50.0)
     ln_det_Sig = safe_logdet(Sig)                           # [B, H, N]
 
     ldc_q = 2.0 * ln_det_Om - ln_det_Sig                   # [B, H, N]
@@ -216,7 +256,7 @@ def precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv=None):
 # Pairwise KL computation (CUDA-accelerated)
 # ---------------------------------------------------------------------------
 
-def pairwise_kl(precomp, causal=True):
+def pairwise_kl(precomp: Dict[str, torch.Tensor], causal: bool = True) -> torch.Tensor:
     """
     Compute KL(q_i || Ω_ij · q_j) for all pairs using precomputed quantities.
 
@@ -273,7 +313,11 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
 
     if causal:
         mask = torch.triu(torch.ones(N, N, device=kl.device, dtype=torch.bool), diagonal=1)
-        kl.masked_fill_(mask.unsqueeze(0).unsqueeze(0), 1e9)
+        # Out-of-place: the M-step calls pairwise_kl inside torch.enable_grad()
+        # (see _compute_m_step_omega_grad in learning.py); in-place
+        # masked_fill_ on an autograd intermediate would corrupt the version
+        # counter and either silently break grads or raise.
+        kl = kl.masked_fill(mask.unsqueeze(0).unsqueeze(0), 1e9)
 
     return kl
 
@@ -282,7 +326,13 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
 # Attention weights from KL
 # ---------------------------------------------------------------------------
 
-def kl_attention(kl_ij, tau, causal=True, log_prior=None, mask_self=False):
+def kl_attention(
+    kl_ij: torch.Tensor,
+    tau: float,
+    causal: bool = True,
+    log_prior: Optional[torch.Tensor] = None,
+    mask_self: bool = False,
+) -> torch.Tensor:
     r"""
     Attention weights from KL divergences with optional non-uniform prior.
 
@@ -364,7 +414,7 @@ def build_alibi_log_prior(N: int, slope: float, device: torch.device,
 # Analytic gradients of KL (per-pair)
 # ---------------------------------------------------------------------------
 
-def grad_kl_mu_i_perpair(precomp):
+def grad_kl_mu_i_perpair(precomp: Dict[str, torch.Tensor]) -> torch.Tensor:
     """
     ∂KL(q_i || Ω_ij · q_j)/∂μ_i  for all pairs.
 
@@ -394,7 +444,12 @@ def grad_kl_mu_i_perpair(precomp):
 # Aggregated VFE gradients (attention-weighted sums)
 # ---------------------------------------------------------------------------
 
-def vfe_grad_mu_alignment(precomp, beta, kl_ij, tau):
+def vfe_grad_mu_alignment(
+    precomp: Dict[str, torch.Tensor],
+    beta: torch.Tensor,
+    kl_ij: torch.Tensor,
+    tau: float,
+) -> torch.Tensor:
     """
     Alignment contribution to ∂F/∂μ_i (Eq. 21 alignment terms + Eq. 24 correction).
 
@@ -440,7 +495,12 @@ def vfe_grad_mu_alignment(precomp, beta, kl_ij, tau):
     return grad
 
 
-def vfe_grad_Sigma_alignment(precomp, beta, kl_ij=None, tau=1.0):
+def vfe_grad_Sigma_alignment(
+    precomp: Dict[str, torch.Tensor],
+    beta: torch.Tensor,
+    kl_ij: Optional[torch.Tensor] = None,
+    tau: float = 1.0,
+) -> torch.Tensor:
     r"""
     Alignment contribution to ∂F/∂Σ_i (Eq. B.1, with softmax correction).
 
@@ -484,7 +544,13 @@ def vfe_grad_Sigma_alignment(precomp, beta, kl_ij=None, tau=1.0):
 # VFE gradient for prior terms
 # ---------------------------------------------------------------------------
 
-def vfe_grad_mu_prior(mu, Sigma, prior_mu, prior_Sigma, alpha):
+def vfe_grad_mu_prior(
+    mu: torch.Tensor,
+    Sigma: torch.Tensor,
+    prior_mu: torch.Tensor,
+    prior_Sigma: torch.Tensor,
+    alpha: torch.Tensor,
+) -> torch.Tensor:
     """
     Prior contribution to ∂F/∂μ_i.
 
@@ -505,22 +571,11 @@ def vfe_grad_mu_prior(mu, Sigma, prior_mu, prior_Sigma, alpha):
     return alpha.unsqueeze(-1) * grad
 
 
-def vfe_grad_Sigma_prior(Sigma, prior_Sigma, alpha):
-    """
-    Prior contribution to ∂F/∂Σ_i.
-
-    = ½ α_i · (Σ_prior⁻¹ - Σ_i⁻¹)
-
-    Returns the prior precision: [B, N, K, K] (α and ½ applied by caller).
-    """
-    return safe_inverse(prior_Sigma)
-
-
 # ---------------------------------------------------------------------------
 # Natural gradient on SPD manifold
 # ---------------------------------------------------------------------------
 
-def natural_grad_sigma(grad_Sigma, Sigma):
+def natural_grad_sigma(grad_Sigma: torch.Tensor, Sigma: torch.Tensor) -> torch.Tensor:
     """
     Fisher-Rao natural gradient on SPD(K).
 
@@ -538,7 +593,14 @@ def natural_grad_sigma(grad_Sigma, Sigma):
     return -2.0 * Sigma @ sym_grad @ Sigma
 
 
-def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_clip=50.0):
+def retract_spd(
+    Sigma: torch.Tensor,
+    nat_grad: torch.Tensor,
+    step_size: float,
+    eps_min: float = 1e-4,
+    kappa_max: float = 1e4,
+    exp_clip: float = 50.0,
+) -> torch.Tensor:
     """
     Affine-invariant exponential map retraction on SPD(K).
 
@@ -630,8 +692,16 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
 # State-dependent prior precision (Eq. 16)
 # ---------------------------------------------------------------------------
 
-def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=0.0,
-                          precomputed_kl=None):
+def state_dependent_alpha(
+    mu: torch.Tensor,
+    Sigma: torch.Tensor,
+    prior_mu: torch.Tensor,
+    prior_Sigma: torch.Tensor,
+    b0: float,
+    c0: float,
+    alpha_floor: float = 0.0,
+    precomputed_kl: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     α_i = c₀ / (b₀ + KL(q_i || p_i))
 
@@ -657,8 +727,15 @@ def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=
 # KL-based decoding (logits from prior bank)
 # ---------------------------------------------------------------------------
 
-def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0,
-                     prior_Sigma_inv_bank=None, prior_logdet_bank=None):
+def kl_decode_logits(
+    mu: torch.Tensor,
+    Sigma: torch.Tensor,
+    prior_mu_bank: torch.Tensor,
+    prior_Sigma_bank: torch.Tensor,
+    decode_tau: float = 1.0,
+    prior_Sigma_inv_bank: Optional[torch.Tensor] = None,
+    prior_logdet_bank: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     Compute logits for each vocabulary token via negative KL to prior.
 
@@ -726,7 +803,7 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0,
 # Cross-entropy gradient (analytic, no autograd)
 # ---------------------------------------------------------------------------
 
-def softmax_ce_gradient(logits, targets):
+def softmax_ce_gradient(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
     Gradient of cross-entropy loss w.r.t. logits.
 
@@ -748,14 +825,14 @@ def softmax_ce_gradient(logits, targets):
 # Frobenius norm clipping (trust region)
 # ---------------------------------------------------------------------------
 
-def clip_norm(x, max_norm):
+def clip_norm(x: torch.Tensor, max_norm: float) -> torch.Tensor:
     """Clip tensor to have Frobenius norm ≤ max_norm along last dims."""
     norm = x.norm(dim=-1, keepdim=True).clamp(min=1e-8)
     scale = torch.clamp(max_norm / norm, max=1.0)
     return x * scale
 
 
-def clip_matrix_norm(M, max_norm):
+def clip_matrix_norm(M: torch.Tensor, max_norm: float) -> torch.Tensor:
     """Clip matrix tensor Frobenius norm along last two dims."""
     norm = M.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-8)
     scale = torch.clamp(max_norm / norm, max=1.0)

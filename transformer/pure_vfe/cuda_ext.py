@@ -1,7 +1,10 @@
 """JIT-compile and load CUDA extensions for Pure VFE kernels."""
 
+import logging
 import os
 import torch
+
+logger = logging.getLogger(__name__)
 
 _cuda_module = None
 _load_attempted = False
@@ -56,9 +59,12 @@ def get_cuda_ext():
             ],
             verbose=False,
         )
-        print("[pure_vfe] CUDA kernels compiled and loaded successfully.")
+        logger.info("CUDA kernels compiled and loaded successfully.")
     except Exception as e:
-        print(f"[pure_vfe] CUDA kernel compilation failed, falling back to PyTorch: {e}")
+        # Use logger.exception to preserve the traceback rather than the
+        # bare exception message — library users may need it to debug
+        # build failures (nvcc, ninja, CUDA version mismatch).
+        logger.exception("CUDA kernel compilation failed, falling back to PyTorch: %s", e)
         _cuda_module = None
 
     return _cuda_module
