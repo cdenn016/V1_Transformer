@@ -12,7 +12,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **E-STEP MUST NOT SEE TARGETS**
 
-**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'` (the diagonal-σ path forbids non-`'off'` values in `vfe/config.py::__post_init__`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation; track in `VFE_Transformer_Idea.md`.
+**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'` (the diagonal-σ path forbids non-`'off'` values in `vfe/config.py::__post_init__`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation.
 
 **Figures**: ALL Figures should be publication quality by default.
 

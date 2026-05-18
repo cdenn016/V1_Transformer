@@ -313,7 +313,7 @@ SWEEP_ORDER: List[str] = [
     'e_mu_lr',
     'e_sigma_lr',
     'e_phi_lr',
-    'learning_rate',
+    #'learning_rate',
     'weight_decay',
     
     'lambda_align',

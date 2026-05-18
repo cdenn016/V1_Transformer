@@ -50,6 +50,7 @@ logs/
 results/
 outputs/
 scripts/ablation_results/
+transformer/vfe/vfe_ablation_results/
 
 # Bayesian MCMC traces (large, regenerable)
 *_trace.json

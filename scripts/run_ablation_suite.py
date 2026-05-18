@@ -45,14 +45,14 @@ BASELINE_CONFIG = {
    # === Architecture ===
    'vocab_size':                 50257,
    'embed_dim':                  20,
-   'max_seq_len':                108,
+   'max_seq_len':                128,
    
    
    
-   'batch_size':                 88, 
-   'max_steps':                  10000,
+   'batch_size':                 64, 
+   'max_steps':                  15000,
     
-   'stride':                     108,  
+   'stride':                     128,  
    #'eval_stride':                128,                                                                                              
    'random_offset_per_epoch':    True,
    'stride_base_seed':           6,
