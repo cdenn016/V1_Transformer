@@ -27,31 +27,35 @@ config = {
     'vocab_size':               None,      # populated after dataloader build
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
-    'batch_size':               128,
+    
+    'batch_size':               64,
+    
     'max_seq_len':              64,
-    'max_steps':                5000,
+    'max_steps':                15000,
 
-    'use_prior_bank':           False,
+    'use_prior_bank':           True,
     'mask_self_attention':      False,
+    
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
-    
+
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  False,
+    'use_equivariant_head_mixer':  True,
     'gauge_covariant_ridge':       False,
-    
+
     # === E-step dynamics ===
     'n_e_steps':                1,
     'n_layers':                 1,
 
-    'alpha_divergence':         1,
+    'alpha_divergence':         1.0,
+    'include_attention_entropy': True,
 
-    'e_mu_lr':                  0.3,
+    'e_mu_lr':                  0.4,
     'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.05,
    
     'alpha':                    1.0,
-    'lambda_align':             1.0,
+    'lambda_align':             4,
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
@@ -81,11 +85,11 @@ config = {
     # === Positional encoding ===
     'use_rope':                 True,
     'rope_full_gauge':          'off',
-    'rope_base':                100,
+    'rope_base':                150,
 
     # === Embedding init ===
-    'mu_init_std':              0.4,
-    'phi_scale':                0.05,
+    'mu_init_std':              0.001,
+    'phi_scale':                0.001,
     'sigma_init':               0.4,
 
     # === Active inference ===
@@ -98,9 +102,6 @@ config = {
     'use_non_flat_transport':       False,
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
-    'non_flat_tile_size':           0,    # 0 = no tiling; >0 = j-axis chunk size
-
-
 
     # === Normalization ===
     'norm_type':                'layernorm',
@@ -109,11 +110,11 @@ config = {
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
     'm_mu_lr':                  0.2,
-    'm_sigma_lr':               5e-5,
-    'm_phi_lr':                 1e-4,
-    'm_hyper_lr':               1e-5,
-    'm_other_lr':               3e-4,
-    'weight_decay':             0.001,
+    'm_sigma_lr':               0.015,
+    'm_phi_lr':                 0.025,
+    'm_hyper_lr':               0.001,
+    'm_other_lr':               0.05,
+    'weight_decay':             0.01,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,
@@ -121,16 +122,12 @@ config = {
     
     'bch_order':                3,
 
-    'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  False,
-    'gauge_covariant_ridge':       False,
-
     # === Logging / evaluation ===
     'log_interval':             200,
     'eval_interval':            2000,
     'checkpoint_interval':      25000,
 
-    'track_layer_diagnostics':      False,
+    'track_layer_diagnostics':      True,
     'monitor_monotonicity':         False,
 
 }
@@ -165,14 +162,16 @@ if __name__ == '__main__':
 
     # Build dataloaders
     logging.info(f"Loading dataset: {DATASET}")
-    train_loader, val_loader, vocab_size = create_dataloaders(
+    train_loader, val_loader, test_loader, vocab_size = create_dataloaders(
         max_seq_len=config['max_seq_len'],
         batch_size=config['batch_size'],
         vocab_size=config.get('vocab_size'),
         dataset=DATASET,
+        include_test=True,
     )
     logging.info(f"Dataset loaded: vocab_size={vocab_size}, "
-                 f"train_batches={len(train_loader)}, val_batches={len(val_loader)}")
+                 f"train_batches={len(train_loader)}, val_batches={len(val_loader)}, "
+                 f"test_batches={len(test_loader)}")
 
     # Override vocab_size from tokenizer
     config['vocab_size'] = vocab_size
@@ -191,7 +190,9 @@ if __name__ == '__main__':
     # Train
     trainer = VFETrainer(
         model, cfg, train_loader,
-        val_loader=val_loader, device=DEVICE,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        device=DEVICE,
         output_dir=output_dir,
     )
     trainer.train(num_steps=cfg.max_steps)

@@ -71,6 +71,7 @@ class VFETrainer:
         cfg: VFEConfig,
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
+        test_loader: Optional[DataLoader] = None,
         device: str = 'cpu',
         output_dir: Optional[str] = None,
         generate_figures: bool = True,
@@ -79,6 +80,7 @@ class VFETrainer:
         self.cfg = cfg
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.test_loader = test_loader
         self.device = device
         self.generate_figures = generate_figures
 
@@ -612,6 +614,140 @@ class VFETrainer:
             'val_bpc': avg_ce / math.log(2),
         }
 
+    @torch.no_grad()
+    def run_test_evaluation(self, max_samples: int = 128000) -> Dict[str, float]:
+        r"""Final end-of-training evaluation on the held-out test split.
+
+        Mirrors the publication path's ``run_test_evaluation`` in
+        ``experiment_runner.py:119-239``: token-weighted CE across up to
+        ``max_samples`` test samples (default 128000 = ~2000 batches at
+        ``batch_size=64``, matching the publication default for consistency
+        across configs with different batch sizes), then reports test PPL,
+        BPC (corrected by ``tokens_per_char`` when available), random
+        baseline ``= vocab_size``, and improvement factor. Uses the same
+        ``VFEModel.forward`` path as ``evaluate()`` — pure CE, no VFE
+        regularizer rescaling — so the reported test loss is directly
+        comparable to ``val_loss`` from the periodic evaluations.
+
+        Returns an empty dict if ``self.test_loader`` is ``None``.
+        """
+        loader = self.test_loader
+        if loader is None:
+            return {}
+
+        logger.info("=" * 70)
+        logger.info("FINAL TEST SET EVALUATION")
+        logger.info("=" * 70)
+        logger.info(f"  Evaluating up to {max_samples} samples...")
+
+        self.model.eval()
+        total_ce_tokens = 0.0
+        total_tokens = 0
+        total_samples = 0
+        num_batches = 0
+
+        for batch in loader:
+            if total_samples >= max_samples:
+                break
+            if isinstance(batch, (list, tuple)):
+                input_ids = batch[0].to(self.device)
+                target_ids = batch[1].to(self.device)
+            else:
+                input_ids = batch['input_ids'].to(self.device)
+                target_ids = batch['target_ids'].to(self.device)
+
+            _, _, ce_for_log = self.model(input_ids, targets=target_ids)
+            n_tokens = (target_ids != -100).sum().item()
+            total_ce_tokens += ce_for_log.item() * n_tokens
+            total_tokens += n_tokens
+            total_samples += input_ids.shape[0]
+            num_batches += 1
+
+            if num_batches % 100 == 0:
+                logger.info(
+                    f"  Evaluated {total_samples}/{max_samples} samples "
+                    f"({num_batches} batches)..."
+                )
+
+        test_ce = total_ce_tokens / max(total_tokens, 1)
+        test_ppl = math.exp(min(test_ce, 20.0))
+        # BPC = (CE_nats / ln 2) * tokens_per_char. The tokens-per-char ratio
+        # comes from the test loader's dataset; when unavailable we fall back
+        # to bits-per-token with a one-time warning, matching the publication
+        # path's bpc_from_dataset behavior.
+        from transformer.training.bpc import bpc_from_dataset
+        test_bpc = bpc_from_dataset(
+            test_ce, loader, fallback_key='vfe_run_test_evaluation',
+        )
+        random_ppl = float(self.cfg.vocab_size)
+        improvement = (random_ppl / test_ppl) if test_ppl > 0 else 0.0
+
+        logger.info(
+            f"Test Set Results ({total_samples} samples across "
+            f"{num_batches} batches):"
+        )
+        logger.info(f"  Cross-entropy loss: {test_ce:.4f}")
+        logger.info(f"  Perplexity:         {test_ppl:.2f}")
+        logger.info(f"  Bits per character: {test_bpc:.3f}")
+        logger.info(f"  Random baseline:    {random_ppl:.0f}")
+        logger.info(f"  Improvement:        {improvement:.1f}x better than random")
+        logger.info("=" * 70)
+
+        results = {
+            'test_loss': test_ce,
+            'test_ppl': test_ppl,
+            'test_bpc': test_bpc,
+            'random_ppl': random_ppl,
+            'improvement': improvement,
+            'num_samples': total_samples,
+            'num_batches': num_batches,
+        }
+
+        if self.output_dir is not None:
+            import json
+            out_path = self.output_dir / 'test_results.json'
+            with open(out_path, 'w') as f:
+                json.dump(results, f, indent=2)
+            logger.info(f"  Test results saved: {out_path}")
+
+        return results
+
+    # Columns the vfe/ training path cannot populate. They depend on
+    # PublicationTrainer-only instrumentation (_compute_phi_diagnostics in
+    # experiment_runner.py:439, _VFE_GRAD_DEBUG in core/vfe_utils.py, and
+    # numerical_monitor flush) that the vfe/ package does not import. Listed
+    # here so the CSV header doesn't carry permanently empty columns.
+    _CSV_DISABLED_COLUMNS = (
+        # No second-moment stat for kl/kappa in vfe diagnostics
+        'kl_std',
+        'kappa_std',
+        # Bayesian Mahalanobis surface not produced by vfe e_step
+        'alpha_mahal_sq_mean', 'alpha_mahal_sq_std',
+        # numerical_monitor not wired into vfe/
+        'num_chol_recover', 'num_chol_fail', 'num_nan_replace', 'num_inv_pinv',
+        # _compute_phi_diagnostics lives only on PublicationTrainer
+        'phi_effective_rank', 'phi_rank_ratio',
+        'phi_top1_variance_fraction', 'phi_top5_variance_fraction',
+        'phi_spectral_gap', 'phi_frobenius_norm',
+        'phi_mean_token_norm', 'phi_std_token_norm',
+        # _VFE_GRAD_DEBUG instrumentation lives in core/vfe_gradients.py,
+        # not in the vfe/ E-step
+        'vfe_grad_mu_self', 'vfe_grad_mu_direct',
+        'vfe_grad_mu_softmax', 'vfe_grad_mu_total',
+        'vfe_grad_sigma_self', 'vfe_grad_sigma_align_direct',
+        'vfe_grad_sigma_softmax', 'vfe_grad_sigma_total',
+        'vfe_kl_pairwise_mean', 'vfe_kl_pairwise_max', 'vfe_kappa_scaled',
+        'vfe_kl_frac_above_90pct', 'vfe_kl_p95',
+        # Condition-number and min/max for sigma_p not computed in vfe e_step
+        'sigma_q_cond_mean', 'sigma_q_cond_max',
+        'sigma_p_min', 'sigma_p_max',
+        # Transport pairwise stats not collected in vfe diagnostics
+        'phi_pairwise_dist_mean', 'phi_pairwise_dist_max',
+        'attn_entropy_per_head_mean', 'attn_entropy_per_head_std',
+        'attn_entropy_per_head_min', 'attn_entropy_per_head_max',
+        'head_correlation_mean',
+    )
+
     def _init_metrics(self) -> None:
         """Initialize metrics infrastructure (CSV + publication tracker)."""
         if self.output_dir is None:
@@ -625,6 +761,7 @@ class VFETrainer:
                 tokens_per_char=tokens_per_char_from_dataset(
                     getattr(self, 'train_loader', None),
                 ),
+                disabled_columns=self._CSV_DISABLED_COLUMNS,
             )
             logger.info(f"Metrics CSV: {csv_path}")
         except ImportError:
@@ -653,17 +790,55 @@ class VFETrainer:
         # path — the VFE objective is minimized implicitly via the E-step
         # inner loop, so those columns are omitted rather than logged as
         # misleading zeros.
+        #
+        # Key-namespace remap: PublicationMetricsTracker.log_step reads
+        # most diagnostic columns via prefixed lookups (``bayesian/*``,
+        # ``cov/*``, ``transport/*``, ``kappa/*``) — see
+        # metrics_tracking.py:171-250. The vfe E-step writes bare names
+        # into ``_last_diagnostics`` (e_step.py:829), so we re-emit each
+        # bare value under both names: the bare name is harmless filler,
+        # the prefixed name is what actually populates the column. ``None``
+        # is preferred over ``0`` for un-collected metrics so the CSV cell
+        # reads as blank (matching publication-side semantics) rather than
+        # as a misleading literal zero.
         csv_metrics = {
+            # Bare-name lookups (metrics_tracking.py:136-157)
             'train_loss_total': metrics['loss'],
             'train_loss_ce': metrics['ce'],
             'train_loss_ce_raw': metrics['ce'],
             'train_ppl': metrics['ppl'],
             'train_bpc': metrics['bpc'],
-            'beta_mean': metrics.get('beta_mean', 0),
-            'beta_std': metrics.get('beta_std', 0),
-            'kl_mean': metrics.get('kl_mean', 0),
-            'attention_entropy': metrics.get('attention_entropy', 0),
-            'attention_concentration': metrics.get('attention_concentration', 0),
+            'beta_mean': metrics.get('beta_mean'),
+            'beta_std': metrics.get('beta_std'),
+            'kl_mean': metrics.get('kl_mean'),
+            'attention_entropy': metrics.get('attention_entropy'),
+            'attention_concentration': metrics.get('attention_concentration'),
+            # Bayesian alpha (bare → bayesian/* prefix)
+            'bayesian/alpha_mean': metrics.get('alpha_mean'),
+            'bayesian/alpha_std': metrics.get('alpha_std'),
+            'bayesian/alpha_min': metrics.get('alpha_min'),
+            'bayesian/alpha_max': metrics.get('alpha_max'),
+            'bayesian/c0': metrics.get('alpha_c0'),
+            'bayesian/b0': metrics.get('alpha_b0'),
+            'bayesian/c0_std': metrics.get('alpha_c0_std'),
+            'bayesian/b0_std': metrics.get('alpha_b0_std'),
+            # Learnable kappa (bare → kappa/per_head_* prefix)
+            'kappa/per_head_mean': metrics.get('kappa_mean'),
+            'kappa/per_head_min': metrics.get('kappa_min'),
+            'kappa/per_head_max': metrics.get('kappa_max'),
+            # Covariance health (bare → cov/* prefix)
+            'cov/sigma_q_mean': metrics.get('sigma_q_mean'),
+            'cov/sigma_q_min': metrics.get('sigma_q_min'),
+            'cov/sigma_q_max': metrics.get('sigma_q_max'),
+            'cov/sigma_q_std': metrics.get('sigma_q_std'),
+            'cov/sigma_p_mean': metrics.get('sigma_p_mean'),
+            'cov/prior_belief_kl_mean': metrics.get('prior_belief_kl_mean'),
+            'cov/prior_belief_kl_max': metrics.get('prior_belief_kl_max'),
+            'cov/prior_belief_kl_std': metrics.get('prior_belief_kl_std'),
+            # Transport (bare → transport/* prefix)
+            'transport/phi_norm_mean': metrics.get('phi_norm_mean'),
+            'transport/phi_norm_std': metrics.get('phi_norm_std'),
+            'transport/phi_norm_max': metrics.get('phi_norm_max'),
         }
 
         grad_norms = {
@@ -792,57 +967,6 @@ class VFETrainer:
         except ImportError:
             pass
 
-    def _log_vfe_dynamics_to_csv(self, step: int, metrics: Dict[str, float]) -> None:
-        """Append VFE-specific columns to the metrics CSV."""
-        if self._metrics_tracker is None:
-            return
-
-        # Build VFE dynamics row (columns expected by vfe_dynamics_plots.py)
-        vfe_row = {
-            # Covariance health
-            'sigma_q_mean': metrics.get('sigma_q_mean', ''),
-            'sigma_q_min': metrics.get('sigma_q_min', ''),
-            'sigma_q_max': metrics.get('sigma_q_max', ''),
-            'sigma_q_std': metrics.get('sigma_q_std', ''),
-            'sigma_p_mean': metrics.get('sigma_p_mean', ''),
-            # Prior-belief divergence
-            'prior_belief_kl_mean': metrics.get('prior_belief_kl_mean', ''),
-            'prior_belief_kl_max': metrics.get('prior_belief_kl_max', ''),
-            'prior_belief_kl_std': metrics.get('prior_belief_kl_std', ''),
-            # Transport geometry
-            'phi_norm_mean': metrics.get('phi_norm_mean', ''),
-            'phi_norm_std': metrics.get('phi_norm_std', ''),
-            'phi_norm_max': metrics.get('phi_norm_max', ''),
-            # E-step gradient norms
-            'e_step_nat_grad_mu': metrics.get('nat_grad_mu_norm', ''),
-            'e_step_nat_grad_sigma': metrics.get('nat_grad_sigma_norm', ''),
-        }
-
-        # Bayesian alpha
-        for k in ('alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
-                   'alpha_c0', 'alpha_b0', 'alpha_c0_std', 'alpha_b0_std'):
-            vfe_row[k] = metrics.get(k, '')
-
-        # Learnable kappa
-        for k in ('kappa_mean', 'kappa_min', 'kappa_max'):
-            vfe_row[k] = metrics.get(k, '')
-
-        # Append extra columns to CSV. Supports either a dedicated method
-        # (`_append_extra`) or the standard `log_step(step, **extra)` path.
-        if hasattr(self._metrics_tracker, '_append_extra'):
-            self._metrics_tracker._append_extra(step, vfe_row)
-        elif hasattr(self._metrics_tracker, 'log_step'):
-            try:
-                self._metrics_tracker.log_step(step, **vfe_row)
-            except Exception as exc:
-                if not getattr(self, '_vfe_csv_warned', False):
-                    logger.warning(
-                        "VFE dynamics columns could not be written to CSV "
-                        "(log_step rejected extra kwargs: %s). Subsequent "
-                        "warnings suppressed.", exc,
-                    )
-                    self._vfe_csv_warned = True
-
     def train(self, num_steps: Optional[int] = None, log_interval: Optional[int] = None) -> None:
         """Main training loop with full metrics, checkpoints, and figure generation.
 
@@ -922,12 +1046,17 @@ class VFETrainer:
 
             metrics = self.train_step(batch)
 
-            # Log to CSV and publication tracker
-            _ids = batch[0] if isinstance(batch, (list, tuple)) else batch['input_ids']
-            B, N = _ids.shape[0], _ids.shape[1]
-            self._log_to_csv(step + 1, metrics, B, N)
-            self._log_vfe_dynamics_to_csv(step + 1, metrics)
-            self._log_to_pub_tracker(step + 1, metrics)
+            # CSV + publication-tracker row is written every log_interval
+            # steps, matching the publication-side cadence at
+            # experiment_runner.py:1321,1327. Without this gate the CSV
+            # accumulates one (mostly empty) row per step and val rows land
+            # on steps that have no train row to update.
+            is_log_step = (step + 1) % log_interval == 0
+            if is_log_step:
+                _ids = batch[0] if isinstance(batch, (list, tuple)) else batch['input_ids']
+                B, N = _ids.shape[0], _ids.shape[1]
+                self._log_to_csv(step + 1, metrics, B, N)
+                self._log_to_pub_tracker(step + 1, metrics)
 
             step_time = metrics.get('step_time', 0.0)
             it_per_sec = (1.0 / step_time) if step_time > 0 else 0.0
@@ -1034,6 +1163,13 @@ class VFETrainer:
         # Save final checkpoint
         if self.output_dir:
             self._save_checkpoint(num_steps)
+
+        # Final test-set evaluation. Run once after training completes and
+        # only if a test_loader was supplied (the click-to-run entry point
+        # at train_vfe.py opts in via include_test=True). Mirrors the
+        # publication path at experiment_runner.py:2234-2241.
+        if self.test_loader is not None:
+            self.run_test_evaluation()
 
         # Save publication tracker history
         if self._pub_tracker and self.output_dir:
