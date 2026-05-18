@@ -175,6 +175,18 @@ All results are supported by open-source implementations with comprehensive nume
 \section{Theory}
 \label{sec:framework}
 
+\paragraph{Notation and symbol conventions.}
+Several symbols are necessarily overloaded across the framework's distinct mathematical strata; we collect the conventions here for the reader's benefit.
+
+\emph{Agent fields.} For each agent $i$, $q_i$ is the belief distribution on the state fiber $\mathcal{B}_{\mathrm{state}}$, $p_i$ is the prior on the same fiber (the cross-scale shadow of Section~\ref{sec:cross_scale_shadows}), $s_i$ is the generative-model section on the model fiber $\mathcal{B}_{\mathrm{model}}$, and $r_i$ is the hyper-prior on the model fiber. The letters $q, p, s, r$ refer to these specific fields throughout.
+
+\emph{The s overload.} The letter $s$ has two distinct uses: $s_i$ as a subscripted symbol denotes the generative-model field of agent $i$, while the parenthesised superscript $(s)$ denotes the hierarchical scale index. The collision is syntactic (subscript versus parenthesised superscript) rather than semantic: $s_i^{(s)}$ unambiguously denotes the generative-model field of agent $i$ at scale $s$, and the two positions never compete for the same slot. The reader who finds this awkward can take the model-field $s_i$ to be a mnemonic for "section" and the scale superscript $(s)$ to be a mnemonic for "scale".
+
+\emph{Gauge structure.} $\Omega_{ij}$ is the inter-agent transport operator (Eq.~\ref{eq:transport_def}), $\phi_i$ is the gauge frame field, $G$ is the gauge group, and $\kappa$ without subscript denotes the Killing form on the gauge Lie algebra (used in the pullback construction of Section~\ref{sec:pullback}). Where $\kappa$ appears with a subscript or with index arguments it has a different meaning: $\kappa_\beta, \kappa_\gamma$ are attention temperatures in the transformer limit, and $\kappa_{ij}, \kappa_{IJ}$ are inter-agent and inter-cluster raw conductances in the renormalization-group construction of Section~\ref{sec:meta_agent_rg}.
+
+\emph{Temperature and time symbols.} $\tau$ without subscript is the attention/entropy temperature in the canonical free energy (Eq.~\ref{eq:pointwise_free_energy}); in the working implementation it is factorised as $\tau = \kappa \sqrt{K}$ with $\kappa$ a learnable scalar and $\sqrt{K}$ the dimension scaling. $\tau_i$ is the dimensionless information-update clock of Section~\ref{sec:fisher_arc_length} (in §5 Speculative Extensions). $\tau^{(q)}_{ij}$ and $\tau^{(s)}_{ij}$ are coupling strengths in the transported-KL appendix.
+
+\emph{Variational and coupling weights.} $\alpha_i$ is the per-agent variational precision parameter of Section~\ref{sec:state_dependent_precision}, weighting the agent's own belief-prior coupling $\alpha_i \mathrm{KL}(q_i \| p_i)$. $w_i^I$ is the cluster-aggregation weight of constituent $i$ in cluster $I$ used in the meta-agent variational barycenter (Section~\ref{sec:meta_agent_variational}). These are distinct objects with disjoint contexts; we use disjoint symbols to avoid the notational collision the earlier draft had. $\beta_{ij}$ is the inter-agent attention weight on belief alignment and $\gamma_{ij}$ is the inter-agent coupling on the model channel; both are row-normalised softmax distributions and are not used interchangeably.
 
 \begin{figure}[t]
 \centering
