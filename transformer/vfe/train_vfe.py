@@ -107,7 +107,12 @@ config = {
     'normalize_ce_by_dim':      True,
 
     # === Training ===
-    'learning_rate':            0.05,
+    # Per-group M-step LRs (see vfe/config.py for what each touches).
+    'm_mu_lr':                  0.2,
+    'm_sigma_lr':               5e-5,
+    'm_phi_lr':                 1e-4,
+    'm_hyper_lr':               1e-5,
+    'm_other_lr':               3e-4,
     'weight_decay':             0.001,
     
     'warmup_steps':             100,

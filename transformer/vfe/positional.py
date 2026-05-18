@@ -61,6 +61,26 @@ class VFEPositionalEncoding(nn.Module):
         self.phi_project_slk = bool(getattr(cfg, 'phi_project_slk', False))
         self.register_buffer('generators', generators)
 
+        # Resolve the BCH compositor at construction time. Previously this was
+        # resolved on the first forward and silently fell back to first-order
+        # additive composition when math_utils was missing — non-abelian
+        # generators would then lose BCH correction terms for the entire run.
+        # Failing fast at init surfaces the misconfiguration before any
+        # training step burns.
+        self._bch_compose = None
+        if self.bch_order > 1:
+            try:
+                from math_utils.generators import lie_compose_bch_general_torch
+            except ImportError as exc:
+                raise ImportError(
+                    f"VFEPositionalEncoding: bch_order={self.bch_order} requires "
+                    "math_utils.generators.lie_compose_bch_general_torch but the "
+                    "import failed. Either install math_utils or set bch_order=1 "
+                    "(first-order additive composition, exact only for abelian "
+                    "generators)."
+                ) from exc
+            self._bch_compose = lie_compose_bch_general_torch
+
         if self.phi_project_slk:
             if irrep_dims is None:
                 raise ValueError(
@@ -99,26 +119,7 @@ class VFEPositionalEncoding(nn.Module):
             # First-order BCH: simple addition (exact for abelian groups)
             return phi + pos.unsqueeze(0)
 
-        # Higher-order BCH
-        try:
-            from math_utils.generators import lie_compose_bch_general_torch
-        except ImportError:
-            # Fallback to additive if BCH not available
-            if not getattr(self, '_bch_fallback_warned', False):
-                import warnings
-                warnings.warn(
-                    f"bch_order={self.bch_order} requested but "
-                    "math_utils.generators.lie_compose_bch_general_torch is "
-                    "unavailable; falling back to first-order additive composition. "
-                    "Non-abelian generators (e.g. GL(K), SO(N>2)) will lose BCH "
-                    "correction terms.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                self._bch_fallback_warned = True
-            return phi + pos.unsqueeze(0)
-
-        return lie_compose_bch_general_torch(
+        return self._bch_compose(
             phi, pos.unsqueeze(0).expand_as(phi),
             self.generators, order=self.bch_order,
         )

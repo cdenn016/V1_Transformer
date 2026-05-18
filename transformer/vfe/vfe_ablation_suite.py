@@ -21,7 +21,7 @@ Sweep coverage (per user request, 2026-05-17):
     rope_base                       (RoPE frequency base)
     mass_phi                        (gauge-frame L2 prior)
     mu_init_std, phi_scale, sigma_init  (embedding init)
-    learning_rate, weight_decay     (M-step optimizer)
+    m_mu_lr, m_sigma_lr, m_phi_lr, m_hyper_lr, m_other_lr, weight_decay  (M-step optimizer)
 
 Each sweep varies ONE field. Output layout::
 
@@ -92,18 +92,19 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'mask_self_attention':      False,
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
-    
+
     'use_autograd_mu_sigma':       False,
     'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       False,
-    
+
     # === E-step dynamics ===
     'n_e_steps':                1,
     'n_layers':                 1,
 
-    'alpha_divergence':         1,
+    'alpha_divergence':         1.0,
+    'include_attention_entropy': True,
 
-    'e_mu_lr':                  0.3,
+    'e_mu_lr':                  0.4,
     'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.05,
    
@@ -155,27 +156,25 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'use_non_flat_transport':       False,
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
-    'non_flat_tile_size':           0,    # 0 = no tiling; >0 = j-axis chunk size
-
-
 
     # === Normalization ===
     'norm_type':                'layernorm',
     'normalize_ce_by_dim':      True,
 
     # === Training ===
-    'learning_rate':            0.02,
-    'weight_decay':             0.001,
+    # Per-group M-step LRs (see vfe/config.py for what each touches).
+    'm_mu_lr':                  0.2,
+    'm_sigma_lr':               0.05,
+    'm_phi_lr':                 0.001,
+    'm_hyper_lr':               0.001,
+    'm_other_lr':               0.001,
+    'weight_decay':             0.01,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,
     'sigma_max':                12.0,
     
     'bch_order':                3,
-
-    'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  False,
-    'gauge_covariant_ridge':       False,
 
     # === Logging / evaluation ===
     'log_interval':             200,
@@ -204,7 +203,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'e_mu_lr': {
         'description': 'E-step natural-gradient step size for mu_q',
         'param': 'e_mu_lr',
-        'values': [0.0, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2],
+        'values': [0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
         'baseline_value': 0.1,
     },
 
@@ -213,6 +212,14 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
         'param': 'e_sigma_lr',
         'values': [0.0, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1],
         'baseline_value': 0.015,
+        # Lift retracted sigma_q from autograd-orphan status: with the
+        # BASELINE_CONFIG defaults (n_e_steps=1, n_layers=1,
+        # use_prior_bank=False, norm_type='layernorm'), the retracted sigma
+        # has no downstream consumer (see VFEConfig.__post_init__ orphan
+        # warning). Bumping n_e_steps to 2 gives iteration #2's
+        # nat_grad_mu a chance to read the updated sigma, making this LR
+        # observable in val PPL.
+        'requires': {'n_e_steps': 2},
     },
 
     'e_phi_lr': {
@@ -220,6 +227,11 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
         'param': 'e_phi_lr',
         'values': [0.0, 0.001, 0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.05,
+        # Same orphan-lift as e_sigma_lr: phi only matters across
+        # iterations or layers (no decoder/norm reads phi directly).
+        # n_e_steps=2 gives iteration #2's attention/transport a chance
+        # to read the updated phi.
+        'requires': {'n_e_steps': 2},
     },
 
     # --- E-step coupling weights ---------------------------------------------
@@ -292,11 +304,39 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     },
 
     # --- M-step optimizer ----------------------------------------------------
-    'learning_rate': {
-        'description': 'Outer (M-step) AdamW peak learning rate',
-        'param': 'learning_rate',
-        'values': [1e-3, 5e-3, 1e-2, 2e-2, 5e-2, 1e-1],
-        'baseline_value': 0.02,
+    'm_mu_lr': {
+        'description': 'M-step LR for PriorBank.base_mu',
+        'param': 'm_mu_lr',
+        'values': [0.15, 0.25, 0.3, 0.4, 0.5],
+        'baseline_value': 0.2,
+    },
+
+    'm_sigma_lr': {
+        'description': 'M-step LR for PriorBank.base_log_sigma and decode_log_scale',
+        'param': 'm_sigma_lr',
+        'values': [0.015, 0.025, 0.035, 0.045, 0.055, 0.075],
+        'baseline_value': 0.05,
+    },
+
+    'm_phi_lr': {
+        'description': 'M-step LR for PriorBank.phi_embed and Positional.pos_phi',
+        'param': 'm_phi_lr',
+        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
+        'baseline_value': 0.001,
+    },
+
+    'm_hyper_lr': {
+        'description': 'M-step LR for E-step learnable hyperparams (raw_c0, raw_b0, log_kappa, _phi_preconditioner)',
+        'param': 'm_hyper_lr',
+        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
+        'baseline_value': 0.001,
+    },
+
+    'm_other_lr': {
+        'description': 'M-step LR for catch-all group (head_mixer, non_flat W_raw, output projection, ...)',
+        'param': 'm_other_lr',
+        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
+        'baseline_value': 0.001,
     },
 
     'weight_decay': {
@@ -310,22 +350,29 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
 
 # Sweep execution order (cheap-to-expensive; keep in sync with user priorities).
 SWEEP_ORDER: List[str] = [
-    'e_mu_lr',
-    'e_sigma_lr',
-    'e_phi_lr',
-    #'learning_rate',
-    'weight_decay',
+  #  'e_mu_lr',
+   # 'e_sigma_lr',
+   # 'e_phi_lr',
+
+  #  'm_mu_lr',
+   # 'm_sigma_lr',
+    'm_phi_lr',
+    'm_hyper_lr',
+    'm_other_lr',
+
+   # 'weight_decay',
     
     'lambda_align',
-   # 'lambda_softmax',
-   # 'kappa',
-   # 'phi_trace_clamp',
-   # 'rope_base',
-   #$ 'mass_phi',
-   # 'mu_init_std',
-    #'phi_scale',
-    #'sigma_init',
+    'lambda_softmax',
+   
+    'rope_base',
+    'mass_phi',
     
+    'mu_init_std',
+    'phi_scale',
+    'sigma_init',
+    # 'kappa',
+   # 'phi_trace_clamp',
 ]
 
 
@@ -395,13 +442,22 @@ def _sweep_num_runs(sweep: Dict[str, Any]) -> int:
 
 
 def make_run_configs(sweep_name: str, base_config: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
-    """Generate (label, config) pairs for a sweep."""
+    """Generate (label, config) pairs for a sweep.
+
+    Honors an optional per-sweep ``'requires'`` dict: prerequisite overrides
+    merged into the base config BEFORE the swept param is set. Used by
+    sweeps whose target field is autograd-orphaned under BASELINE_CONFIG
+    (see e_sigma_lr / e_phi_lr — both require n_e_steps>=2 to lift the
+    retracted tensors out of "computed-then-discarded" status).
+    """
     sweep = SWEEPS[sweep_name]
+    requires = sweep.get('requires', {})
     runs: List[Tuple[str, Dict[str, Any]]] = []
 
     if 'configs' in sweep:
         for entry in sweep['configs']:
             cfg = copy.deepcopy(base_config)
+            cfg.update(requires)  # prerequisites first
             label = entry.pop('label')
             cfg.update(entry)
             entry['label'] = label  # restore for next call
@@ -410,6 +466,7 @@ def make_run_configs(sweep_name: str, base_config: Dict[str, Any]) -> List[Tuple
         param = sweep['param']
         for val in _sweep_values(sweep):
             cfg = copy.deepcopy(base_config)
+            cfg.update(requires)  # prerequisites first
             cfg[param] = val
             label = f"{param}={val}"
             runs.append((label, cfg))

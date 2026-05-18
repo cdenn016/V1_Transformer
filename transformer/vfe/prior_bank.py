@@ -105,9 +105,11 @@ class VFEPriorBank(nn.Module):
             self._phi_trace_vec = None
             self._phi_trace_vec_norm_sq = None
 
-        # Base prior: shared across all tokens (gauge-orbit parameterization)
-        mu_std = cfg.mu_init_std if cfg.mu_init_std > 0 else math.sqrt(math.log(max(V, 2)) / K)
-        self.base_mu = nn.Parameter(torch.randn(K) * mu_std)
+        # Base prior: shared across all tokens (gauge-orbit parameterization).
+        # mu_init_std=0 is honored literally (degenerate prior at zero) — the
+        # previous silent rescale to sqrt(log(V)/K) corrupted sweep results
+        # because mu_init_std=0 in the ablation suite then mapped to ~0.74.
+        self.base_mu = nn.Parameter(torch.randn(K) * cfg.mu_init_std)
         sigma_init_log = math.log(cfg.sigma_init) if cfg.sigma_init > 0 else 0.0
         self.base_log_sigma = nn.Parameter(torch.full((K,), sigma_init_log))
 
@@ -121,12 +123,16 @@ class VFEPriorBank(nn.Module):
         # Decode cache (invalidated each forward pass)
         self._decode_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
 
+        # Pre-built arange(V) so decode() doesn't rebuild the index tensor
+        # every forward when the decode cache is cold (which is every step,
+        # because model.py invalidates the cache at the top of forward).
+        self.register_buffer('_all_token_ids', torch.arange(V, dtype=torch.long))
+
     @property
     def base_sigma(self) -> torch.Tensor:
         """Base prior variance (always positive), shape ``(K,)``."""
-        with torch.amp.autocast('cuda', enabled=False):
-            p = self.base_log_sigma
-            return torch.exp(p.float() if p.dtype != torch.float32 else p).clamp(0.01, self.sigma_max)
+        p = self.base_log_sigma
+        return torch.exp(p.float() if p.dtype != torch.float32 else p).clamp(0.01, self.sigma_max)
 
     def invalidate_cache(self) -> None:
         """Call at the start of each forward pass to clear decode cache."""
@@ -184,20 +190,18 @@ class VFEPriorBank(nn.Module):
             # mu_v = A_v @ mu_0 (per block)
             mu_parts.append(torch.einsum('...ij,j->...i', exp_h, base_mu_h))
 
-            with torch.amp.autocast('cuda', enabled=False):
-                base_sigma_h = base_sigma[block_start:block_end]
-                exp_h_f32 = exp_h.float()
-
-                if full_cov:
-                    # Exact: Sigma_h = A_h @ diag(s_h) @ A_h^T  (sandwich product)
-                    sigma_diag = torch.diag(base_sigma_h)  # (d_h, d_h)
-                    sigma_h = exp_h_f32 @ sigma_diag @ exp_h_f32.transpose(-2, -1)
-                    sigma_parts.append(sigma_h)
-                else:
-                    # Diagonal approx: diag(A diag(s) A^T) = sum_j A_{ij}^2 * s_j
-                    sigma_parts.append(
-                        (exp_h_f32 ** 2 @ base_sigma_h).clamp(min=self.eps)
-                    )
+            base_sigma_h = base_sigma[block_start:block_end]
+            exp_h_f32 = exp_h.float()
+            if full_cov:
+                # Exact: Sigma_h = A_h @ diag(s_h) @ A_h^T  (sandwich product)
+                sigma_diag = torch.diag(base_sigma_h)  # (d_h, d_h)
+                sigma_h = exp_h_f32 @ sigma_diag @ exp_h_f32.transpose(-2, -1)
+                sigma_parts.append(sigma_h)
+            else:
+                # Diagonal approx: diag(A diag(s) A^T) = sum_j A_{ij}^2 * s_j
+                sigma_parts.append(
+                    (exp_h_f32 ** 2 @ base_sigma_h).clamp(min=self.eps)
+                )
             block_start = block_end
 
         mu_p = torch.cat(mu_parts, dim=-1)
@@ -328,8 +332,7 @@ class VFEPriorBank(nn.Module):
         if self._decode_cache is not None:
             mu_p, sigma_p = self._decode_cache
         else:
-            all_ids = torch.arange(V, device=mu_q.device)
-            phi_all = self.phi_embed(all_ids)  # (V, n_gen)
+            phi_all = self.phi_embed(self._all_token_ids)  # (V, n_gen)
             phi_all = self._apply_phi_det_control(phi_all)
             block_exp_pairs = self._compute_block_exp_pairs(phi_all, only_forward=True)
             mu_p, sigma_p = self._apply_gauge_transform(block_exp_pairs)
@@ -340,23 +343,25 @@ class VFEPriorBank(nn.Module):
         sigma_q_diag = torch.diagonal(sigma_q, dim1=-2, dim2=-1) if is_full_cov else sigma_q
         sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1) if sigma_p.dim() >= 3 and sigma_p.shape[-1] == sigma_p.shape[-2] else sigma_p
 
-        # AMP guard: KL uses division and log
-        with torch.amp.autocast('cuda', enabled=False):
-            mu_q = mu_q.float()
-            mu_p = mu_p.float()
-            sigma_q_d = sigma_q_diag.float().clamp(min=1e-4)
-            sigma_p_d = sigma_p_diag.float().clamp(min=1e-4)
+        # KL uses division and log — promote to float32 explicitly. The
+        # previous torch.amp.autocast('cuda', enabled=False) guard was both
+        # redundant (the .float() cast below already overrides AMP) and
+        # fragile on CPU/MPS where the 'cuda' device_type string is wrong.
+        mu_q = mu_q.float()
+        mu_p = mu_p.float()
+        sigma_q_d = sigma_q_diag.float().clamp(min=1e-4)
+        sigma_p_d = sigma_p_diag.float().clamp(min=1e-4)
 
-            inv_sigma_p = 1.0 / sigma_p_d                    # (V, K)
-            mu_p_inv_sigma_p = mu_p * inv_sigma_p             # (V, K)
+        inv_sigma_p = 1.0 / sigma_p_d                    # (V, K)
+        mu_p_inv_sigma_p = mu_p * inv_sigma_p             # (V, K)
 
-            # Fused matmul: trace + quad_q - cross in ONE operation
-            lhs = torch.cat([sigma_q_d + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
-            rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)        # (V, 2K)
-            combined = torch.matmul(lhs, rhs.T)               # (B, N, V)
+        # Fused matmul: trace + quad_q - cross in ONE operation
+        lhs = torch.cat([sigma_q_d + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
+        rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)        # (V, 2K)
+        combined = torch.matmul(lhs, rhs.T)               # (B, N, V)
 
-            # Prior-side bias: quad_p + log_det_p
-            prior_bias = (mu_p ** 2 * inv_sigma_p).sum(-1) + torch.log(sigma_p_d).sum(-1)  # (V,)
+        # Prior-side bias: quad_p + log_det_p
+        prior_bias = (mu_p ** 2 * inv_sigma_p).sum(-1) + torch.log(sigma_p_d).sum(-1)  # (V,)
 
         scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0))
         logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))

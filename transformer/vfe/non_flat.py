@@ -84,9 +84,7 @@ The per-pair :math:`(\Omega_{ij}, \Omega_{ij}^{-1})` tensor has shape
 ``(B, N, N, d_h, d_h)`` per irrep block. For the user's preset config
 (B=32, N=64, K=20 with 2 blocks of d=10) this is ~104 MB at fp32 per
 forward, ~3× that with the autograd graph for ``torch.linalg.matrix_exp``.
-Acceptable for short sequences; longer N is OOM-prone. A tile-size knob is
-exposed via :class:`VFEConfig.non_flat_tile_size` for chunked aggregation;
-``0`` means no tiling (full pairwise materialization).
+Acceptable for short sequences; longer N is OOM-prone.
 """
 
 from __future__ import annotations
@@ -221,6 +219,13 @@ class VFENonFlatConnection(nn.Module):
             g_fro_sq = (generators ** 2).sum(dim=(-2, -1)).clamp(min=1e-12)  # (n_gen,)
         self.register_buffer('g_fro_sq', g_fro_sq)
 
+        # W() cache: invalidated by W_raw._version bumps. Declared here so
+        # they're visible to instance-attribute static analysis, and the
+        # initial key is a sentinel that never matches a real _version (which
+        # starts at 0 after construction).
+        self._W_cache_key: int = -1
+        self._W_cache: Optional[torch.Tensor] = None
+
     # -- properties -----------------------------------------------------------
 
     @property
@@ -237,8 +242,17 @@ class VFENonFlatConnection(nn.Module):
         accumulate at W_raw across the multiple downstream consumers.
         """
         cache_key = self.W_raw._version
-        if getattr(self, '_W_cache_key', -1) == cache_key:
-            return self._W_cache
+        cached = self._W_cache
+        # Cross-check device: ``.to(device)`` moves W_raw (a parameter) but
+        # doesn't touch _W_cache (a plain attr). After such a move, _version
+        # still bumps so this normally re-fires anyway, but guard explicitly
+        # for the edge case where the version hasn't advanced.
+        if (
+            cached is not None
+            and self._W_cache_key == cache_key
+            and cached.device == self.W_raw.device
+        ):
+            return cached
         W_masked = self.W_raw * self.W_block_mask
         result = 0.5 * (W_masked - W_masked.transpose(-1, -2))
         self._W_cache_key = cache_key
@@ -412,7 +426,7 @@ def compute_kl_attention_pairwise(
     sigma: torch.Tensor,
     omega_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
     irrep_dims: List[int],
-    kappa,
+    kappa: "float | torch.Tensor",
     mask: Optional[torch.Tensor] = None,
     mask_self_attention: bool = True,
     eps: float = 1e-8,
@@ -472,9 +486,11 @@ def compute_kl_attention_pairwise(
         mu_target = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)  # (B, N, N, d_h)
 
         # σ_target_ij[b, i, j, k] = Σ_l Omega_ij[b, i, j, k, l]² · σ_j[b, j, l]
-        # (diagonal-of-sandwich approx)
+        # (diagonal-of-sandwich approx). Folded Omega_h**2 into the einsum
+        # operand list to avoid materializing the (B, N, N, d_h, d_h) square
+        # as a temporary.
         sigma_target = torch.einsum(
-            'bijkl,bjl->bijk', Omega_h ** 2, sigma_h,
+            'bijkl,bijkl,bjl->bijk', Omega_h, Omega_h, sigma_h,
         ).clamp(min=eps)
 
         # KL(N(μ_i, diag σ_i) || N(μ_target, diag σ_target)) summed over k.

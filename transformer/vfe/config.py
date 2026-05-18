@@ -32,11 +32,11 @@ class VFEConfig:
     irrep_spec: List[Tuple[str, int, int]] = field(
         default_factory=lambda: [('l0', 8, 8)]  # 8 heads x dim 8 = K=64
     )
-    n_layers: int = 4                    # L: number of VFE blocks
+    n_layers: int = 1                    # L: number of VFE blocks
     max_seq_len: int = 128
 
     # === E-step dynamics ===
-    n_e_steps: int = 3                   # T_E: inner loop iterations per layer
+    n_e_steps: int = 1                   # T_E: inner loop iterations per layer
     e_mu_lr: float = 0.1                 # eta_mu: mean natural gradient step size
     e_sigma_lr: float = 0.001            # eta_sigma: covariance retraction step size
     e_sigma_q_trust: float = 5.0         # Trust-region clamp on whitened |delta_sigma/sigma|
@@ -160,7 +160,7 @@ class VFEConfig:
     use_non_flat_transport: bool = False
     non_flat_max_strength: float = 1.0       # s_max in s = s_max·tanh(ρ)
     non_flat_per_edge_delta_max: float = 1.0  # δ_max bound on ‖δ_ij·G‖_F
-    non_flat_tile_size: int = 0               # 0 = no tiling; >0 = j-axis chunk size
+    non_flat_tile_size: int = 0               # Reserved for future j-axis chunked aggregation. The tiled path is not yet implemented; non-zero values are silently treated as 0 today.
 
     # === Head mixer ===
     # Schur-commutant per-irrep-type mixer applied after the E-step (and
@@ -187,7 +187,20 @@ class VFEConfig:
     use_prior_bank: bool = False
 
     # === Training ===
-    learning_rate: float = 3e-4
+    # Per-group M-step (outer AdamW) learning rates. Mirrors the e_*_lr style
+    # of the E-step. Each LR applies to the param group whose names match the
+    # pattern in trainer.py::_build_optimizer; all groups share the same
+    # cosine+warmup schedule (LambdaLR, trainer.py::_build_scheduler), so the
+    # ratios stay fixed across training and the absolute values cosine-decay
+    # together.
+    m_mu_lr: float = 1e-3        # PriorBank.base_mu
+    m_sigma_lr: float = 5e-5     # PriorBank.base_log_sigma, decode_log_scale
+    m_phi_lr: float = 1e-4       # PriorBank.phi_embed, Positional.pos_phi
+    m_hyper_lr: float = 1e-5     # E-step learnable hyperparams: raw_c0, raw_b0,
+                                 # log_kappa, _phi_preconditioner
+    m_other_lr: float = 3e-4     # Everything else (head_mixer, non_flat W_raw,
+                                 # output projection, ...). Also the AdamW
+                                 # default lr (harmless: every group sets its own).
     weight_decay: float = 0.05
     warmup_steps: int = 1000
     max_steps: int = 50000
@@ -236,6 +249,14 @@ class VFEConfig:
                 f"irrep_spec gives K={computed_dim} but embed_dim={self.embed_dim}. "
                 f"These must match."
             )
+        for _lr_field in ('m_mu_lr', 'm_sigma_lr', 'm_phi_lr', 'm_hyper_lr', 'm_other_lr'):
+            _v = getattr(self, _lr_field)
+            if _v < 0.0:
+                raise ValueError(
+                    f"{_lr_field}={_v} must be >= 0. Use 0 only to deliberately "
+                    f"freeze the corresponding param group; negative values are "
+                    f"never valid."
+                )
         if self.rope_full_gauge not in _ROPE_FULL_GAUGE_VALUES:
             raise ValueError(
                 f"rope_full_gauge must be one of {_ROPE_FULL_GAUGE_VALUES}; "
