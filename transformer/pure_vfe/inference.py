@@ -137,22 +137,26 @@ def set_block_diag(Sigma, blocks, H, K_h):
     return Sigma
 
 
-def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij):
+def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij,
+                kl_prior=None):
     """
     Compute the scalar VFE for monitoring.
 
     F = Σ_i α_i KL(q_i||p_i) + Σ_{ij} β_ij KL(q_i||Ω_ij q_j)
 
-    Returns: scalar VFE value
+    Args:
+        kl_prior: Optional precomputed ``kl_divergence(mu, Sigma, prior_mu,
+            prior_Sigma)`` from elsewhere in the E-step loop — passes through
+            without recomputing the duplicate inverse + logdet.
+
+    Returns: 0-dim scalar tensor (callers should batch `.item()` after the
+    E-step loop to avoid per-iter GPU→CPU syncs).
     """
-    # Prior term
-    kl_prior = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)  # [B, N]
+    if kl_prior is None:
+        kl_prior = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)
     prior_term = (alpha * kl_prior).sum()
-
-    # Alignment term (β_ij already softmax-normalized)
     align_term = (beta * kl_ij).sum()
-
-    return (prior_term + align_term).item()
+    return prior_term + align_term
 
 
 @torch.no_grad()
@@ -301,33 +305,46 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # Warm start: stronger floor in early iterations to prevent initial drift.
         # Decays linearly from 3× floor to 1× floor over E-step iterations.
         _alpha_floor_scaled = _alpha_floor * (1.0 + 2.0 * (1.0 - step / max(config.n_esteps - 1, 1)))
+        # Compute KL(q_i || p_i) once and share it with compute_vfe below —
+        # both consumers want the same [B, N] tensor; recomputing burned a
+        # full safe_inverse + safe_logdet on prior_Sigma per E-step iter.
+        _kl_prior_shared = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)
         alpha = state_dependent_alpha(
             mu, Sigma, prior_mu, prior_Sigma, config.alpha_b0, config.alpha_c0,
             alpha_floor=_alpha_floor_scaled,
+            precomputed_kl=_kl_prior_shared,
         )  # [B, N]
 
         # --- Monitor VFE ---
-        # Use raw precomp KL for VFE monitoring (geometric truth, not RoPE-rotated)
+        # Use raw precomp KL for VFE monitoring (geometric truth, not RoPE-rotated).
+        # Reuse the same kl_divergence(mu, Sigma, prior_mu, prior_Sigma) for both
+        # state_dependent_alpha (above) and compute_vfe instead of recomputing.
         if use_rope:
             kl_ij_raw = pairwise_kl(precomp, causal=config.causal)
-            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij_raw)
+            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij_raw,
+                              kl_prior=_kl_prior_shared)
         else:
             kl_ij_raw = kl_ij
-            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij)
+            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij,
+                              kl_prior=_kl_prior_shared)
+        # Store GPU tensor; convert to Python floats once after the E-step loop
+        # to avoid per-iter GPU→CPU sync stalls.
         vfe_history.append(vfe)
 
         # --- VFE divergence early stopping ---
+        # One unavoidable sync per iter (the `if` requires a Python bool),
+        # down from the previous ≥4 syncs per iter. Falls through cheaply
+        # when the loop is well-behaved.
         if len(vfe_history) >= 2:
-            _curr_vfe = vfe_history[-1]
-            _prev_vfe_val = vfe_history[-2]
-            # Detect divergence: VFE increased by more than 10% (works for both signs)
-            _vfe_increase = _curr_vfe - _prev_vfe_val
-            _vfe_scale = abs(_prev_vfe_val) + 1e-10
-            if _vfe_increase > 0.1 * _vfe_scale:  # 10% increase
+            _prev = vfe_history[-2]
+            _diverged = ((vfe - _prev) > 0.1 * (_prev.abs() + 1e-10)).item()
+            if _diverged:
+                _curr_f = vfe.item()
+                _prev_f = _prev.item()
                 warnings.warn(
                     f"E-step VFE divergence at step {step}: "
-                    f"{vfe_history[-2]:.2f} -> {vfe_history[-1]:.2f} "
-                    f"(increase {_vfe_increase:.3f}, scale {_vfe_scale:.3f}), stopping early",
+                    f"{_prev_f:.2f} -> {_curr_f:.2f} "
+                    f"(increase {_curr_f - _prev_f:.3f}, scale {abs(_prev_f) + 1e-10:.3f}), stopping early",
                     RuntimeWarning, stacklevel=2,
                 )
                 break
@@ -355,7 +372,8 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # 3. Total mean gradient + element-wise clamp
         grad_mu = grad_mu_align + grad_mu_prior
         grad_mu = torch.clamp(grad_mu, -grad_clamp, grad_clamp)
-        diagnostics['grad_norm_mu'].append(grad_mu.norm().item())
+        # Defer .item() to end of E-step loop; store as GPU tensor.
+        diagnostics['grad_norm_mu'].append(grad_mu.norm())
 
         # 4. Natural gradient: Δμ = -η Σ ∂F/∂μ (Fisher-Rao for Gaussian mean)
         nat_mu = torch.einsum('bnij,bnj->bni', Sigma, grad_mu)
@@ -393,7 +411,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
             - (alpha_expanded + 1.0) * Sigma_h_inv
         )
         grad_Sigma_h = torch.clamp(grad_Sigma_h, -grad_clamp, grad_clamp)
-        diagnostics['grad_norm_sigma'].append(grad_Sigma_h.norm().item())
+        diagnostics['grad_norm_sigma'].append(grad_Sigma_h.norm())
 
         # 4. Natural gradient on SPD: ΔΣ = -2 Σ sym(∂F/∂Σ) Σ
         nat_Sigma_h = natural_grad_sigma(grad_Sigma_h, Sigma_h)
@@ -424,7 +442,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # Element-wise safety clamp on Euclidean gradient (numerical guard
         # against extreme values from cascading inversions in vfe_grad_Omega)
         grad_Omega = torch.clamp(grad_Omega, -omega_grad_clamp, omega_grad_clamp)
-        diagnostics['grad_norm_omega'].append(grad_Omega.norm().item())
+        diagnostics['grad_norm_omega'].append(grad_Omega.norm())
 
         # Natural gradient via Lie algebra with Riemannian trust region:
         # ξ = Ωᵀ·g, clip ||ξ||_F ≤ trust_radius, ΔΩ = Ω·ξ
@@ -454,8 +472,19 @@ def e_step(token_ids, model, config, effective_lrs=None):
 
     # --- Decode: logit_v = -KL(q_i || π_v) / τ_decode ---
     _decode_tau = getattr(config, 'decode_tau', 1.0)
+    _prior_inv, _prior_logdet = model.prior_decode_cache()
     logits = kl_decode_logits(mu, Sigma, model.prior_mu, model.prior_Sigma,
-                              decode_tau=_decode_tau)
+                              decode_tau=_decode_tau,
+                              prior_Sigma_inv_bank=_prior_inv,
+                              prior_logdet_bank=_prior_logdet)
+
+    # Batch-convert per-iter GPU tensors to Python floats here — one .tolist()
+    # call per list, replacing per-iter .item() syncs inside the E-step loop.
+    if vfe_history:
+        vfe_history = torch.stack(vfe_history).tolist()
+    for _k in ('grad_norm_mu', 'grad_norm_sigma', 'grad_norm_omega'):
+        if diagnostics[_k]:
+            diagnostics[_k] = torch.stack(diagnostics[_k]).tolist()
 
     diagnostics['nan_events'] = nan_events
     diagnostics['final_beta'] = beta  # For attention visualization

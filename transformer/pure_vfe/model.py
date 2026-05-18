@@ -93,9 +93,41 @@ class PureVFETransformer:
             self.m1_Omega = None
 
         # -----------------------------------------------------------
+        # Decode cache: prior_Sigma_inv and prior_logdet, both of shape
+        # (V, K, K) / (V,). kl_decode_logits previously recomputed these
+        # ~50k inversions and log-dets on every forward pass; the bank
+        # only changes during M-step, so cache and invalidate on update.
+        # -----------------------------------------------------------
+        self._prior_decode_inv: Optional[torch.Tensor] = None
+        self._prior_decode_logdet: Optional[torch.Tensor] = None
+
+        # -----------------------------------------------------------
         # Training step counter (for LR scheduling)
         # -----------------------------------------------------------
         self.global_step = 0
+
+    def invalidate_prior_decode_cache(self) -> None:
+        """Drop the cached ``prior_Sigma_inv`` and ``prior_logdet``.
+
+        Call after any in-place update to ``model.prior_Sigma`` (the M-step
+        and any test setup mutating the bank). ``kl_decode_logits`` will
+        repopulate the cache on the next call.
+        """
+        self._prior_decode_inv = None
+        self._prior_decode_logdet = None
+
+    def prior_decode_cache(self):
+        """Lazily compute and return ``(prior_Sigma_inv, prior_logdet)`` over
+        the full prior bank, used by ``kl_decode_logits``.
+
+        Cached across forwards; invalidate via
+        :meth:`invalidate_prior_decode_cache` after any M-step write.
+        """
+        if self._prior_decode_inv is None or self._prior_decode_logdet is None:
+            from .gaussians import safe_inverse, safe_logdet
+            self._prior_decode_inv = safe_inverse(self.prior_Sigma)
+            self._prior_decode_logdet = safe_logdet(self.prior_Sigma)
+        return self._prior_decode_inv, self._prior_decode_logdet
 
     def _lr_scale(self) -> float:
         r"""Compute LR multiplier from warmup + cosine decay schedule.
@@ -237,7 +269,7 @@ class PureVFETransformer:
         torch.save(state, path)
 
     @classmethod
-    def load(cls, path: str, device: Optional[str] = None, trusted: bool = True) -> "PureFEPModel":
+    def load(cls, path: str, device: Optional[str] = None, trusted: bool = False) -> "PureVFETransformer":
         """Load model from disk.
 
         Legacy checkpoints with pos_Omega/pos_phi/m1_pos_Omega keys are
@@ -246,12 +278,30 @@ class PureVFETransformer:
         Args:
             path: Path to checkpoint file.
             device: Optional device override for the loaded config.
-            trusted: If True (default), uses ``weights_only=False`` which
-                permits pickle-based deserialization of the bundled config
-                dataclass. Set False to refuse arbitrary code execution
-                from a hostile checkpoint, at the cost of failing on
-                non-tensor fields.
+            trusted: Default ``False`` — uses ``weights_only=True`` and
+                allowlists only our own ``PureVFEConfig`` dataclass via
+                ``torch.serialization.add_safe_globals``. Blocks pickle-
+                based RCE from a hostile checkpoint while still loading
+                checkpoints saved by this codebase. Set ``True`` to fully
+                disable ``weights_only`` (legacy / inspection mode).
         """
+        if not trusted:
+            # Allowlist our own dataclass so weights_only=True can unpickle
+            # the bundled config without enabling arbitrary class loading.
+            from .config import PureVFEConfig
+            try:
+                torch.serialization.add_safe_globals([PureVFEConfig])
+            except AttributeError:
+                # Older PyTorch without add_safe_globals — fall back to
+                # the trusted path with a warning.
+                import warnings
+                warnings.warn(
+                    "torch.serialization.add_safe_globals unavailable; "
+                    "falling back to weights_only=False. Upgrade PyTorch "
+                    "to >= 2.6 for safe loading.",
+                    RuntimeWarning, stacklevel=2,
+                )
+                trusted = True
         data = torch.load(path, weights_only=not trusted)
         config = data['config']
         if device is not None:

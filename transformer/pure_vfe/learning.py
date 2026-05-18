@@ -194,9 +194,12 @@ class MStepAccumulator:
         # --- Observation gradient (analytic softmax-CE) ---
         if logits is None:
             _decode_tau = getattr(config, 'decode_tau', 1.0)
+            _prior_inv, _prior_logdet = model.prior_decode_cache()
             logits = kl_decode_logits(
                 mu_star, Sigma_star, model.prior_mu, model.prior_Sigma,
                 decode_tau=_decode_tau,
+                prior_Sigma_inv_bank=_prior_inv,
+                prior_logdet_bank=_prior_logdet,
             )
         ce_grad = softmax_ce_gradient(logits, targets)  # [B, N, V]
 
@@ -456,6 +459,9 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
             Sigma_new = V @ torch.diag_embed(clamped) @ V.transpose(-2, -1)
             Sigma_new = symmetrize(Sigma_new)
     model.prior_Sigma[update_tokens] = Sigma_new
+    # prior_Sigma was just mutated — drop the kl_decode_logits cache so the
+    # next forward repopulates from the current values.
+    model.invalidate_prior_decode_cache()
 
     # ================================================================
     # Prior gauge frame gradient
@@ -643,8 +649,11 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # ================================================================
     if logits is None:
         _decode_tau = getattr(config, 'decode_tau', 1.0)
+        _prior_inv, _prior_logdet = model.prior_decode_cache()
         logits = kl_decode_logits(mu_star, Sigma_star, model.prior_mu, model.prior_Sigma,
-                                  decode_tau=_decode_tau)
+                                  decode_tau=_decode_tau,
+                                  prior_Sigma_inv_bank=_prior_inv,
+                                  prior_logdet_bank=_prior_logdet)
     ce_grad = softmax_ce_gradient(logits, targets)  # [B, N, V]
 
     # CE loss for monitoring
@@ -865,6 +874,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             Sigma_new = symmetrize(Sigma_new)
 
     model.prior_Sigma[update_tokens] = Sigma_new
+    model.invalidate_prior_decode_cache()
 
     # ---- Prior gauge frame gradient ----
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)

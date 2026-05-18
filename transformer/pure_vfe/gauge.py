@@ -164,83 +164,74 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
 
     ∂F/∂Ω_i = Σ_j β_ij · ∂KL_ij/∂Ω_i  (forward contribution)
 
-    Fully vectorized over all (b, i, j) pairs per head.
+    Fully vectorized over all (b, h, i, j). Reuses ``precomp['Omega_inv']``
+    and ``precomp['Sigma_inv']`` to skip two redundant batched inversions
+    per head, and computes ``Om_ij⁻¹ = Om_j · Om_i⁻¹`` from the (already
+    available) per-token inverses instead of inverting the full pairwise
+    ``[B, H, N, N, K_h, K_h]`` Om_ij tensor.
 
     Args:
         mu_h: [B, N, H, K_h] per-head means
         Sigma_h: [B, N, H, K_h, K_h] per-head covariances
         Omega: [B, N, H, K_h, K_h] gauge frames
         beta: [B, H, N, N] attention weights
-        kl_ij: [B, H, N, N] pairwise KL
-        precomp: precomputed quantities dict
+        kl_ij: [B, H, N, N] pairwise KL (unused — present for API stability)
+        precomp: precomputed quantities dict (must include 'Omega_inv' and 'Sigma_inv')
 
     Returns: [B, N, H, K_h, K_h] gradient ∂F/∂Ω_i
     """
+    _ = kl_ij  # accepted for API stability, not consumed
     B, N, H, K_h = mu_h.shape
-    device = mu_h.device
-    dtype = mu_h.dtype
 
-    grad_Omega = torch.zeros(B, N, H, K_h, K_h, device=device, dtype=dtype)
+    # Head-first layouts (matching precomp's [B, H, N, ...] convention).
+    mu = mu_h.permute(0, 2, 1, 3)                # [B, H, N, K_h]
+    Sig = Sigma_h.permute(0, 2, 1, 3, 4)         # [B, H, N, K_h, K_h]
+    Om = Omega.permute(0, 2, 1, 3, 4)            # [B, H, N, K_h, K_h]
+    Om_inv = precomp['Omega_inv']                # [B, H, N, K_h, K_h] — reused
+    Sig_inv = precomp['Sigma_inv']               # [B, H, N, K_h, K_h] — reused
 
-    # Transpose to head-first for consistency with beta
-    mu = mu_h.permute(0, 2, 1, 3)          # [B, H, N, K_h]
-    Sig = Sigma_h.permute(0, 2, 1, 3, 4)   # [B, H, N, K_h, K_h]
-    Om = Omega.permute(0, 2, 1, 3, 4)      # [B, H, N, K_h, K_h]
+    # Om_ij = Om_i @ Om_j⁻¹  and  Om_ij⁻¹ = Om_j @ Om_i⁻¹  (algebraic identity).
+    # Materialize both as [B, H, N_i, N_j, K_h, K_h] without explicit inversion.
+    Om_i = Om.unsqueeze(3)                       # [B, H, N, 1, K_h, K_h]
+    Om_j = Om.unsqueeze(2)                       # [B, H, 1, N, K_h, K_h]
+    Om_i_inv = Om_inv.unsqueeze(3)               # [B, H, N, 1, K_h, K_h]
+    Om_j_inv = Om_inv.unsqueeze(2)               # [B, H, 1, N, K_h, K_h]
+    Om_ij = Om_i @ Om_j_inv                      # [B, H, N, N, K_h, K_h]
+    Om_ij_inv = Om_j @ Om_i_inv                  # [B, H, N, N, K_h, K_h]
+    Om_ij_invT = Om_ij_inv.transpose(-2, -1)
 
-    # Iterate over heads only (not over batch or positions)
-    for h in range(H):
-        mu_h_s = mu[:, h]           # [B, N, K_h]
-        Sig_h_s = Sig[:, h]         # [B, N, K_h, K_h]
-        Om_h_s = Om[:, h]           # [B, N, K_h, K_h]
-        beta_h = beta[:, h]         # [B, N, N]
+    # Λ_ij = Om_ij⁻ᵀ Σ_j⁻¹ Om_ij⁻¹
+    Sig_j_inv = Sig_inv.unsqueeze(2)             # [B, H, 1, N, K_h, K_h]
+    Lambda_ij = Om_ij_invT @ Sig_j_inv @ Om_ij_inv
 
-        # Compute Ω_j⁻¹ for all j: [B, N, K_h, K_h]
-        Om_inv = torch.linalg.inv(Om_h_s)
+    # δ_ij = μ_i - Om_ij μ_j
+    Om_ij_mu_j = torch.einsum('bhijpq,bhjq->bhijp', Om_ij, mu)
+    delta_ij = mu.unsqueeze(3) - Om_ij_mu_j      # [B, H, N, N, K_h]
 
-        # Compute Ω_ij = Ω_i @ Ω_j⁻¹ for all (i,j) pairs
-        Om_ij = Om_h_s[:, :, None] @ Om_inv[:, None, :]  # [B, N, N, K_h, K_h]
-        Om_ij_inv = torch.linalg.inv(Om_ij)               # [B, N, N, K_h, K_h]
-        Om_ij_invT = Om_ij_inv.transpose(-2, -1)
+    # Term 1: -Λ_ij δ_ij μ_jᵀ
+    Lam_delta = torch.einsum('bhijpq,bhijq->bhijp', Lambda_ij, delta_ij)
+    term1 = -Lam_delta.unsqueeze(-1) * mu.unsqueeze(2).unsqueeze(-2)
 
-        # Σ_j⁻¹ for all j
-        Sig_j_inv = safe_inverse(Sig_h_s)  # [B, N, K_h, K_h]
+    # Term 2: -Λ_ij (Σ_i + δ_ij δ_ijᵀ) Om_ij⁻ᵀ
+    outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
+    Sig_i = Sig.unsqueeze(3)                     # [B, H, N, 1, K_h, K_h]
+    inner_ij = Sig_i + outer_ij
+    term2 = -(Lambda_ij @ inner_ij @ Om_ij_invT)
 
-        # Λ_ij = Ω_ij⁻ᵀ Σ_j⁻¹ Ω_ij⁻¹: [B, N_i, N_j, K_h, K_h]
-        Lambda_ij = Om_ij_invT @ Sig_j_inv[:, None, :] @ Om_ij_inv
+    # Term 3: Om_ij⁻ᵀ
+    term3 = Om_ij_invT
 
-        # δ_ij = μ_i - Ω_ij μ_j: [B, N_i, N_j, K_h]
-        Om_ij_mu_j = torch.einsum('bijnk,bjk->bijn', Om_ij, mu_h_s)
-        delta_ij = mu_h_s[:, :, None] - Om_ij_mu_j  # [B, N_i, N_j, K_h]
+    dKL_dOij = term1 + term2 + term3
+    # NaN propagation guard matching the legacy per-head loop.
+    dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
 
-        # ∂KL/∂Ω_ij:
-        # Term 1: -Λ δ μ_jᵀ
-        Lam_delta = torch.einsum('bijpq,bijq->bijp', Lambda_ij, delta_ij)
-        term1 = -Lam_delta.unsqueeze(-1) * mu_h_s[:, None, :].unsqueeze(-2)
+    # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
+    Om_j_invT = Om_inv.transpose(-2, -1).unsqueeze(2)  # [B, H, 1, N, K_h, K_h]
+    dKL_dOi = dKL_dOij @ Om_j_invT
 
-        # Term 2: -Λ (Σ_i + δδᵀ) Ω_ij⁻ᵀ
-        outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
-        inner_ij = Sig_h_s[:, :, None] + outer_ij  # [B, N_i, N_j, K_h, K_h]
-        term2 = -(Lambda_ij @ inner_ij @ Om_ij_invT)
-
-        # Term 3: Ω_ij⁻ᵀ
-        term3 = Om_ij_invT
-
-        # The ½ from KL = ½[...] is already absorbed into each term's derivation.
-        dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
-        # Clamp intermediate to prevent NaN propagation from cascading
-        # inversions through the chain rule (O(N²) matrices per head).
-        dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
-
-        # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
-        Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N_j, K_h, K_h]
-        dKL_dOi = dKL_dOij @ Om_j_invT[:, None, :]  # [B, N_i, N_j, K_h, K_h]
-
-        # Weighted sum: Σ_j β_ij · ∂KL/∂Ω_i
-        grad_h = torch.einsum('bij,bijpq->bipq', beta_h, dKL_dOi)  # [B, N, K_h, K_h]
-
-        grad_Omega[:, :, h] = grad_h
-
-    return grad_Omega
+    # Weighted sum over j: ∂F/∂Ω_i = Σ_j β_ij · ∂KL/∂Ω_i
+    grad_bh = torch.einsum('bhij,bhijpq->bhipq', beta, dKL_dOi)  # [B, H, N, K_h, K_h]
+    return grad_bh.permute(0, 2, 1, 3, 4).contiguous()           # [B, N, H, K_h, K_h]
 
 
 def vfe_grad_Omega_full(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
