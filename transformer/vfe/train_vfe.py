@@ -30,11 +30,11 @@ config = {
     'irrep_spec':      [('fund', 2, 10)],   # 2 heads x dim 10 = K=20
     
     
-    'batch_size':               32,    
+    'batch_size':               64,    
     'max_seq_len':              64,
     'max_steps':                5000,
  
-    
+    'use_prior_bank':           False, 
     # === E-step dynamics ===
     'n_e_steps':                1,         # Inner-loop iterations per layer
     'n_layers':                 1,
@@ -44,11 +44,13 @@ config = {
     'e_phi_lr':                 0.05,      # Gauge frame step size
     
     'alpha':                    1.0,       # KL(q||p) prior self-coupling weight
-    'alpha_divergence':         1.0,       # Rényi α (1.0=KL, 0.5=Bhattacharyya)
+    'alpha_divergence':         0.3,       # Rényi α (1.0=KL, 0.5=Bhattacharyya)
     
     'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
+    
     'lambda_align':             10.0,       # Direct attention coupling (β · ∂KL/∂θ)
     'lambda_soft':              0.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
+    
     'kappa':                    1.0,       # Attention temperature
     'learnable_kappa':          False,     # Learn per-layer kappa
 
@@ -113,10 +115,14 @@ config = {
     'sigma_max':                12.0,
     'bch_order':                3,          # BCH truncation (1=additive, ≥2=commutator terms)
     
+    'use_autograd_mu_sigma':    False,
+    'use_equivariant_head_mixer':   False,
+    'gauge_covariant_ridge':  False,
+    
     
     # === Logging / evaluation ===
-    'log_interval':             100,
-    'eval_interval':            1000,
+    'log_interval':             200,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
 }
 

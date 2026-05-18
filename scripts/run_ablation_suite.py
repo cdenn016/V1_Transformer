@@ -44,15 +44,15 @@ from transformer.training.experiment_runner import (
 BASELINE_CONFIG = {
    # === Architecture ===
    'vocab_size':                 50257,
-   'embed_dim':                  20,
-   'max_seq_len':                32,
+   'embed_dim':                  10,
+   'max_seq_len':                128,
    
    
    
-   'batch_size':                 300, 
-   'max_steps':                  4000,
+   'batch_size':                 64, 
+   'max_steps':                  15000,
     
-   'stride':                     32,  
+   'stride':                     128,  
    #'eval_stride':                128,                                                                                              
    'random_offset_per_epoch':    True,
    'stride_base_seed':           6,
@@ -109,8 +109,8 @@ BASELINE_CONFIG = {
 
    'use_layernorm':              True,  #breaks gauge equivariance unless mahal
    'use_residual':               False,  #set False if skip-attention=True
-   'use_output_projection':      False,
-   'use_equivariant_head_mixer': True,  # Opt-in principled replacement for W_o
+   'use_output_projection':      True,
+   'use_equivariant_head_mixer': False,  # Opt-in principled replacement for W_o
    
    
    'evolve_sigma':               True,
@@ -203,7 +203,7 @@ BASELINE_CONFIG = {
 
    # === Logging ===
    'log_interval':               200,
-   'eval_interval':              20000,
+   'eval_interval':              2000,
    'checkpoint_interval':        25000,
    'semantic_analysis_interval': 4000,
    'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
@@ -454,21 +454,21 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'values': [0.1, 0.125, 0.15, 0.175, 0.2, 0.25],
-        'baseline_value': 0.078,
+        'values': [0.02, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1],
+        'baseline_value': 0.025,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'values': [0.01, 0.015, 0.02, 0.025, 0.03, 0.035],
+        'values': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.035],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'values': [0.002, 0.003, 0.004, 0.005, 0.0075, 0.01],
+        'values': [0.0005, 0.001, 0.002, 0.003, 0.004, 0.005, 0.0075],
         'baseline_value': 0.0025,
     },
 
@@ -564,10 +564,10 @@ SWEEP_ORDER = [
    # 'E_alpha',
    # 'E_lambda_belief',
     #'E_lambda_softmax',
-  
-    'M_phi_lr', #0.00325 
-    'M_sigma_p_lr',  #0.015
     'M_mu_p_lr',     #0.0825
+   # 'M_phi_lr', #0.00325 
+    'M_sigma_p_lr',  #0.015
+    
    
     'E_mu_q_lr',
     

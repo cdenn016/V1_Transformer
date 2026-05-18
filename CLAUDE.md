@@ -4,9 +4,9 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ## Hard Constraints
 
-**NO NEURAL NETWORKS**: No `nn.Linear`, no MLPs, no learned W_Q/W_K/W_V projections, no activation functions (GELU, ReLU, etc.). The only retained neural component is a linear output projection from K dimensions to vocabulary size (subsumed by the PriorBank decode, `logits = -KL(q || π_v)/τ`, when `use_prior_bank=True`). If you are tempted to add an MLP or activation function, you are violating the core thesis. **Documented exceptions**: `connection.py` MLP mode (optional non-flat transport research variant; bilinear default is constraint-compliant), `attention.py` `use_output_projection` (default False as of 2026-04-20 per `VFE_Transformer_Idea.md` §18.2 — "No separate nn.Linear output projection; Law 3 is enforced by using the same PriorBank for both ends"; ablation-only option, breaks gauge covariance because W_O acts on μ but not Σ). The opt-in `use_equivariant_head_mixer` provides a principled replacement (Schur-commutant mixer with n² scalar params per irrep type, applied symmetrically to μ and `M·Σ·Mᵀ`), strictly equivariant only under tied gauges — warns at construction when gauges are per-head independent.
+**NO NEURAL NETWORKS**: No `nn.Linear`, no MLPs, no learned W_Q/W_K/W_V projections, no activation functions (GELU, ReLU, etc.). The only retained neural component is a linear output projection from K dimensions to vocabulary size (subsumed by the PriorBank decode, `logits = -KL(q || π_v)/τ`, when `use_prior_bank=True`). If you are tempted to add an MLP or activation function, you are violating the core thesis. **Documented exceptions**: `connection.py` MLP mode (optional non-flat transport research variant; bilinear default is constraint-compliant)
 
-**NO CLI ARGUMENTS (with one documented exception)**: Entry points use the click-to-run pattern. Edit config dicts directly in the file, then press Run. Do not add `argparse`, `click`, `typer`, or any CLI flag parsing to *new* entry points. **Exception**: `transformer/train_publication.py` uses `argparse` for `--mode` / `--ffn_mode` / `--device` / `--checkpoint_dir` / `--seed` / `--dataset` / `--semantic_analysis_interval` because it dispatches between many preset configurations defined as dicts inside the same file. The CLI here selects which config dict to run, it does not expose tunable hyperparameters — those still live in the file-level dicts. Do not extend this exception to other entry points, and do not add new `add_argument` calls that bypass the dict-based config contract.
+**NO CLI ARGUMENTS (with one documented exception)**: Entry points use the click-to-run pattern. Edit config dicts directly in the file, then press Run. Do not add `argparse`, `click`, `typer`, or any CLI flag parsing to *new* entry points.
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug. diagonal approximation is allowable for speed
 
@@ -29,6 +29,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 **check claude-mem for prior session context when resuming work on a topic**
 
 Before you say the fix is done: (1) open my active config file, (2) trace every relevant key through the config loader and any override logic, (3) confirm the exact line you changed is reached at runtime under my config, (4) only then run tests and report.
+
+**CODE FOCUS** when investigating and/or auditing the codebase do NOT rely on code comments....focus on the actual code and paths
 
 
 ##Agent policy
@@ -86,7 +88,7 @@ F = alpha * KL(q_i || p_i)                                          # self-coupl
 | `'em_phi_p'` | detached | detached | frozen in E-step | mu,sigma detached |
 | `'vfe_default'` (transformer/vfe/) | attached | frozen at embedding¹ | full autograd | attached |
 
-¹ The `transformer/vfe/` package operates in its own gradient profile that does not correspond to any of the three `em_mode` values above. `mu_p` is attached (the previous layer's posterior `mu_q` becomes the next layer's `mu_p` via `vfe/stack.py`); `sigma_p` is structurally frozen at the embedding value when `prior_handoff_sigma=0` (the default); `phi` is cloned with `requires_grad_(True)` at every E-step iteration in `vfe/e_step.py`, giving full autograd through the whole iteration sequence. The `vfe/` package does not currently honor `em_mode` switching — it is hardwired to this profile. Selecting any other `em_mode` requires routing through the legacy `transformer/core/variational_ffn.py` path.
+¹ The `transformer/vfe/` package operates in its own gradient profile that does not correspond to any of the three `em_mode` values above. `mu_p` is attached (the previous layer's posterior `mu_q` becomes the next layer's `mu_p` via `vfe/stack.py`); `sigma_p` is structurally frozen at the embedding value when `prior_handoff_sigma=0` (the default); `phi` is updated each E-step iteration via `_update_phi` in `vfe/e_step.py`, which constructs a fresh detached leaf `phi_for_grad = phi.detach().requires_grad_(True)` for the local alignment-loss backward, then retracts `phi` and reassigns it. The iteration sequence as a whole is autograd-tracked, but `phi` is not globally cloned per outer iteration. The `vfe/` package does not currently honor `em_mode` switching — it is hardwired to this profile. Selecting any other `em_mode` requires routing through the legacy `transformer/core/variational_ffn.py` path.
 
 ## Communication Style
 
