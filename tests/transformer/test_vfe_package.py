@@ -59,7 +59,7 @@ class TestVFEConfig:
     def test_construction_defaults(self):
         cfg = VFEConfig()
         assert cfg.embed_dim == 64
-        assert cfg.n_layers == 4
+        assert cfg.n_layers == 1
         assert cfg.diagonal_covariance is True
 
     def test_irrep_dims(self, cfg):
@@ -416,10 +416,13 @@ class TestLearnableKappa:
 
 class TestExactDiagonalTransport:
 
-    def test_config_default_true(self):
-        """exact_diagonal_transport defaults to True for mathematical exactness."""
+    def test_config_default_false(self):
+        """exact_diagonal_transport defaults to False — the diagonal-of-sandwich
+        approximation is the fast path used by all click-configs. Set to True
+        only when full Ω@Σ@Ω^T transport is required (paid in extra compute).
+        """
         cfg = VFEConfig()
-        assert cfg.exact_diagonal_transport is True
+        assert cfg.exact_diagonal_transport is False
 
 
 class TestFMonitorEnvelopeRouting:
