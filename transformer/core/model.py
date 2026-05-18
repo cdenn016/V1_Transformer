@@ -112,6 +112,20 @@ class GaugeTransformerLM(nn.Module):
                 See BlockConfig for the full list of 60+ parameters.
         """
         super().__init__()
+        # Snapshot the global torch RNG state at entry and restore on exit
+        # so that model construction is RNG-neutral for the surrounding
+        # stream. Without this, optional submodules (e.g. attention.W_O
+        # under use_output_projection=True) consume extra global RNG draws
+        # during construction and during self.apply(self._init_weights),
+        # leaving downstream consumers (e.g. DataLoader shuffling) at a
+        # different RNG position depending on which optional flags are
+        # set. Parameters inside the model remain deterministic from the
+        # user seed; only the surrounding global stream is held invariant.
+        _rng_entry_cpu = torch.random.get_rng_state()
+        _rng_entry_cuda = (
+            [torch.cuda.get_rng_state(i) for i in range(torch.cuda.device_count())]
+            if torch.cuda.is_available() else []
+        )
         # Snapshot the user's config dict so that (a) later edits to the
         # original dict don't silently change model behaviour, and (b) the
         # mutation at `config['gauge_param'] = gauge_param` below does not
@@ -366,6 +380,18 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         self.apply(self._init_weights)
 
+        # Re-seed out_proj.weight from a sub-generator derived from the
+        # user seed but independent of self.apply's depth-first traversal
+        # order. Any optional nn.Linear inside self.transformer (e.g.
+        # attention.output_proj when use_output_projection=True) consumes
+        # RNG draws before out_proj is reached, otherwise giving the
+        # vocab head different initial values from the same user seed.
+        _out_proj_seed = (torch.initial_seed() ^ 0xC0FFEE5A11D0E4) & 0xFFFFFFFFFFFFFFFF
+        _out_proj_gen = torch.Generator(device=self.out_proj.weight.device)
+        _out_proj_gen.manual_seed(_out_proj_seed)
+        with torch.no_grad():
+            self.out_proj.weight.normal_(mean=0.0, std=0.02, generator=_out_proj_gen)
+
         # Tie input/output embeddings (standard practice)
         # Note: Can't tie when PriorBank is active (it IS the shared encode/decode)
         # or when gauge_fixed_priors=True (no per-token embedding)
@@ -394,6 +420,13 @@ class GaugeTransformerLM(nn.Module):
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
         logger.info(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
+
+        # Restore the entry-time global RNG state. See snapshot comment at
+        # the top of __init__.
+        torch.random.set_rng_state(_rng_entry_cpu)
+        if _rng_entry_cuda:
+            for _i, _s in enumerate(_rng_entry_cuda):
+                torch.cuda.set_rng_state(_s, _i)
 
     # =========================================================================
     # Step 1: Extracted helper — cross-head permutation
