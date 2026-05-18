@@ -1106,42 +1106,36 @@ def run_full_visualization(
 
 
 # ============================================================================
-# CLI entry point
+# Click-to-run entry point
 # ============================================================================
+# CLI flags removed 2026-05-18 per CLAUDE.md "no CLI arguments" hard constraint.
+# Edit CONFIG below and press Run.
+
+CONFIG = {
+    'checkpoint':       'checkpoints_publication/.../best_model.pt',
+    'output_dir':       None,        # None = <checkpoint_dir>/interactive_viz
+    'run_shap':         True,        # Skip SHAP for faster runs
+    'run_hdbscan':      True,        # Skip HDBSCAN cluster discovery for faster runs
+    'umap_n_neighbors': 15,
+    'umap_min_dist':    0.1,
+}
+
 
 def main():
-    """Command-line entry point for interactive belief space visualization."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description='Interactive Belief Space Visualization (UMAP + Plotly + SHAP)',
-    )
-    parser.add_argument('checkpoint', type=str,
-                        help='Path to model checkpoint (best_model.pt)')
-    parser.add_argument('--output-dir', type=str, default=None,
-                        help='Output directory (default: checkpoint_dir/interactive_viz)')
-    parser.add_argument('--no-shap', action='store_true',
-                        help='Skip SHAP analysis (faster)')
-    parser.add_argument('--no-hdbscan', action='store_true',
-                        help='Skip HDBSCAN cluster discovery')
-    parser.add_argument('--umap-neighbors', type=int, default=15,
-                        help='UMAP n_neighbors (default: 15)')
-    parser.add_argument('--umap-min-dist', type=float, default=0.1,
-                        help='UMAP min_dist (default: 0.1)')
-
-    args = parser.parse_args()
-
-    if not Path(args.checkpoint).exists():
-        print(f"ERROR: Checkpoint not found: {args.checkpoint}")
+    """Click-to-run entry point for interactive belief space visualization."""
+    checkpoint = CONFIG['checkpoint']
+    if not Path(checkpoint).exists():
+        print(f"ERROR: Checkpoint not found: {checkpoint}")
+        print("Edit CONFIG['checkpoint'] at the top of this file and re-run.")
         return
 
     run_full_visualization(
-        checkpoint_path=args.checkpoint,
-        output_dir=args.output_dir,
-        run_shap=not args.no_shap,
-        run_hdbscan=not args.no_hdbscan,
-        umap_n_neighbors=args.umap_neighbors,
-        umap_min_dist=args.umap_min_dist,
+        checkpoint_path=checkpoint,
+        output_dir=CONFIG['output_dir'],
+        run_shap=CONFIG['run_shap'],
+        run_hdbscan=CONFIG['run_hdbscan'],
+        umap_n_neighbors=CONFIG['umap_n_neighbors'],
+        umap_min_dist=CONFIG['umap_min_dist'],
     )
 
 

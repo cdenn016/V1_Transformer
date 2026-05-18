@@ -153,3 +153,14 @@ class TestBaselinesImports:
         """Test importing from transformer.baselines."""
         from transformer.baselines.standard_transformer import StandardTransformerLM
         assert StandardTransformerLM is not None
+
+    def test_baselines_package_exports(self):
+        """``transformer.baselines`` re-exports both baseline models.
+
+        Pins ``HybridGaugeTransformerLM`` to the package surface so it
+        cannot drop out of ``__all__`` without this test catching it.
+        """
+        import transformer.baselines as _baselines
+        assert _baselines.StandardTransformerLM is not None
+        assert _baselines.HybridGaugeTransformerLM is not None
+        assert 'HybridGaugeTransformerLM' in _baselines.__all__

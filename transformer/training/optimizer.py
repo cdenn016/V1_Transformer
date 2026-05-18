@@ -30,7 +30,7 @@ at the top of the VFE Bayesian hierarchy.
 import math
 import torch
 import torch.nn as nn
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Iterable, List, Optional, Any, Tuple, Union
 from transformer.training.config import TrainingConfig
 
 
@@ -81,8 +81,8 @@ class RiemannianAdamW(torch.optim.AdamW):
 
     def __init__(
         self,
-        params,
-        model: nn.Module = None,
+        params: Union[Iterable[nn.Parameter], Iterable[Dict[str, Any]]],
+        model: Optional[nn.Module] = None,
         killing_inv: Optional[torch.Tensor] = None,
         killing_metric: Optional[torch.Tensor] = None,
         grad_clip: float = 0.0,
@@ -462,7 +462,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
 
     def __init__(
         self,
-        params,
+        params: Union[Iterable[nn.Parameter], Iterable[Dict[str, Any]]],
         lr: float = 1e-3,
         weight_decay: float = 0.01,
         ema_decay: float = 0.95,

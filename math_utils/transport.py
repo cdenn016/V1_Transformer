@@ -378,107 +378,18 @@ def _validate_invertible(Omega: np.ndarray, eps: float = 1e-8) -> None:
             )
 
 
-def _validate_orthogonal(Omega: np.ndarray, eps: float = 1e-6) -> None:
-    """
-    Check Ω is orthogonal: Ω^T Ω = I (legacy function for SO(K) compatibility).
-
-    Note: For GL(K) gauge transformations, use _validate_invertible instead.
-    Orthogonality is NOT required for gauge-invariant VFE.
-    """
-    K = Omega.shape[-1]
-
-    # Flatten for checking
-    Omega_flat = Omega.reshape(-1, K, K)
-    I = np.eye(K, dtype=Omega.dtype)
-
-    for i, Om in enumerate(Omega_flat):
-        error = np.linalg.norm(Om.T @ Om - I, ord='fro')
-        if error > eps:
-            raise ValueError(
-                f"Transport operator not orthogonal at index {i}:\n"
-                f"  ||Ω^T Ω - I||_F = {error:.2e} > {eps:.2e}"
-            )
-
-
 # =============================================================================
 # Transport Differentials (for gradients)
 # =============================================================================
+#
+# ``_validate_orthogonal``, ``compute_transport_differential`` and
+# ``_compute_dexp_generators`` were removed in the 2026-05-17 deep-audit
+# follow-up: each had zero production callers (verified by grep across the
+# repository), and the dexp/Fréchet path was superseded by PyTorch autograd
+# in ``transformer/core/variational_ffn.py`` and ``transformer/vfe/e_step.py``.
+# ``frechet_expm`` is retained — it has dedicated tests in
+# ``tests/test_math_utils.py`` and documents the mathematical reference.
 
-
-
-
-def compute_transport_differential(
-    phi_i: np.ndarray,
-    phi_j: np.ndarray,
-    generators: np.ndarray,
-    direction: str = 'i',
-    *,
-    exp_phi_i: Optional[np.ndarray] = None,
-    exp_phi_j: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Compute ∂Ω_ij/∂φ_i^a or ∂Ω_ij/∂φ_j^a as a tuple of n_gen matrices.
-
-    Formula:
-        ∂Ω_ij/∂φ_i^a = (dexp)_a(φ_i) · exp(-φ_j)
-        ∂Ω_ij/∂φ_j^b = -exp(φ_i) · (dexp)_b(φ_j) · exp(-φ_j)
-
-    where (dexp)_a(φ) = d/dt[exp(φ + t·G_a)]|_{t=0}
-
-    Args:
-        phi_i, phi_j: Gauge fields, shape (*S, n_gen)
-        generators: Lie algebra generators, shape (n_gen, K, K)
-        direction: 'i' for ∂Ω/∂φ_i or 'j' for ∂Ω/∂φ_j
-        exp_phi_i, exp_phi_j: Optional precomputed exponentials
-
-    Returns:
-        Tuple of n_gen matrices, each shape (*S, K, K)
-    """
-    phi_i = np.asarray(phi_i, dtype=np.float64)
-    phi_j = np.asarray(phi_j, dtype=np.float64)
-    G = np.asarray(generators, dtype=np.float64)
-    
-    K = G.shape[1]
-
-    # Compute exponentials if not provided.
-    # Use the *same irrep basis* for all K so dΩ/dφ matches Ω(φ).
-    if exp_phi_i is None:
-        exp_phi_i = _matrix_exponential_lie_algebra(phi_i, G)
-
-    # Always compute exp(-φ_j) directly for GL(K) compatibility
-    # NOTE: For GL(K), exp(φ)^T ≠ exp(-φ) unless generators are skew-symmetric
-    # and result is orthogonal. We cannot use the transpose shortcut.
-    exp_neg_phi_j = _matrix_exponential_lie_algebra(-phi_j, G)
-
-    
-    # ========== Differential of exp map ==========
-    if direction == 'i':
-        # ∂Ω/∂φ_i^a = Q_a(φ_i) · exp(-φ_j)
-        Q_all = _compute_dexp_generators(phi_i, G)
-
-        dOmega_list = []
-        for Q_a in Q_all:
-            # Keep float64 through matrix products, cast only at the end
-            dOm_a = np.matmul(np.matmul(exp_phi_i, Q_a), exp_neg_phi_j)
-            dOmega_list.append(dOm_a)
-
-        return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
-
-    elif direction == 'j':
-        # ∂Ω/∂φ_j^b = -exp(φ_i) · exp(-φ_j) · dexp_{-X_j}(G_b)
-        # where X_j = φ_j·G, using the chain rule on exp(-X_j)
-        R_all = _compute_dexp_generators(-phi_j, G)
-        Omega = np.matmul(exp_phi_i, exp_neg_phi_j)
-
-        dOmega_list = []
-        for R_b in R_all:
-            dOm_b = -np.matmul(Omega, R_b)
-            dOmega_list.append(dOm_b)
-
-        return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
-    
-    else:
-        raise ValueError(f"Invalid direction: {direction}")
 
 def frechet_expm(X, H, steps=6):
     """
@@ -507,97 +418,6 @@ def frechet_expm(X, H, steps=6):
     return out * ds
 
 
-def _compute_dexp_generators(
-    phi: np.ndarray,
-    generators: np.ndarray,
-) -> Tuple[np.ndarray, ...]:
-    """
-    Compute Q_a = d/dφ^a[exp(Σ φ^b G_b)] using the dexp map.
-
-    For 3x3 matrices (fundamental so(3) representation), uses the exact
-    closed-form:
-        Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X²(G_a)
-    where c1 = (1-cosθ)/θ², c2 = (θ-sinθ)/θ³
-
-    For K>3 matrices (higher irreps or GL(K)), the 3-term Cayley-Hamilton
-    truncation is inexact. Uses Frechet derivative of the matrix
-    exponential via quadrature instead.
-
-    Args:
-        phi: Lie algebra coefficients, shape (*S, n_gen)
-        generators: Lie algebra generators, shape (n_gen, K, K)
-
-    Returns:
-        Tuple of n_gen matrices Q_a, each shape (*S, K, K)
-    """
-    phi = np.asarray(phi, dtype=np.float64)
-    G = np.asarray(generators, dtype=np.float64)
-
-    n_generators = G.shape[0]
-    K = G.shape[1]  # Matrix dimension
-
-    # Compute X = Σ φ^a G_a
-    X = np.einsum('...a,aij->...ij', phi, G, optimize=True)  # (*S, K, K)
-
-    if K == 3:
-        # Exact closed-form for so(3) fundamental representation
-        theta = np.linalg.norm(phi, axis=-1)
-
-        c1 = np.zeros_like(theta)
-        c2 = np.zeros_like(theta)
-
-        small = theta < 1e-4
-        if np.any(small):
-            t = theta[small]
-            t2 = t * t
-            t4 = t2 * t2
-            c1[small] = 0.5 - t2/24.0 + t4/720.0
-            c2[small] = 1.0/6.0 - t2/120.0 + t4/5040.0
-
-        large = ~small
-        if np.any(large):
-            t = theta[large]
-            t2 = np.maximum(t * t, 1e-12)
-            t3 = np.maximum(t2 * t, 1e-12)
-            c1[large] = (1.0 - np.cos(t)) / t2
-            c2[large] = (t - np.sin(t)) / t3
-
-        Q_list = []
-        for a in range(n_generators):
-            G_a = G[a]
-            ad1 = X @ G_a - G_a @ X
-            ad2 = X @ ad1 - ad1 @ X
-            Q_a = (
-                G_a[None, ...]
-                - c1[..., None, None] * ad1
-                + c2[..., None, None] * ad2
-            )
-            Q_list.append(Q_a)
-        return tuple(Q_list)
-
-    else:
-        import scipy.linalg
-        # Higher irreps (K>3): use Fréchet derivative via quadrature
-        # frechet_expm computes d/dt[exp(X + t G_a)]|_{t=0} = exp(X) · dexp_X(G_a)
-        # We need Q_a = dexp_X(G_a) = exp(-X) · frechet_expm(X, G_a)
-        # The caller will left-multiply by exp(X), recovering the full derivative.
-        Q_list = []
-        for a in range(n_generators):
-            G_a = G[a]
-            # Handle batched X: iterate over batch elements
-            if X.ndim > 2:
-                batch_shape = X.shape[:-2]
-                flat_X = X.reshape(-1, K, K)
-                flat_G_a = np.broadcast_to(G_a, flat_X.shape)
-                Q_flat = np.zeros_like(flat_X)
-                for b in range(flat_X.shape[0]):
-                    F_b = frechet_expm(flat_X[b], flat_G_a[b], steps=8)
-                    expnX = scipy.linalg.expm(-flat_X[b])
-                    Q_flat[b] = expnX @ F_b
-                Q_a = Q_flat.reshape(*batch_shape, K, K)
-            else:
-                F_a = frechet_expm(X, G_a, steps=8)
-                expnX = scipy.linalg.expm(-X)
-                Q_a = expnX @ F_a
-            Q_list.append(Q_a)
-        return tuple(Q_list)
+# ``_compute_dexp_generators`` removed 2026-05-17 — only consumer was the
+# now-deleted ``compute_transport_differential``. Both replaced by PyTorch
+# autograd in the production transport path.

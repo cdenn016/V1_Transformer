@@ -17,7 +17,6 @@ Modules:
 """
 
 # NumPy utilities
-from .transport import compute_transport as np_transport_operator
 from .push_pull import push_gaussian as np_transport_gaussian
 from .generators import (
     generate_so3_generators,
@@ -44,7 +43,6 @@ def np_ensure_spd(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
 
 __all__ = [
     # NumPy
-    'np_transport_operator',
     'np_transport_gaussian',
     'generate_so3_generators',
     'generate_soN_generators',

@@ -551,14 +551,18 @@ class FastTrainer:
 
         return path
 
-    def load_checkpoint(self, checkpoint_path: str):
+    def load_checkpoint(self, checkpoint_path: str, trusted: bool = True):
         """
         Load training checkpoint to resume training.
 
         Args:
             checkpoint_path: Path to checkpoint file (e.g., checkpoint_step_179999.pt)
+            trusted: When True (default), allows pickle-based loads. Set False
+                to refuse code-execution-equivalent loads from hostile
+                checkpoints; expect failure on configs that contain non-tensor
+                fields. Mirrors `transformer.utils.checkpoint.load_checkpoint`.
         """
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=not trusted)
 
         # Load model state
         if 'model_state_dict' in checkpoint:

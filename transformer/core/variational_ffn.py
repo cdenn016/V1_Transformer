@@ -418,12 +418,17 @@ class VariationalFFNDynamic(nn.Module):
         # EXPERIMENTAL: when != 'off', the rope KL also rotates Σ (R Σ R^T
         # sandwich), implementing the framework-consistent gauge-transport
         # interpretation of RoPE.  Default 'off' uses the standard-transformer
-        # pattern (rotate only μ).  Plumbed through from
-        # BlockConfig.rope_full_gauge.  Tri-state mode in
+        # pattern (rotate only μ).  Tri-state mode in
         # {'off', 'vfe_only', 'both'}.  The FFN VFE-gradient helper fires for
         # {'vfe_only', 'both'}; the attention-side σ rotation is gated by the
-        # parallel attention.rope_full_gauge_mode attribute and is independent
-        # of this flag (set externally by VariationalFFNDynamic.__init__).
+        # parallel attention.rope_full_gauge_mode attribute.
+        #
+        # This is initialised to 'off' here and OVERRIDDEN post-construction by
+        # `GaugeTransformerBlock.__init__` (blocks.py:592-594), which reads
+        # `BlockConfig.rope_full_gauge` and writes both `ffn._rope_full_gauge_vfe`
+        # and `attention.rope_full_gauge_mode`. Direct construction of
+        # VariationalFFNDynamic (tests/ablations) keeps the default 'off' unless
+        # the caller monkey-patches this attribute afterward.
         self._rope_full_gauge_vfe = 'off'
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
@@ -749,14 +754,24 @@ class VariationalFFNDynamic(nn.Module):
         clamps the per-iteration tangent magnitude; the step size is the
         actual multiplier applied to the clamped tangent before exp.
 
-        Decoupled from effective_lr (the μ step size). The fallback path
-        (`effective_lr * 0.01`) is retained only for very old checkpoints
-        whose VFE module was instantiated before e_step_sigma_trust existed.
+        Decoupled from effective_lr (the μ step size). For very old pickled
+        modules (pre-2026-05-13) whose `__init__` was called before the
+        `e_step_sigma_trust` attribute existed, fall back to the current
+        constructor default (5.0) and warn once — emphatically NOT to
+        ``effective_lr * 0.01`` (which would re-couple the σ-trust and the
+        μ-LR that CLAUDE.md mandates be independent).
         """
         if hasattr(self, 'e_step_sigma_trust'):
             return self.e_step_sigma_trust
-        # Legacy fallback (pre-2026-05-13 checkpoints)
-        return effective_lr * 0.01
+        if not getattr(self, '_legacy_sigma_trust_warned', False):
+            import warnings
+            warnings.warn(
+                "VariationalFFNDynamic is missing e_step_sigma_trust (legacy pickle?). "
+                "Using the decoupled default 5.0; re-save the module to silence this warning.",
+                RuntimeWarning,
+            )
+            self._legacy_sigma_trust_warned = True
+        return 5.0
 
     @staticmethod
     def _softplus_inverse(x: float) -> float:

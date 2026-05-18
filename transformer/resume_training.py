@@ -62,6 +62,12 @@ GRAD_ACCUMULATION = 1
 # Device
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Trust the checkpoint pickle. True (default) loads with `weights_only=False` so
+# arbitrary objects (config dataclasses, optimizer state) deserialize correctly.
+# Set False to refuse code-execution-equivalent loads from hostile checkpoints;
+# expect failure on configs that contain non-tensor fields.
+TRUSTED_CHECKPOINT = True
+
 # =============================================================================
 # RESUME TRAINING LOGIC
 # =============================================================================
@@ -254,7 +260,7 @@ def resume_training():
     # fresh model and optimizer are also being allocated. load_state_dict
     # copies per-parameter into the already-on-device target, so the full
     # state dict never needs to be GPU-resident.
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not TRUSTED_CHECKPOINT)
 
     start_step = checkpoint.get('step', 0)
     best_val_ce = checkpoint.get('best_val_ce', float('inf'))

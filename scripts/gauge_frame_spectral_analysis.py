@@ -66,7 +66,9 @@ MODELS = {
 }
 
 SAVE_DIR = Path("./fig_spectral_analysis")
-SAVE_DIR.mkdir(parents=True, exist_ok=True)
+# Directory is created inside ``main()`` (it calls ``save_path.mkdir``),
+# not at import time. Importing this module from ``tests/test_spectral_analysis.py``
+# used to create ``fig_spectral_analysis/`` in the CWD as a side effect.
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

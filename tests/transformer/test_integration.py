@@ -133,6 +133,26 @@ class TestModelOutputDistribution:
 class TestAttentionPatterns:
     """Test attention pattern behavior."""
 
+    def test_forward_with_attention_returns_beta(self, minimal_config, cpu_device):
+        """``forward_with_attention`` must surface ``attn_info['beta']``.
+
+        Pinning this contract as its own test means any refactor that
+        drops the ``beta`` key fails this test loudly instead of
+        silently skipping ``test_causal_attention``.
+        """
+        from transformer.core.model import GaugeTransformerLM
+
+        model = GaugeTransformerLM(minimal_config).to(cpu_device)
+        model.eval()
+        V = minimal_config['vocab_size']
+        input_ids = torch.randint(0, V, (2, 16), device=cpu_device)
+        with torch.no_grad():
+            _logits, attn_info = model.forward_with_attention(input_ids)
+        assert 'beta' in attn_info, (
+            "forward_with_attention() dropped 'beta' key; "
+            f"got: {sorted(attn_info.keys())}"
+        )
+
     def test_causal_attention(self, minimal_config, cpu_device):
         """Test attention is causal (no future positions)."""
         from transformer.core.model import GaugeTransformerLM
@@ -148,11 +168,16 @@ class TestAttentionPatterns:
         with torch.no_grad():
             logits, attn_info = model.forward_with_attention(input_ids)
 
-        # Get attention weights
-        if 'beta' in attn_info:
-            beta = attn_info['beta']
-        else:
-            pytest.skip("No attention weights in output")
+        # ``beta`` is a documented key of ``forward_with_attention``'s
+        # return contract. Fail (not skip) on its absence so a future
+        # refactor that drops it cannot silently mask a causal-mask
+        # regression. The companion ``test_forward_with_attention_returns_beta``
+        # below pins the key existence as a separate assertion.
+        assert 'beta' in attn_info, (
+            "forward_with_attention() must return a 'beta' key in attn_info; "
+            f"got keys: {sorted(attn_info.keys())}"
+        )
+        beta = attn_info['beta']
 
         # Handle multi-layer and multi-head cases
         if beta.dim() == 5:  # (n_layers, B, H, N, N)

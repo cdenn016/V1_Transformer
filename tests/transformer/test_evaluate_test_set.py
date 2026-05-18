@@ -36,52 +36,13 @@ def _make_synthetic_checkpoint(config, model, tmp_dir, step=100):
     return path
 
 
-# =============================================================================
-# TestGetConfigVal
-# =============================================================================
-
-class TestGetConfigVal:
-    """get_config_val: safe config access for both dict and dataclass."""
-
-    def test_dict_access(self):
-        """Works with plain dict configs."""
-        from transformer.utils.evaluation import evaluate_checkpoint
-        # Can't easily test get_config_val directly (it's a local function),
-        # but we test the pattern it implements.
-        cfg = {'vocab_size': 100, 'embed_dim': 64}
-        assert cfg.get('vocab_size', None) == 100
-        assert cfg.get('missing_key', 42) == 42
-
-
-# =============================================================================
-# TestPerplexityComputation
-# =============================================================================
-
-class TestPerplexityComputation:
-    """Perplexity = exp(CE loss) — verifying the core computation."""
-
-    def test_perplexity_is_exp_ce(self):
-        """PPL = exp(CE) for known CE values."""
-        ce = 3.0
-        ppl = math.exp(ce)
-        assert abs(ppl - math.exp(3.0)) < 1e-6
-
-    def test_perplexity_bounded(self):
-        """Very high CE should be capped to avoid overflow."""
-        # exp(20) ~ 4.85e8, exp(100) would overflow
-        ce = 20.0
-        ppl = math.exp(min(ce, 20.0))
-        assert ppl < 5e8
-
-    def test_token_weighted_averaging(self):
-        """Token-weighted CE: sum(ce * n_tokens) / sum(n_tokens)."""
-        # Batch 1: ce=2.0, 10 tokens
-        # Batch 2: ce=4.0, 20 tokens
-        # Weighted avg: (2.0*10 + 4.0*20) / (10+20) = 100/30 = 3.333
-        total_loss = 2.0 * 10 + 4.0 * 20
-        total_tokens = 10 + 20
-        avg_ce = total_loss / total_tokens
-        assert abs(avg_ce - 100.0 / 30.0) < 1e-6
+# TestGetConfigVal and TestPerplexityComputation removed 2026-05-18.
+# Both classes only re-asserted Python/math invariants
+# (``dict.get`` semantics, ``math.exp(3.0) == math.exp(3.0)``, weighted
+# average arithmetic), never invoking ``evaluate_checkpoint``'s PPL/BPC
+# code. TestEvaluateCheckpoint below provides the real smoke coverage
+# by round-tripping a synthetic checkpoint through ``torch.save/load``
+# and asserting on extracted fields.
 
 
 # =============================================================================
@@ -139,22 +100,11 @@ class TestEvaluateCheckpoint:
 class TestCrossEntropyCorrectness:
     """Cross-entropy loss computation matches PyTorch reference."""
 
-    def test_ce_matches_pytorch(self, cpu_device):
-        """Token-weighted CE matches F.cross_entropy."""
-        B, N, V = 2, 8, 100
-        logits = torch.randn(B, N, V, device=cpu_device)
-        targets = torch.randint(0, V, (B, N), device=cpu_device)
-
-        # PyTorch reference
-        ref_ce = F.cross_entropy(logits.reshape(-1, V), targets.reshape(-1))
-
-        # Manual: per-token CE then average
-        log_probs = F.log_softmax(logits, dim=-1)
-        per_token_ce = -log_probs.gather(2, targets.unsqueeze(-1)).squeeze(-1)
-        manual_ce = per_token_ce.mean()
-
-        assert torch.allclose(ref_ce, manual_ce, atol=1e-5), \
-            f"CE mismatch: ref={ref_ce:.6f}, manual={manual_ce:.6f}"
+    # ``test_ce_matches_pytorch`` removed 2026-05-18: it reimplemented
+    # ``F.cross_entropy`` from ``F.log_softmax`` and asserted the
+    # reimplementation matched itself. ``test_pad_token_exclusion``
+    # below exercises a real semantic — ``ignore_index=-100`` — and is
+    # retained.
 
     def test_pad_token_exclusion(self, cpu_device):
         """Tokens with target=-100 don't contribute to loss."""
