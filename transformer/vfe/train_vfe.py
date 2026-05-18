@@ -33,9 +33,16 @@ config = {
     'max_seq_len':              64,
     'max_steps':                15000,
 
-    'use_prior_bank':           True,
+    'use_prior_bank':           False,
     'mask_self_attention':      False,
-    
+
+    # Prior parameterization:
+    #   True  = shared base + per-token gauge-orbit (μ_v = A_v @ μ_0). Pure form;
+    #           per-token capacity is V·n_gen (phi_embed only).
+    #   False = per-token (μ_v, σ_v) lookup; phi retained for transport only.
+    #           Per-token capacity is V·(2K + n_gen).
+    'gauge_fixed_priors':       False,
+
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
 
@@ -127,7 +134,7 @@ config = {
     'eval_interval':            2000,
     'checkpoint_interval':      25000,
 
-    'track_layer_diagnostics':      True,
+    'track_layer_diagnostics':      False,
     'monitor_monotonicity':         False,
 
 }

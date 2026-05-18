@@ -103,8 +103,18 @@ class VFEConfig:
     bch_order: int = 3                   # BCH truncation order (1=additive)
 
     # === Embedding init ===
-    mu_init_std: float = 1.0             # Std for base_mu initialization
+    mu_init_std: float = 1.0             # Std for base_mu / mu_embed initialization
     phi_scale: float = 0.1              # Scale for phi_embed initialization
+
+    # === Prior parameterization ===
+    # True: token priors are gauge transforms of a single universal Gaussian
+    #   (μ_v = A_v μ_0, Σ_v = A_v diag(σ_0) A_v^T). Per-token capacity = phi_embed
+    #   only (V × n_gen). Maximally pure: every token is one point on a single
+    #   gauge orbit.
+    # False: each token has its own Gaussian prior (μ_v, σ_v) looked up directly;
+    #   phi is retained as the per-token gauge frame for cross-token transport
+    #   only, not for prior construction. Per-token capacity = V × (2K + n_gen).
+    gauge_fixed_priors: bool = True
 
     # === Active inference (off by default) ===
     active_inference: bool = False

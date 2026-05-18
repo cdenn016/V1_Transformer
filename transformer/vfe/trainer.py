@@ -121,9 +121,16 @@ class VFETrainer:
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
-            if 'base_mu' in name:
+            # base_mu (gauge-fixed mode) and mu_embed (direct mode) both go in
+            # the m_mu group — they are alternate parameterizations of the
+            # same conceptual quantity (prior mean).
+            if 'base_mu' in name or 'mu_embed' in name:
                 m_mu_params.append(param)
-            elif 'base_log_sigma' in name or 'decode_log_scale' in name:
+            elif (
+                'base_log_sigma' in name
+                or 'sigma_log_embed' in name
+                or 'decode_log_scale' in name
+            ):
                 m_sigma_params.append(param)
             elif 'phi_embed' in name or 'pos_phi' in name:
                 m_phi_params.append(param)
@@ -181,9 +188,13 @@ class VFETrainer:
             if param.grad is None:
                 continue
             g = param.grad.data.flatten()
-            if 'base_mu' in name:
+            if 'base_mu' in name or 'mu_embed' in name:
                 groups['mu'].append(g)
-            elif 'base_log_sigma' in name or 'decode_log_scale' in name:
+            elif (
+                'base_log_sigma' in name
+                or 'sigma_log_embed' in name
+                or 'decode_log_scale' in name
+            ):
                 groups['sigma'].append(g)
             elif 'phi_embed' in name or 'pos_phi' in name:
                 groups['phi'].append(g)
