@@ -14,13 +14,18 @@ import csv
 import math
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterable, Optional, Set
 
 
 class PublicationMetricsTracker:
     """Track ALL metrics needed for publication."""
 
-    def __init__(self, save_path: Path, tokens_per_char: float = None):
+    def __init__(
+        self,
+        save_path: Path,
+        tokens_per_char: float = None,
+        disabled_columns: Optional[Iterable[str]] = None,
+    ):
         """
         Args:
             save_path: Path to write the metrics CSV.
@@ -31,9 +36,16 @@ class PublicationMetricsTracker:
                 on English; ~10% for cl100k_base on Japanese) and a one-time
                 warning is logged. Read off the train_loader's dataset:
                 ``train_loader.dataset.tokens_per_char``.
+            disabled_columns: Header names to exclude from the CSV. Used by
+                callers that cannot populate the full publication column
+                set (e.g. ``transformer/vfe/`` lacks the ``vfe_grad_*``,
+                ``phi_effective_rank``, and ``num_chol_*`` instrumentation).
+                Disabled names are also excluded from the dynamic extra-keys
+                discovery in ``save()``.
         """
         self.save_path = save_path
         self.tokens_per_char = tokens_per_char
+        self._disabled_columns: Set[str] = set(disabled_columns or ())
         self.history = []
 
         # Create CSV with comprehensive headers
@@ -105,6 +117,9 @@ class PublicationMetricsTracker:
             'attn_entropy_per_head_min', 'attn_entropy_per_head_max',
             'head_correlation_mean',
         ]
+
+        if self._disabled_columns:
+            self.headers = [h for h in self.headers if h not in self._disabled_columns]
 
         with open(self.save_path, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -280,9 +295,13 @@ class PublicationMetricsTracker:
         if not self.history:
             return
 
-        # Collect any extra keys that diagnostics added at runtime
+        # Collect any extra keys that diagnostics added at runtime. Disabled
+        # columns are skipped here so they don't re-enter via the rescue path,
+        # and DictWriter is opened with extrasaction='ignore' so leftover keys
+        # in history entries (which log_step always populates with None) are
+        # silently dropped instead of raising.
         extra_keys: list = []
-        _header_set = set(self.headers)
+        _header_set = set(self.headers) | set(self._disabled_columns)
         for entry in self.history:
             for k in entry:
                 if k not in _header_set:
@@ -291,7 +310,7 @@ class PublicationMetricsTracker:
         all_headers = self.headers + sorted(extra_keys)
 
         with open(self.save_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=all_headers)
+            writer = csv.DictWriter(f, fieldnames=all_headers, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(self.history)
 
