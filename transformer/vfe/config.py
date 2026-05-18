@@ -348,6 +348,50 @@ class VFEConfig:
                 stacklevel=2,
             )
 
+        # The E-step inner loop in e_step.py orders updates as
+        # (μ-update → σ-retract → φ-retract). With n_e_steps==1 the
+        # retracted σ and φ are the last tensors written before the loop
+        # exits, and no later step in the same iteration consumes them.
+        # Whether σ_new and φ_new reach the loss after stack(...) returns
+        # then depends on what reads them downstream:
+        #   σ lift: n_e_steps>=2  (next iter's nat_grad_mu reads sigma)
+        #        OR n_layers>=2   (next layer's compute_kl_attention reads sigma)
+        #        OR use_prior_bank=True   (prior_bank.decode reads sigma_q)
+        #        OR norm_type in {'mahalnorm','centered_mahalnorm'}   (norm reads sigma)
+        #   φ lift: n_e_steps>=2  OR n_layers>=2
+        #        (prior_bank.decode(mu_q, sigma_q, tau) does not take phi;
+        #         no norm reads phi.)
+        # When the relevant lift fails, sweeping e_sigma_lr / e_phi_lr scales
+        # tensors that are autograd-disconnected from CE and the loss is
+        # bitwise identical across the sweep.
+        _sigma_lift_via_norm = self.norm_type in ('mahalnorm', 'centered_mahalnorm')
+        _sigma_orphan = (
+            self.n_e_steps == 1
+            and self.n_layers == 1
+            and not self.use_prior_bank
+            and not _sigma_lift_via_norm
+        )
+        _phi_orphan = (self.n_e_steps == 1 and self.n_layers == 1)
+        if _sigma_orphan or _phi_orphan:
+            _dead = []
+            if _sigma_orphan:
+                _dead.append("e_sigma_lr")
+            if _phi_orphan:
+                _dead.append("e_phi_lr")
+            import warnings
+            warnings.warn(
+                f"Orphaned E-step retraction: with n_e_steps={self.n_e_steps}, "
+                f"n_layers={self.n_layers}, use_prior_bank={self.use_prior_bank}, "
+                f"norm_type={self.norm_type!r}, the following LR(s) scale "
+                f"tensors that never reach the loss and will show no effect "
+                f"when swept: {', '.join(_dead)}. Lift conditions — σ: "
+                f"n_e_steps>=2 OR n_layers>=2 OR use_prior_bank=True OR "
+                f"norm_type in {{'mahalnorm','centered_mahalnorm'}}; φ: "
+                f"n_e_steps>=2 OR n_layers>=2.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     @property
     def irrep_dims(self) -> List[int]:
         """Flat list of block dimensions from irrep_spec.
