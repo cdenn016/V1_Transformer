@@ -834,7 +834,11 @@ class VFEEStep(nn.Module):
                         'grad_sigma_norm': grad_sigma.norm().item(),
                         # Attention statistics
                         'beta_mean': beta.mean().item(),
-                        'beta_std': beta.std().item(),
+                        # unbiased=False (correction=0, population std) — diagnostics
+                        # describe the full batch×seq grid, not a sample from a larger
+                        # population. Also avoids the std-of-numel=1 warning during
+                        # _generate_sample (B=N=1 for the first token).
+                        'beta_std': beta.std(unbiased=False).item(),
                         'kl_mean': kl_matrix.mean().item(),
                         'kl_max': kl_matrix.max().item(),
                         # Share the clamp+log between both entropy metrics — the
@@ -854,9 +858,11 @@ class VFEEStep(nn.Module):
                         'sigma_q_std': sigma.std().item(),
                         'sigma_p_mean': sigma_p.mean().item(),
                         # Phi norms — share one norm() reduction across all three stats.
+                        # unbiased=False on .std() — population std, well-defined for
+                        # numel=1 (B=N=1 single-token generate path).
                         **(lambda _pn: {
                             'phi_norm_mean': _pn.mean().item(),
-                            'phi_norm_std': _pn.std().item(),
+                            'phi_norm_std': _pn.std(unbiased=False).item(),
                             'phi_norm_max': _pn.max().item(),
                         })(phi.norm(dim=-1)),
                     }
@@ -865,7 +871,8 @@ class VFEEStep(nn.Module):
                         kl_qp = _diag_kl(mu, mu_p, sigma, sigma_p, eps=eps)
                         self._last_diagnostics['prior_belief_kl_mean'] = kl_qp.sum(-1).mean().item()
                         self._last_diagnostics['prior_belief_kl_max'] = kl_qp.sum(-1).max().item()
-                        self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std().item()
+                        # unbiased=False — see note above for beta_std.
+                        self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std(unbiased=False).item()
 
                     # Free-energy trajectory (diagonal covariance only; empty
                     # list on full-cov paths).  Downstream can assert
@@ -1542,7 +1549,9 @@ class VFEEStep(nn.Module):
                             'grad_mu_norm': grad_mu.norm().item(),
                             'grad_sigma_norm': grad_sigma.norm().item(),
                             'beta_mean': beta_det.mean().item(),
-                            'beta_std': beta_det.std().item(),
+                            # unbiased=False — population std, defined for numel=1
+                            # (B=N=1 during single-token generate forward).
+                            'beta_std': beta_det.std(unbiased=False).item(),
                             'kl_mean': kl_det.mean().item(),
                             'kl_max': kl_det.max().item(),
                             'sigma_q_mean': sigma.mean().item(),
