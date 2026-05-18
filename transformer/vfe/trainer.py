@@ -1093,9 +1093,14 @@ class VFETrainer:
             # Periodic evaluation
             if self.val_loader is not None and (step + 1) % eval_interval == 0:
                 val_metrics = self.evaluate()
-                # Attention summary is fresh because evaluate() just ran a
-                # forward pass on the val batch (e_step.py:531-533).
+                # Attention summary AND heatmap save MUST happen before
+                # _generate_sample(): model.generate() runs the model with
+                # (B=1, N=1) for each new token, overwriting every block's
+                # _last_attention / _last_diagnostics with single-token state.
+                # Reading them after generate yields stale tensors, not the
+                # val-batch β the heatmap is meant to show.
                 attn = self._attention_summary()
+                self._plot_attention_patterns(step + 1)
                 sample_text = self._generate_sample()
 
                 _write("")  # blank line above the block
@@ -1112,12 +1117,6 @@ class VFETrainer:
                 if sample_text:
                     _write(f"    Sample: {sample_text}...")
                 _write("")  # blank line below the block
-
-                # Save publication-quality attention β heatmap. β is fresh
-                # because evaluate() just ran the model forward, populating
-                # block.e_step._last_attention. Plot failures are caught
-                # internally; never aborts training.
-                self._plot_attention_patterns(step + 1)
 
                 # Record validation in publication tracker
                 if self._pub_tracker is not None:
