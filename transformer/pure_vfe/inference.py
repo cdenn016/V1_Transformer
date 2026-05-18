@@ -14,6 +14,7 @@ Mathematical reference:
 """
 
 import warnings
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -84,9 +85,15 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     mu_even = mu[:, :, :2*half_K:2]
     mu_odd = mu[:, :, 1:2*half_K:2]
 
-    mu_rotated = mu.clone()
+    # Pre-allocate; copy only the trailing odd dim when K is odd (it isn't
+    # written by the SO(2) rotation). For even K the trailing slice is
+    # empty and the empty_like is fully overwritten — saves the per-iter
+    # full mu.clone() in the common case.
+    mu_rotated = torch.empty_like(mu)
     mu_rotated[:, :, :2*half_K:2] = mu_even * cos_a - mu_odd * sin_a
     mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_a + mu_odd * cos_a
+    if K > 2 * half_K:
+        mu_rotated[:, :, 2*half_K:] = mu[:, :, 2*half_K:]
 
     return mu_rotated
 
@@ -107,38 +114,56 @@ def _apply_layernorm(mu: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
     return (mu - mean) / (var + eps).sqrt()
 
 
-def extract_block_diag(Sigma, H, K_h):
-    """
-    Extract H diagonal blocks of size K_h from full [B, N, K, K] covariance.
+def extract_block_diag(Sigma: torch.Tensor, H: int, K_h: int) -> torch.Tensor:
+    """Extract H diagonal blocks of size K_h from full [B, N, K, K] covariance.
+
+    Vectorized via ``torch.diagonal`` on a reshaped view — replaces the
+    previous Python ``for h in range(H)`` loop plus ``torch.stack`` allocation
+    that ran per E-step iteration.
 
     Returns: [B, N, H, K_h, K_h]
     """
     B, N, K, _ = Sigma.shape
-    blocks = []
-    for h in range(H):
-        start = h * K_h
-        end = start + K_h
-        blocks.append(Sigma[:, :, start:end, start:end])
-    return torch.stack(blocks, dim=2)
+    # View as (B, N, H, K_h, H, K_h); diagonal blocks live where the two H
+    # dims are equal. torch.diagonal over (dim=2, dim=4) pushes the diagonal
+    # axis to the end → shape (B, N, K_h, K_h, H).
+    Sigma_view = Sigma.view(B, N, H, K_h, H, K_h)
+    blocks = torch.diagonal(Sigma_view, dim1=2, dim2=4)  # (B, N, K_h, K_h, H)
+    return blocks.permute(0, 1, 4, 2, 3).contiguous()
 
 
-def set_block_diag(Sigma, blocks, H, K_h):
-    """
-    Write H diagonal blocks back into full [B, N, K, K] covariance.
+def set_block_diag(Sigma: torch.Tensor, blocks: torch.Tensor, H: int, K_h: int) -> torch.Tensor:
+    """Write H diagonal blocks back into full [B, N, K, K] covariance.
+
+    Mutates ``Sigma`` in place and returns it; the in-place semantics are
+    deliberate (matches the per-iter overwrite pattern in the E-step loop).
+    Vectorized via paired advanced indexing on a reshaped view to eliminate
+    the Python ``for h in range(H)`` loop.
 
     Args:
-        Sigma: [B, N, K, K] (modified in-place)
-        blocks: [B, N, H, K_h, K_h]
+        Sigma: [B, N, K, K] — mutated in-place.
+        blocks: [B, N, H, K_h, K_h].
     """
-    for h in range(H):
-        start = h * K_h
-        end = start + K_h
-        Sigma[:, :, start:end, start:end] = blocks[:, :, h]
+    B, N, _, _ = Sigma.shape
+    Sigma_view = Sigma.view(B, N, H, K_h, H, K_h)
+    h_idx = torch.arange(H, device=Sigma.device)
+    # Paired advanced indexing on (dim=2, dim=4) writes the H diagonal blocks
+    # in one batched op. Advanced-indexing semantics push the paired axis to
+    # the front of the indexed view → RHS must be (H, B, N, K_h, K_h).
+    Sigma_view[:, :, h_idx, :, h_idx, :] = blocks.permute(2, 0, 1, 3, 4)
     return Sigma
 
 
-def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij,
-                kl_prior=None):
+def compute_vfe(
+    mu: torch.Tensor,
+    Sigma: torch.Tensor,
+    prior_mu: torch.Tensor,
+    prior_Sigma: torch.Tensor,
+    alpha: torch.Tensor,
+    beta: torch.Tensor,
+    kl_ij: torch.Tensor,
+    kl_prior: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     Compute the scalar VFE for monitoring.
 
@@ -160,7 +185,12 @@ def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij,
 
 
 @torch.no_grad()
-def e_step(token_ids, model, config, effective_lrs=None):
+def e_step(
+    token_ids: torch.Tensor,
+    model: Any,
+    config: Any,
+    effective_lrs: Optional[Dict[str, float]] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[float], Dict[str, Any]]:
     r"""Run VFE descent to convergence. This IS the forward pass.
 
     Minimizes belief VFE (prior + alignment terms only) via natural
@@ -494,7 +524,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
     return mu, Sigma, Omega, logits, vfe_history, diagnostics
 
 
-def _compute_holonomy(Omega, H, K_h):
+def _compute_holonomy(Omega: torch.Tensor, H: int, K_h: int) -> Dict[str, float]:
     r"""Compute holonomy metrics from gauge frames.
 
     Measures gauge curvature via Wilson loops on small triangles:
@@ -504,11 +534,13 @@ def _compute_holonomy(Omega, H, K_h):
         Omega: [B, N, H, K_h, K_h] gauge frames
 
     Returns:
-        dict with holonomy metrics
+        dict with holonomy metrics — always carries the same three keys
+        (``mean_norm``, ``max_norm``, ``n_triangles``) so consumers don't
+        hit a ``KeyError`` on the N<3 early-exit branch.
     """
     B, N = Omega.shape[:2]
     if N < 3:
-        return {'mean_norm': 0.0, 'max_norm': 0.0}
+        return {'mean_norm': 0.0, 'max_norm': 0.0, 'n_triangles': 0}
 
     # Sample a few triangles (i, i+1, i+2)
     Om = Omega.permute(0, 2, 1, 3, 4)  # [B, H, N, K_h, K_h]

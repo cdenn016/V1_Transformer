@@ -17,6 +17,8 @@ Mathematical reference:
   - Supplementary Appendix G (model-channel formalism)
 """
 
+from typing import Any, Dict, Optional
+
 import torch
 
 from .gaussians import (
@@ -142,7 +144,17 @@ class MStepAccumulator:
         self.mu_star_sum = torch.zeros(V, K, device=device)
         self.Sigma_star_sum = torch.zeros(V, K, K, device=device)
         self.outer_sum = torch.zeros(V, K, K, device=device)
-        self.Omega_star_sum = torch.zeros(V, H, K_h, K_h, device=device)
+        # Omega_star_sum is only consumed by the fallback path when
+        # use_analytical_omega_grad=False (see apply_m_step_from_accumulated).
+        # At V=50k, H=4, K_h=8 it's a ~51MB buffer otherwise scattered into
+        # every micro-batch but never read; gate the allocation accordingly.
+        self._use_analytical_omega_grad = getattr(
+            config, 'use_analytical_omega_grad', True,
+        )
+        if self._use_analytical_omega_grad:
+            self.Omega_star_sum = None
+        else:
+            self.Omega_star_sum = torch.zeros(V, H, K_h, K_h, device=device)
 
         # Analytical Omega gradient (accumulated across micro-batches)
         self.grad_Omega_sum = torch.zeros(V, H, K_h, K_h, device=device)
@@ -213,7 +225,10 @@ class MStepAccumulator:
         ]))
 
         # --- Observation quantities (scatter into V-sized buffers) ---
-        obs = _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens)
+        obs = _precompute_obs_gradient(
+            ce_grad, mu_star, Sigma_star, update_tokens,
+            sigma_obs_grad=getattr(config, 'sigma_obs_grad', 'none'),
+        )
         self.obs_weighted_mu[update_tokens] += obs['obs_weighted_mu']
         self.obs_ce_sum[update_tokens] += obs['obs_ce_sum']
         if self.obs_weighted_Sigma is not None:
@@ -250,11 +265,15 @@ class MStepAccumulator:
             0, flat_ids.unsqueeze(-1).unsqueeze(-1).expand(-1, K, K), outer,
         )
 
-        # Omega_star_sum (kept for fallback / diagnostics)
-        self.Omega_star_sum.scatter_add_(
-            0, flat_ids.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
-            Omega_star_flat,
-        )
+        # Omega_star_sum is only consumed by the non-analytical fallback
+        # (apply_m_step_from_accumulated `else` branch). Skip the scatter
+        # at the default config to save ~51MB and one O(BN·H·K_h²) op
+        # per micro-batch.
+        if self.Omega_star_sum is not None:
+            self.Omega_star_sum.scatter_add_(
+                0, flat_ids.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
+                Omega_star_flat,
+            )
 
         # Analytical Omega gradient at prior Omega values
         if getattr(config, 'use_analytical_omega_grad', True):
@@ -280,7 +299,8 @@ class MStepAccumulator:
         self.mu_star_sum.zero_()
         self.Sigma_star_sum.zero_()
         self.outer_sum.zero_()
-        self.Omega_star_sum.zero_()
+        if self.Omega_star_sum is not None:
+            self.Omega_star_sum.zero_()
         self.grad_Omega_sum.zero_()
         self.obs_weighted_mu.zero_()
         self.obs_ce_sum.zero_()
@@ -298,7 +318,12 @@ class MStepAccumulator:
 
 
 @torch.no_grad()
-def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
+def apply_m_step_from_accumulated(
+    accum: 'MStepAccumulator',
+    model: Any,
+    config: Any,
+    effective_lrs: Optional[Dict[str, float]] = None,
+) -> float:
     r"""Apply prior updates using accumulated sufficient statistics.
 
     Consumes the vocabulary-sized buffers in ``accum`` and updates the
@@ -341,7 +366,11 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
     mu_star_sum = accum.mu_star_sum[update_tokens]        # [T, K]
     Sigma_star_sum = accum.Sigma_star_sum[update_tokens]  # [T, K, K]
     outer_sum = accum.outer_sum[update_tokens]            # [T, K, K]
-    Omega_star_sum = accum.Omega_star_sum[update_tokens]  # [T, H, K_h, K_h]
+    # Omega_star_sum is only allocated under the non-analytical fallback;
+    # the slice is deferred to the branch that consumes it (line ~482).
+    Omega_star_sum = (
+        accum.Omega_star_sum[update_tokens] if accum.Omega_star_sum is not None else None
+    )
     obs_weighted_mu = accum.obs_weighted_mu[update_tokens]  # [T, K]
     obs_ce_sum = accum.obs_ce_sum[update_tokens]            # [T]
 
@@ -449,6 +478,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
     Sigma_new = retract_spd(
         Sigma_all, nat_Sigma, effective_lrs['sigma_p_lr'],
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
+        exp_clip=config.spd_exp_clip,
     )
 
     floor = config.prior_sigma_floor
@@ -509,7 +539,8 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
     return accum.avg_ce_loss
 
 
-def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
+def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens,
+                             sigma_obs_grad='full'):
     """
     Precompute observation gradient quantities over ALL (b,n) positions
     for a set of vocabulary tokens.
@@ -522,26 +553,27 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
     where n_v is the number of input occurrences of token v in the batch.
     where ∂logit_v/∂Σ_v = ½[Σ_v⁻¹(Σ*+δδᵀ)Σ_v⁻¹ - Σ_v⁻¹]
 
-    We precompute the position-summed quantities needed for both.
-
     Args:
         ce_grad: [B, N, V] softmax CE gradient
         mu_star: [B, N, K] converged beliefs
         Sigma_star: [B, N, K, K] converged covariances
         update_tokens: [T] long tensor of token indices to precompute for
+        sigma_obs_grad: Mode for the Sigma_v observation gradient. When
+            ``'none'`` the two ``[T, K, K]`` einsums for the Sigma path are
+            skipped (the caller will not consume them); the returned dict
+            keys are ``None``. Mirrors PureVFEConfig.sigma_obs_grad.
 
     Returns:
         dict with:
           obs_weighted_mu: [T, K] — Σ_{b,n} ce_grad[b,n,v] · μ*_{b,n}
           obs_ce_sum: [T] — Σ_{b,n} ce_grad[b,n,v]
-          obs_weighted_Sigma: [T, K, K] — Σ_{b,n} ce_grad[b,n,v] · Σ*_{b,n}
-          obs_weighted_outer: [T, K, K] — Σ_{b,n} ce_grad[b,n,v] · μ*μ*ᵀ
+          obs_weighted_Sigma: [T, K, K] or None — only when sigma_obs_grad != 'none'
+          obs_weighted_outer: [T, K, K] or None — only when sigma_obs_grad != 'none'
     """
     B, N, K = mu_star.shape
     BN = B * N
 
     mu_flat = mu_star.reshape(BN, K)               # [BN, K]
-    Sigma_flat = Sigma_star.reshape(BN, K, K)       # [BN, K, K]
     ce_flat = ce_grad.reshape(BN, -1)[:, update_tokens]  # [BN, T]
 
     # Σ_{b,n} ce_grad[b,n,v] · μ*_{b,n} for each v in update_tokens
@@ -550,10 +582,18 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
     # Σ_{b,n} ce_grad[b,n,v]
     obs_ce_sum = ce_flat.sum(0)                     # [T]
 
-    # Σ_{b,n} ce_grad[b,n,v] · Σ*_{b,n}
-    obs_weighted_Sigma = torch.einsum('nt,nkl->tkl', ce_flat, Sigma_flat)  # [T, K, K]
+    if sigma_obs_grad == 'none':
+        # Skip the two O(T·K²) einsums entirely — downstream branches won't
+        # consume them, and the default config is 'none'.
+        return {
+            'obs_weighted_mu': obs_weighted_mu,
+            'obs_ce_sum': obs_ce_sum,
+            'obs_weighted_Sigma': None,
+            'obs_weighted_outer': None,
+        }
 
-    # Σ_{b,n} ce_grad[b,n,v] · μ*_{b,n} μ*_{b,n}ᵀ
+    Sigma_flat = Sigma_star.reshape(BN, K, K)       # [BN, K, K]
+    obs_weighted_Sigma = torch.einsum('nt,nkl->tkl', ce_flat, Sigma_flat)  # [T, K, K]
     obs_weighted_outer = torch.einsum('nt,nk,nl->tkl', ce_flat, mu_flat, mu_flat)  # [T, K, K]
 
     return {
@@ -618,8 +658,17 @@ def _momentum_update(nat_grad, momentum_buffer, update_tokens, beta1):
 
 
 @torch.no_grad()
-def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
-           logits=None, effective_lrs=None):
+def m_step(
+    token_ids: torch.Tensor,
+    targets: torch.Tensor,
+    mu_star: torch.Tensor,
+    Sigma_star: torch.Tensor,
+    Omega_star: torch.Tensor,
+    model: Any,
+    config: Any,
+    logits: Optional[torch.Tensor] = None,
+    effective_lrs: Optional[Dict[str, float]] = None,
+) -> float:
     r"""Update prior bank via natural gradient on VFE.
 
     Observation gradient enters HERE (not in belief descent).
@@ -676,7 +725,10 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         len(update_tokens), device=update_tokens.device
     )
 
-    obs = _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens)
+    obs = _precompute_obs_gradient(
+        ce_grad, mu_star, Sigma_star, update_tokens,
+        sigma_obs_grad=getattr(config, 'sigma_obs_grad', 'none'),
+    )
     obs_weighted_mu = obs['obs_weighted_mu']
     obs_ce_sum = obs['obs_ce_sum']
     obs_weighted_Sigma = obs['obs_weighted_Sigma']
@@ -862,6 +914,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     Sigma_new = retract_spd(
         Sigma_all, nat_Sigma, effective_lrs['sigma_p_lr'],
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
+        exp_clip=config.spd_exp_clip,
     )
 
     # Enforce prior covariance spectral floor (prevents collapse → divergence)

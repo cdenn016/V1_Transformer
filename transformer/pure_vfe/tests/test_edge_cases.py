@@ -221,10 +221,10 @@ class TestConfigValidation:
     """Test PureVFEConfig validation."""
 
     def test_belief_dim_assertion(self):
-        """belief_dim != n_heads * head_dim triggers assertion."""
+        """belief_dim != n_heads * head_dim raises ValueError."""
         from ..config import PureVFEConfig
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="belief_dim"):
             PureVFEConfig(belief_dim=10, n_heads=2, head_dim=4)  # 10 != 2*4
 
     def test_default_tau(self):

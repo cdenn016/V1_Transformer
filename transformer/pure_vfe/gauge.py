@@ -12,6 +12,8 @@ Mathematical reference:
   - derivations/constant_gauge_kl_derivation.md §9 (GL(K) invariance)
 """
 
+from typing import Any, Dict, Optional, Tuple
+
 import torch
 
 from .gaussians import safe_inverse, symmetrize
@@ -21,8 +23,13 @@ from .gaussians import safe_inverse, symmetrize
 # Transport operations
 # ---------------------------------------------------------------------------
 
-def compute_transport(Omega_i, Omega_j, connection_delta=None, generators=None,
-                      cocycle_relaxation=0.0):
+def compute_transport(
+    Omega_i: torch.Tensor,
+    Omega_j: torch.Tensor,
+    connection_delta: Optional[torch.Tensor] = None,
+    generators: Optional[torch.Tensor] = None,
+    cocycle_relaxation: float = 0.0,
+) -> torch.Tensor:
     """
     Compute pairwise gauge transport Ω_ij.
 
@@ -53,7 +60,9 @@ def compute_transport(Omega_i, Omega_j, connection_delta=None, generators=None,
     return Omega_i @ Omega_j_inv
 
 
-def transport_gaussian(mu, Sigma, Omega):
+def transport_gaussian(
+    mu: torch.Tensor, Sigma: torch.Tensor, Omega: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Pushforward of Gaussian N(μ, Σ) through Ω:
       Ω · N(μ, Σ) = N(Ω μ, Ω Σ Ωᵀ)
@@ -74,9 +83,20 @@ def transport_gaussian(mu, Sigma, Omega):
 # Gradient of KL w.r.t. Ω_ij
 # ---------------------------------------------------------------------------
 
-def grad_kl_Omega_ij(mu_i, Sigma_i, mu_j, Sigma_j, Omega_ij):
+def grad_kl_Omega_ij(
+    mu_i: torch.Tensor,
+    Sigma_i: torch.Tensor,
+    mu_j: torch.Tensor,
+    Sigma_j: torch.Tensor,
+    Omega_ij: torch.Tensor,
+) -> torch.Tensor:
     """
     ∂KL(q_i || Ω_ij · q_j)/∂Ω_ij
+
+    Reference / test-support implementation. The production gradient path
+    uses ``vfe_grad_Omega`` (gauge.py), which reimplements the same three-
+    term formula vectorized over (b, h, i, j). This function is retained
+    as a per-pair oracle for ``test_gradients.py``.
 
     From the KL formula with Ω_ij transport, the gradient involves:
     - Mean term: ∂/∂Ω [ (μ_i - Ω μ_j)ᵀ (ΩΣ_jΩᵀ)⁻¹ (μ_i - Ω μ_j) ]
@@ -131,9 +151,21 @@ def grad_kl_Omega_ij(mu_i, Sigma_i, mu_j, Sigma_j, Omega_ij):
     return term1 + term2 + term3
 
 
-def grad_kl_Omega_i(mu_i, Sigma_i, mu_j, Sigma_j, Omega_i, Omega_j, beta_ij=None):
+def grad_kl_Omega_i(
+    mu_i: torch.Tensor,
+    Sigma_i: torch.Tensor,
+    mu_j: torch.Tensor,
+    Sigma_j: torch.Tensor,
+    Omega_i: torch.Tensor,
+    Omega_j: torch.Tensor,
+    beta_ij: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     ∂KL(q_i || Ω_ij · q_j)/∂Ω_i via chain rule through Ω_ij = Ω_i · Ω_j⁻¹.
+
+    Reference / test-support helper. Production code uses ``vfe_grad_Omega``;
+    this single-pair form exists so ``test_gradients.py`` can spot-check the
+    chain-rule factoring without depending on the vectorized kernel.
 
     ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
 
@@ -158,7 +190,14 @@ def grad_kl_Omega_i(mu_i, Sigma_i, mu_j, Sigma_j, Omega_i, Omega_j, beta_ij=None
 # Aggregated gauge gradient (attention-weighted)
 # ---------------------------------------------------------------------------
 
-def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
+def vfe_grad_Omega(
+    mu_h: torch.Tensor,
+    Sigma_h: torch.Tensor,
+    Omega: torch.Tensor,
+    beta: torch.Tensor,
+    kl_ij: torch.Tensor,
+    precomp: Dict[str, torch.Tensor],
+) -> torch.Tensor:
     """
     Full VFE gradient ∂F/∂Ω_i aggregated over attention-weighted pairs.
 
@@ -234,107 +273,11 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
     return grad_bh.permute(0, 2, 1, 3, 4).contiguous()           # [B, N, H, K_h, K_h]
 
 
-def vfe_grad_Omega_full(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
-    r"""Full VFE gradient :math:`\partial F / \partial \Omega_i` including both
-    forward (i as query) and backward (i as key) contributions.
-
-    .. math::
-        \frac{\partial F}{\partial \Omega_i}
-        = \underbrace{\sum_j \beta_{ij} \frac{\partial \mathrm{KL}_{ij}}{\partial \Omega_i}}_{\text{forward}}
-        + \underbrace{\sum_j \beta_{ji} \frac{\partial \mathrm{KL}_{ji}}{\partial \Omega_i}}_{\text{backward}}
-
-    The forward term is :math:`(\partial \mathrm{KL}/\partial \Omega_{ij}) \Omega_j^{-\top}`.
-    The backward term uses :math:`\Omega_{ji} = \Omega_j \Omega_i^{-1}`, giving
-    :math:`\partial \mathrm{KL}_{ji}/\partial \Omega_i = -\Omega_{ji}^\top
-    (\partial \mathrm{KL}/\partial \Omega_{ji}) \Omega_i^{-\top}`.
-
-    This is needed for the M-step, where ``Omega_i`` changes affect ALL pairs
-    involving position i. The E-step uses the forward-only version since each
-    position updates independently.
-
-    Args:
-        mu_h: [B, N, H, K_h] per-head means
-        Sigma_h: [B, N, H, K_h, K_h] per-head covariances
-        Omega: [B, N, H, K_h, K_h] gauge frames
-        beta: [B, H, N, N] attention weights
-        kl_ij: [B, H, N, N] pairwise KL
-        precomp: precomputed quantities dict
-
-    Returns: [B, N, H, K_h, K_h] full gradient ∂F/∂Ω_i
-    """
-    B, N, H, K_h = mu_h.shape
-    device = mu_h.device
-    dtype = mu_h.dtype
-
-    grad_Omega = torch.zeros(B, N, H, K_h, K_h, device=device, dtype=dtype)
-
-    mu = mu_h.permute(0, 2, 1, 3)          # [B, H, N, K_h]
-    Sig = Sigma_h.permute(0, 2, 1, 3, 4)   # [B, H, N, K_h, K_h]
-    Om = Omega.permute(0, 2, 1, 3, 4)      # [B, H, N, K_h, K_h]
-
-    for h in range(H):
-        mu_h_s = mu[:, h]           # [B, N, K_h]
-        Sig_h_s = Sig[:, h]         # [B, N, K_h, K_h]
-        Om_h_s = Om[:, h]           # [B, N, K_h, K_h]
-        beta_h = beta[:, h]         # [B, N, N]
-
-        Om_inv = torch.linalg.inv(Om_h_s)  # [B, N, K_h, K_h]
-
-        # Ω_ij = Ω_i @ Ω_j⁻¹
-        Om_ij = Om_h_s[:, :, None] @ Om_inv[:, None, :]  # [B, N, N, K_h, K_h]
-        Om_ij_inv = torch.linalg.inv(Om_ij)
-        Om_ij_invT = Om_ij_inv.transpose(-2, -1)
-
-        Sig_j_inv = safe_inverse(Sig_h_s)
-
-        # Λ_ij, δ_ij
-        Lambda_ij = Om_ij_invT @ Sig_j_inv[:, None, :] @ Om_ij_inv
-        Om_ij_mu_j = torch.einsum('bijnk,bjk->bijn', Om_ij, mu_h_s)
-        delta_ij = mu_h_s[:, :, None] - Om_ij_mu_j
-
-        # ∂KL/∂Ω_ij (three terms)
-        Lam_delta = torch.einsum('bijpq,bijq->bijp', Lambda_ij, delta_ij)
-        term1 = -Lam_delta.unsqueeze(-1) * mu_h_s[:, None, :].unsqueeze(-2)
-        outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
-        inner_ij = Sig_h_s[:, :, None] + outer_ij
-        term2 = -(Lambda_ij @ inner_ij @ Om_ij_invT)
-        term3 = Om_ij_invT
-
-        dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
-        dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
-
-        # --- Forward: ∂KL_ij/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ ---
-        Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N, K_h, K_h]
-        dKL_dOi_fwd = dKL_dOij @ Om_j_invT[:, None, :]
-        grad_fwd = torch.einsum('bij,bijpq->bipq', beta_h, dKL_dOi_fwd)
-
-        # --- Backward: ∂KL_ji/∂Ω_i = -Ω_jiᵀ @ ∂KL/∂Ω_ji @ Ω_i⁻ᵀ ---
-        # dKL_dOij[j, i] = ∂KL_ji/∂Ω_ji
-        dKL_dOji = dKL_dOij.transpose(1, 2)  # [B, N_j, N_i, K_h, K_h] → swap i↔j
-        Om_ji = Om_ij.transpose(1, 2)        # [B, N_j, N_i, K_h, K_h]
-        Om_jiT = Om_ji.transpose(-2, -1)
-        Om_i_invT = Om_inv.transpose(-2, -1)  # [B, N_i, K_h, K_h]
-        # dKL_ji/dΩ_i = -Ω_jiᵀ @ dKL/dΩ_ji @ Ω_i⁻ᵀ
-        # Shape: [B, N_j, N_i, K_h, K_h] with i in dim 2
-        dKL_dOi_bwd = -(Om_jiT @ dKL_dOji @ Om_i_invT[:, None, :])
-        dKL_dOi_bwd = torch.clamp(dKL_dOi_bwd, -1e6, 1e6)
-        # beta_ji is beta_h[:, j, i] → sum over j (dim 1)
-        # We need sum_j beta_ji * dKL_ji/dOmega_i, with j in dim 1, i in dim 2
-        beta_ji = beta_h.transpose(1, 2)  # [B, N_i, N_j] → swap to [B, j, i]? No.
-        # beta_h[b, j, i] with j in dim1, i in dim2
-        # dKL_dOi_bwd[b, j, i, p, q] — sum over j
-        grad_bwd = torch.einsum('bji,bjipq->bipq', beta_h, dKL_dOi_bwd)
-
-        grad_Omega[:, :, h] = grad_fwd + grad_bwd
-
-    return grad_Omega
-
-
 # ---------------------------------------------------------------------------
 # Natural gradient on GL(K)
 # ---------------------------------------------------------------------------
 
-def natural_grad_omega(grad_Omega, Omega):
+def natural_grad_omega(grad_Omega: torch.Tensor, Omega: torch.Tensor) -> torch.Tensor:
     """
     Left-invariant natural gradient on GL(K).
 
@@ -342,8 +285,11 @@ def natural_grad_omega(grad_Omega, Omega):
 
     For metric g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), the natural gradient is Ω Ωᵀ ∂F/∂Ω.
 
-    Note: prefer lie_algebra_clip_grad which computes and clips the natural
-    gradient in the Lie algebra for geometric consistency.
+    Reference / test-support oracle. Production code uses
+    ``lie_algebra_clip_grad`` which computes and clips the natural gradient
+    in the Lie algebra for geometric consistency. This function is retained
+    so ``tests/transformer/test_omega_gradient.py`` can verify the two
+    formulations agree at the identity.
 
     Args:
         grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
@@ -359,7 +305,11 @@ def natural_grad_omega(grad_Omega, Omega):
 # Trust region and conditioning
 # ---------------------------------------------------------------------------
 
-def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
+def lie_algebra_clip_grad(
+    grad_Omega: torch.Tensor,
+    Omega: torch.Tensor,
+    trust_radius: float = 0.3,
+) -> torch.Tensor:
     """
     Compute and clip the natural gradient via the Lie algebra of GL(K).
 
@@ -402,23 +352,7 @@ def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
     return Omega @ xi
 
 
-def relative_trust_clip(nat_grad, Omega, trust_region=0.3, max_norm=None):
-    """
-    Legacy Euclidean trust region clip (kept for backward compatibility).
-
-    Prefer lie_algebra_clip_grad for geometrically consistent clipping.
-    """
-    nat_norm = nat_grad.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
-    om_norm = Omega.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
-    max_upd = trust_region * om_norm
-    if max_norm is not None:
-        abs_cap = torch.tensor(max_norm, device=nat_grad.device, dtype=nat_grad.dtype)
-        max_upd = torch.minimum(max_upd, abs_cap)
-    scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
-    return nat_grad * scale
-
-
-def regularize_omega_conditioning(Omega, cond_max=50.0):
+def regularize_omega_conditioning(Omega: torch.Tensor, cond_max: float = 50.0) -> torch.Tensor:
     """
     Progressive regularization of ill-conditioned Omega toward its polar factor.
 
@@ -466,7 +400,7 @@ def regularize_omega_conditioning(Omega, cond_max=50.0):
 # Phi (Lie algebra) path utilities
 # ---------------------------------------------------------------------------
 
-def make_gl_generators(K, device='cpu'):
+def make_gl_generators(K: int, device: Any = 'cpu') -> torch.Tensor:
     """
     Construct GL(K) generators: K² basis matrices E_{ab} with (E_{ab})_{ij} = δ_{ai}δ_{bj}.
 
@@ -486,7 +420,7 @@ def make_gl_generators(K, device='cpu'):
     return generators
 
 
-def phi_to_omega(phi, generators):
+def phi_to_omega(phi: torch.Tensor, generators: torch.Tensor) -> torch.Tensor:
     """
     Convert Lie algebra element φ to group element Ω = exp(Σ_a φ^a T_a).
 
@@ -500,7 +434,11 @@ def phi_to_omega(phi, generators):
     return torch.linalg.matrix_exp(X)
 
 
-def retract_phi(phi, delta_phi, max_norm=None):
+def retract_phi(
+    phi: torch.Tensor,
+    delta_phi: torch.Tensor,
+    max_norm: Optional[float] = None,
+) -> torch.Tensor:
     """
     Retract phi update: clamp ||phi|| to max_norm.
 
@@ -524,7 +462,9 @@ def retract_phi(phi, delta_phi, max_norm=None):
     return phi_new * scale
 
 
-def init_phi(shape, scale=0.01, device='cpu'):
+def init_phi(
+    shape: Tuple[int, ...], scale: float = 0.01, device: Any = 'cpu',
+) -> torch.Tensor:
     """
     Initialize Lie algebra elements near zero (identity group element).
 
@@ -542,7 +482,12 @@ def init_phi(shape, scale=0.01, device='cpu'):
 # Initialization
 # ---------------------------------------------------------------------------
 
-def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
+def init_omega(
+    shape: Tuple[int, ...],
+    scale: float = 0.01,
+    device: Any = 'cpu',
+    negative_det_fraction: float = 0.0,
+) -> torch.Tensor:
     """
     Initialize gauge frames near identity.
 
@@ -567,7 +512,10 @@ def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
 
     Returns: tensor of shape `shape`
     """
-    assert shape[-1] == shape[-2], "Last two dims must be K×K"
+    if shape[-1] != shape[-2]:
+        raise ValueError(
+            f"init_omega: last two dims must be K×K, got shape {tuple(shape)}"
+        )
     K = shape[-1]
     eye = torch.eye(K, device=device)
     Omega = eye.expand(shape).clone()
@@ -593,7 +541,7 @@ def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
     return Omega
 
 
-def monitor_omega_health(Omega, name="Omega"):
+def monitor_omega_health(Omega: torch.Tensor, name: str = "Omega") -> Dict[str, float]:
     """Log condition numbers and determinants for debugging."""
     with torch.no_grad():
         dets = torch.linalg.det(Omega)

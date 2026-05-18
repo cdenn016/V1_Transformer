@@ -578,17 +578,6 @@ class TestVfeGradOmega:
         grad = vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp)
         assert torch.isfinite(grad).all(), "Gradient has NaN/Inf with ill-conditioned Omega"
 
-    def test_vfe_grad_Omega_full_includes_backward(self):
-        """vfe_grad_Omega_full differs from vfe_grad_Omega (forward-only misses backward)."""
-        from ..gauge import vfe_grad_Omega, vfe_grad_Omega_full
-        mu_h, Sigma_h, Omega, precomp, kl_ij, beta, tau = self._build()
-
-        grad_fwd = vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp)
-        grad_full = vfe_grad_Omega_full(mu_h, Sigma_h, Omega, beta, kl_ij, precomp)
-
-        diff = (grad_fwd - grad_full).norm()
-        assert diff > 1e-4, f"Full and forward-only should differ, diff = {diff:.6e}"
-
 
 class TestGradKlOmegaI:
     """Test chain rule: grad_kl_Omega_i = grad_kl_Omega_ij @ Omega_j^{-T}."""
@@ -706,38 +695,6 @@ class TestVfeGradMuPrior:
 
         grad = vfe_grad_mu_prior(mu, Sigma, mu.clone(), prior_Sigma, alpha)
         assert grad.norm() < 1e-6, f"Gradient should be zero at prior, got norm = {grad.norm():.6e}"
-
-
-class TestVfeGradSigmaPrior:
-    """Test vfe_grad_Sigma_prior returns prior precision."""
-
-    def test_sigma_prior_returns_prior_precision(self):
-        from ..gaussians import vfe_grad_Sigma_prior, safe_inverse
-        torch.manual_seed(42)
-
-        B, N_, K_ = 1, 2, K
-        Sigma = random_spd(K_, (B, N_))
-        prior_Sigma = random_spd(K_, (B, N_))
-        alpha = torch.ones(B, N_)
-
-        result = vfe_grad_Sigma_prior(Sigma, prior_Sigma, alpha)
-        expected = safe_inverse(prior_Sigma)
-        diff = (result - expected).norm()
-        assert diff < 1e-5, f"Should return prior precision, diff = {diff:.6e}"
-
-    def test_sigma_prior_spd(self):
-        from ..gaussians import vfe_grad_Sigma_prior
-        torch.manual_seed(42)
-
-        Sigma = random_spd(K, (2, 3))
-        prior_Sigma = random_spd(K, (2, 3))
-        alpha = torch.ones(2, 3)
-
-        result = vfe_grad_Sigma_prior(Sigma, prior_Sigma, alpha)
-        for i in range(2):
-            for j in range(3):
-                eigs = torch.linalg.eigvalsh(result[i, j])
-                assert eigs.min() > 0, f"Prior precision not SPD at [{i},{j}]: min eig = {eigs.min():.6e}"
 
 
 class TestStateDependentAlpha:

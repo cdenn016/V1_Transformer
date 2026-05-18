@@ -1,7 +1,7 @@
 """Configuration for the Pure VFE Transformer."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 
 @dataclass
@@ -16,7 +16,7 @@ class PureVFEConfig:
 
     # VFE descent (inference = forward pass)
     n_esteps: int = 12         # Iterations of VFE descent (replaces "depth")
-    tau: float = None           # Attention temperature (defaults to √K_h)
+    tau: Optional[float] = None  # Attention temperature (defaults to √K_h)
 
     # Per-variable natural gradient learning rates
     # Single VFE objective F(mu_q, Sigma_q, phi, mu_p, Sigma_p) —
@@ -63,7 +63,7 @@ class PureVFEConfig:
     m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
 
     # Gauge frame parameterization
-    gauge_param: str = 'omega'          # 'omega' (direct GL(K), both det signs) or 'phi' (Lie algebra → GL⁺(K))
+    gauge_param: Literal['omega', 'phi'] = 'omega'  # 'omega' (direct GL(K), both det signs) or 'phi' (Lie algebra → GL⁺(K))
     omega_cond_max: float = 50.0        # Max condition number for Omega (regularize toward polar factor)
     omega_grad_clamp: float = 10.0      # Element-wise clamp for omega gradients (tighter than general grad_clamp)
     omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
@@ -73,7 +73,7 @@ class PureVFEConfig:
     use_analytical_omega_grad: bool = True  # True: analytical dF/dΩ at prior values; False: moment-matching heuristic
 
     # Observation gradient options
-    sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
+    sigma_obs_grad: Literal['none', 'diagonal', 'full'] = 'none'  # 'none' matches VFE dynamic
 
     # Covariance mode
     diagonal_covariance: bool = False   # Use diagonal Σ (K,) instead of full (K, K) — faster, less expressive
@@ -114,7 +114,7 @@ class PureVFEConfig:
 
     # LR scheduling (applies to all 5 per-variable learning rates)
     warmup_steps: int = 0               # Linear warmup (0 = no warmup)
-    lr_schedule: str = 'constant'       # 'constant', 'cosine'
+    lr_schedule: Literal['constant', 'cosine'] = 'constant'
     min_lr_ratio: float = 0.1           # Floor for cosine decay as fraction of base LR
     max_steps: int = 30000              # Total training steps (for cosine schedule)
 
@@ -129,8 +129,11 @@ class PureVFEConfig:
     device: str = "cuda"
     use_cuda_kernels: bool = True       # Use custom CUDA kernels when available
 
-    def __post_init__(self):
-        assert self.belief_dim == self.n_heads * self.head_dim, \
-            f"belief_dim ({self.belief_dim}) must equal n_heads * head_dim ({self.n_heads}*{self.head_dim})"
+    def __post_init__(self) -> None:
+        if self.belief_dim != self.n_heads * self.head_dim:
+            raise ValueError(
+                f"belief_dim ({self.belief_dim}) must equal "
+                f"n_heads * head_dim ({self.n_heads}*{self.head_dim})"
+            )
         if self.tau is None:
             self.tau = self.head_dim ** 0.5
