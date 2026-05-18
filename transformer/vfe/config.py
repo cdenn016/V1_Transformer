@@ -51,7 +51,6 @@ class VFEConfig:
     kappa: float = 1.0                   # Attention temperature
     prior_handoff_rho: float = 1.0       # μ cross-layer damping (1.0 = no damping, <1 = smoother)
     prior_handoff_sigma: float = 0.0    # σ cross-layer handoff (0.0 = frozen at embedding, >0 = blends posterior)
-    prior_handoff_phi: bool = False     # Deprecated no-op: priors.phi is never consumed by VFEEStep (phi flows via beliefs)
     learnable_kappa: bool = False        # Learn per-layer kappa via log-space parameter
     include_attention_entropy: bool = True  # Add κ·Σβ·log(β/π) to alignment_loss (manuscript eq:free_energy_functional_final).
                                             # Defaults ON for theoretical correctness; disable to recover
@@ -236,15 +235,6 @@ class VFEConfig:
             raise ValueError(
                 f"irrep_spec gives K={computed_dim} but embed_dim={self.embed_dim}. "
                 f"These must match."
-            )
-        if self.prior_handoff_phi:
-            import warnings
-            warnings.warn(
-                "VFEConfig.prior_handoff_phi is a deprecated no-op: priors.phi "
-                "is not consumed by VFEEStep; phi already flows across layers "
-                "via the belief state. Setting this flag has no effect.",
-                DeprecationWarning,
-                stacklevel=2,
             )
         if self.rope_full_gauge not in _ROPE_FULL_GAUGE_VALUES:
             raise ValueError(

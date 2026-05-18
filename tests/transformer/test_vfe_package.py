@@ -832,27 +832,6 @@ class TestFullCrossLayerHandoff:
         out = stack(beliefs, initial_priors, mask)
         assert out.mu.shape == (B, N, K)
 
-    def test_phi_handoff(self, generators):
-        """prior_handoff_phi=True propagates phi across layers."""
-        from transformer.vfe.stack import VFEStack
-        cfg = VFEConfig(
-            vocab_size=50, embed_dim=16, irrep_spec=[('l0', 2, 8)],
-            n_layers=2, max_seq_len=32, n_e_steps=1,
-            prior_handoff_phi=True,
-        )
-        stack = VFEStack(cfg, generators)
-        B, N, K = 2, 8, 16
-        beliefs = BeliefState(
-            mu=torch.randn(B, N, K),
-            sigma=torch.ones(B, N, K),
-            phi=torch.randn(B, N, cfg.n_gen),
-        )
-        initial_priors = beliefs
-        mask = torch.ones(N, N)
-        out = stack(beliefs, initial_priors, mask)
-        assert out.mu.shape == (B, N, K)
-
-
 # ---------------------------------------------------------------------------
 # Regression tests for the 2026-04-17 ultrareview Phase M fixes.
 # bug_003: VFEEStep dropped alpha_c0 when E_learnable_alpha=True, omitting

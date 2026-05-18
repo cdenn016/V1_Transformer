@@ -4,14 +4,16 @@ VFEStack: L layers with cross-layer prior handoff.
 Cross-layer handoff (VFE_Transformer_Idea.md Section 7):
     mu_prior^{l+1}    = (1-rho_mu) mu_prior^l + rho_mu mu*^l
     sigma_prior^{l+1} = (1-rho_sigma) sigma_embed + rho_sigma sigma*^l
-    phi_prior^{l+1}   = phi*^l  (when prior_handoff_phi=True)
+    phi_prior^{l+1}   = phi_embedding  (frozen; phi flows via beliefs)
 
-Defaults: rho_mu=1.0 (full mu flow), rho_sigma=0.0 (frozen at embedding),
-prior_handoff_phi=False. Sigma damping prevents progressive variance
-collapse (sigma cascade) while allowing gradual prior refinement.
+Defaults: rho_mu=1.0 (full mu flow), rho_sigma=0.0 (frozen at embedding).
+Sigma damping prevents progressive variance collapse (sigma cascade) while
+allowing gradual prior refinement.
 
 Sigma freezing is architecturally enforced — priors.sigma is never
-reassigned from the posterior.
+reassigned from the posterior. priors.phi is likewise never consumed by
+VFEEStep (phi is initialised from beliefs.phi each layer), so phi is
+held at the embedding value in the prior state.
 """
 
 from __future__ import annotations
@@ -40,7 +42,6 @@ class VFEStack(nn.Module):
         super().__init__()
         self.prior_handoff_rho = cfg.prior_handoff_rho
         self.prior_handoff_sigma = cfg.prior_handoff_sigma
-        self.prior_handoff_phi = cfg.prior_handoff_phi
         self.sigma_max = cfg.sigma_max
         self.blocks = nn.ModuleList([
             VFEBlock(cfg, generators) for _ in range(cfg.n_layers)
@@ -112,10 +113,9 @@ class VFEStack(nn.Module):
                         )
                     )
 
-            # φ handoff: propagate posterior gauge frames
-            # priors.phi is never consumed by VFEEStep (phi is initialized from
-            # beliefs.phi, which already flows posterior -> next-layer input).
-            # The prior_handoff_phi flag is retained for back-compat but is a no-op.
+            # priors.phi is never consumed by VFEEStep (phi is initialised
+            # from beliefs.phi, which already flows posterior -> next-layer
+            # input), so the prior phi stays at the embedding value.
             new_prior_phi = initial_priors.phi
 
             priors = BeliefState(
