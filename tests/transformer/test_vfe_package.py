@@ -414,6 +414,127 @@ class TestLearnableKappa:
             assert block.e_step.log_kappa.grad is not None
 
 
+class TestMHyperLrActuallyMovesParams:
+    """Tripwire for the m_hyper_lr no-op regression (2026-05-18).
+
+    The pre-existing ``test_gradient_flows_to_log_kappa`` only checked
+    ``grad is not None``, which passed even when the grad was 5 orders of
+    magnitude smaller than M-step params (raw_c0/raw_b0 were exactly zero).
+    These tests assert *magnitude* and *training movement* so the bug
+    cannot silently come back.
+    """
+
+    def _build_model(self, learnable_kappa=True, E_learnable_alpha=True):
+        cfg = VFEConfig(
+            vocab_size=50, embed_dim=20, irrep_spec=[('fund', 2, 10)],
+            n_layers=1, max_seq_len=32, n_e_steps=1,
+            diagonal_covariance=True, gauge_group='GLK',
+            use_rope=True, rope_full_gauge='off',
+            norm_type='layernorm', use_prior_bank=False,
+            mask_self_attention=False, use_autograd_mu_sigma=False,
+            alpha_divergence=1,
+            learnable_kappa=learnable_kappa,
+            E_learnable_alpha=E_learnable_alpha,
+            prior_handoff_sigma=0.0, prior_handoff_rho=1.0,
+        )
+        return VFEModel(cfg)
+
+    def test_grad_magnitudes_nonzero_after_single_backward(self):
+        torch.manual_seed(0)
+        model = self._build_model()
+        token_ids = torch.randint(0, 50, (4, 16))
+        targets = torch.randint(0, 50, (4, 16))
+        _, loss, _ = model(token_ids, targets=targets)
+        loss.backward()
+        es = model.stack.blocks[0].e_step
+        # Threshold 1e-10 is well above float noise; the buggy state had
+        # raw_c0 / raw_b0 at *exactly* 0.0, so any nonzero grad signals fix.
+        assert es.raw_c0.grad is not None
+        assert es.raw_c0.grad.norm().item() > 1e-10, (
+            "raw_c0 has no gradient — the auxiliary hyperparameter loss "
+            "is not reaching CE. See docs/edits/edits-2026-05-18.md."
+        )
+        assert es.raw_b0.grad is not None
+        assert es.raw_b0.grad.norm().item() > 1e-10
+        assert es.log_kappa.grad is not None
+        assert es.log_kappa.grad.norm().item() > 1e-10
+
+    def test_m_hyper_lr_sweep_moves_kappa_and_alpha(self):
+        """20 AdamW steps at m_hyper_lr=1e-1 must move kappa and alpha
+        visibly; m_hyper_lr=0 must leave them at their init values."""
+        import torch.nn.functional as F_
+
+        def _train(lr):
+            torch.manual_seed(0)
+            model = self._build_model()
+            es = model.stack.blocks[0].e_step
+            opt = torch.optim.AdamW(
+                [es.raw_c0, es.raw_b0, es.log_kappa], lr=lr,
+            )
+            torch.manual_seed(999)
+            for _ in range(20):
+                token_ids = torch.randint(0, 50, (4, 16))
+                targets = torch.randint(0, 50, (4, 16))
+                _, loss, _ = model(token_ids, targets=targets)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+            return (
+                F_.softplus(es.raw_c0).mean().item(),
+                F_.softplus(es.raw_b0).mean().item(),
+                torch.exp(es.log_kappa).item(),
+            )
+
+        c0_0, b0_0, k_0 = _train(0.0)
+        c0_hi, b0_hi, k_hi = _train(1e-1)
+
+        # m_hyper_lr=0 leaves init values intact: softplus(softplus_inv(1)) = 1
+        assert abs(c0_0 - 1.0) < 1e-6
+        assert abs(b0_0 - 1.0) < 1e-6
+        assert abs(k_0 - 1.0) < 1e-6
+
+        # m_hyper_lr=1e-1 produces large movement (>10% from init)
+        assert abs(c0_hi - 1.0) > 0.1, f"alpha_c0 moved only {c0_hi - 1.0:.4f}"
+        assert abs(b0_hi - 1.0) > 0.1, f"alpha_b0 moved only {b0_hi - 1.0:.4f}"
+        assert abs(k_hi - 1.0) > 0.1, f"kappa moved only {k_hi - 1.0:.4f}"
+
+    def test_aux_loss_does_not_perturb_m_step_grads(self):
+        """Detachment discipline: enabling the aux loss must not change
+        gradients on base_mu / base_log_sigma / phi_embed. Hard regression
+        test — these grad norms must be byte-identical with and without
+        the hyperparam aux loss contribution."""
+        torch.manual_seed(0)
+        m_with_aux = self._build_model(
+            learnable_kappa=True, E_learnable_alpha=True,
+        )
+        torch.manual_seed(0)
+        m_without_aux = self._build_model(
+            learnable_kappa=False, E_learnable_alpha=False,
+        )
+        torch.manual_seed(42)
+        token_ids = torch.randint(0, 50, (4, 16))
+        targets = torch.randint(0, 50, (4, 16))
+
+        _, loss_a, _ = m_with_aux(token_ids, targets=targets)
+        loss_a.backward()
+        _, loss_b, _ = m_without_aux(token_ids, targets=targets)
+        loss_b.backward()
+
+        names_to_check = [
+            'prior_bank.base_mu',
+            'prior_bank.base_log_sigma',
+            'prior_bank.phi_embed.weight',
+        ]
+        for name in names_to_check:
+            g_a = dict(m_with_aux.named_parameters())[name].grad
+            g_b = dict(m_without_aux.named_parameters())[name].grad
+            assert torch.allclose(g_a, g_b, atol=0, rtol=0), (
+                f"M-step gradient for {name} differs between aux-on and "
+                f"aux-off — aux loss is leaking into M-step params. "
+                f"Max abs diff: {(g_a - g_b).abs().max().item()}"
+            )
+
+
 class TestExactDiagonalTransport:
 
     def test_config_default_false(self):

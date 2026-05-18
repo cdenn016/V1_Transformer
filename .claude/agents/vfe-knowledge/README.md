@@ -9,7 +9,9 @@ The agents have **two kinds of sources**, and the distinction matters:
 | Source kind | Files | Role |
 |---|---|---|
 | **External canon** (sources of truth) | `external_canon_math.md`, `external_canon_inference.md`, `external_canon_transformers.md`, `external_bibliography.md` | The standard tools and math of information geometry, differential geometry, gauge theory, free energy principle / active inference, variational inference, and transformer attention. Cited as **canon** for findings. Drawn from textbooks (Amari & Nagaoka, Nakahara, Kobayashi-Nomizu, Frankel) and load-bearing papers (Friston 2010, Vaswani 2017, Amari 1998, Bai-Kolter-Koltun 2019, etc.) — not from this codebase or its manuscripts. |
-| **User claims** (the thing being evaluated) | `user_theory_summary.md`, `em_modes.md`, `e_step_constraints.md`, `codebase_map.md`, `manuscript_index.md` | Descriptions of *what the user claims and builds*. These are evaluated against the external canon, not treated as canon themselves. `user_theory_summary.md` summarizes the user's own theory (drawn from CLAUDE.md and manuscripts) — it is a list of claims to check, not authoritative math. |
+| **User claims** (the thing being evaluated) | `user_theory_summary.md`, `em_modes.md`, `e_step_constraints.md`, `codebase_map.md`, `manuscript_index.md`, `diagnostics_glossary.md`, `notation_dictionary.md` | Descriptions of *what the user claims and builds*. These are evaluated against the external canon, not treated as canon themselves. `user_theory_summary.md` summarizes the user's theory; `diagnostics_glossary.md` enumerates the runtime metrics the codebase tracks (with standard interpretations); `notation_dictionary.md` catalogs the manuscripts' symbols and already-detected drifts. |
+| **Methodology** | `audit_methodology.md`, `review_methodology.md`, `analysis_methodology.md`, `consistency_methodology.md` | Ordered checklists and output formats — one per agent (auditor, reviewer, analyst, consistency). |
+| **Style** | `style_constraints.md` | Project-wide style rules: banned phrases, banned LaTeX, communication style. |
 
 **Direction of evaluation:** standard literature → user. Never the reverse.
 
@@ -24,14 +26,18 @@ The agents are not here to validate the user's theory by checking internal consi
 
 | Task | Required reading |
 |---|---|
-| Any audit or review | `README.md` (this file), the relevant `external_canon_*.md`, `external_bibliography.md` |
+| Any audit, review, analysis, or consistency check | `README.md` (this file), the relevant `external_canon_*.md`, `external_bibliography.md` |
 | Audit gauge / transport / Lie-algebra code | `external_canon_math.md`, then `codebase_map.md` |
 | Audit free-energy assembly | `external_canon_inference.md`, then `user_theory_summary.md` (as claim summary), then `codebase_map.md` |
 | Audit attention β / softmax derivation | `external_canon_transformers.md` + `external_canon_inference.md`, then `user_theory_summary.md`, then `codebase_map.md` |
-| Audit E-step / IFT / amortized | `external_canon_inference.md` §5 (EM + IFT), then `e_step_constraints.md`, then `em_modes.md` |
-| Review any manuscript | `manuscript_index.md` (for orientation), all three `external_canon_*.md` files, `methodology_review.md`, `style_constraints.md` |
+| Audit E-step / IFT / amortized | `external_canon_inference.md` (EM + IFT), then `e_step_constraints.md`, then `em_modes.md` |
+| Review any manuscript | `manuscript_index.md` (for orientation), all three `external_canon_*.md`, `review_methodology.md`, `style_constraints.md` |
+| Analyze a training run / sweep / ablation | `analysis_methodology.md`, `diagnostics_glossary.md`, `external_canon_inference.md` + `external_canon_transformers.md` for interpretive priors |
+| Check consistency across manuscripts | `consistency_methodology.md`, `notation_dictionary.md`, `style_constraints.md`, all three `external_canon_*.md` for canonical equation forms |
 | Run a code-purity audit | `audit_methodology.md` first |
 | Run a peer review | `review_methodology.md` first |
+| Run an experiment analysis | `analysis_methodology.md` first |
+| Run a cross-manuscript consistency check | `consistency_methodology.md` first |
 
 ## Project-specific hard constraints (operate within these, but they are NOT theoretical canon)
 
