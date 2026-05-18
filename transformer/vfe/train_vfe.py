@@ -124,15 +124,10 @@ config = {
     'log_interval':             200,
     'eval_interval':            2000,
     'checkpoint_interval':      25000,
-    
-    'semantic_analysis_interval': 10000,
-    'gauge_geometry_interval':    5000,
-    'fiber_trajectory_interval':  5000,
-    
+
     'track_layer_diagnostics':      False,
-    'track_iteration_diagnostics':  False,
-    'diagnostics_interval'       :  25,
-   
+    'monitor_monotonicity':         False,
+
 }
 
 # ============================================================================

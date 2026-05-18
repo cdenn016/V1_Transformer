@@ -19,8 +19,12 @@ from transformer.core.attention import compute_attention_weights
 
 # Cache keyed by generator tensor identity (id) — avoids per-call GPU sync.
 # `generators` is a registered buffer set once at module construction; its
-# skew-symmetry property never changes after init.
+# skew-symmetry property never changes after init. Bounded to ``_SKEW_CACHE_MAX``
+# entries with FIFO eviction so the cache cannot grow unboundedly across
+# many-model sessions (e.g. ablation suites constructing hundreds of models
+# in one process). With a small live set, ``id()`` reuse after GC is harmless.
 _SKEW_CACHE: dict = {}
+_SKEW_CACHE_MAX = 16
 
 
 def compute_gauge_transport(
@@ -53,6 +57,8 @@ def compute_gauge_transport(
             _skew = bool(torch.allclose(
                 generators, -generators.transpose(-1, -2), atol=1e-6
             ))
+            if len(_SKEW_CACHE) >= _SKEW_CACHE_MAX:
+                _SKEW_CACHE.pop(next(iter(_SKEW_CACHE)))
             _SKEW_CACHE[_key] = _skew
     else:
         _skew = skew_symmetric
@@ -73,7 +79,7 @@ def compute_kl_attention(
     mask: Optional[torch.Tensor] = None,
     use_rope: bool = False,
     rope_base: float = 10000.0,
-    cached_block_exp_pairs: Optional[list] = None,
+    cached_block_exp_pairs: Optional[List[Tuple[torch.Tensor, Optional[torch.Tensor]]]] = None,
     enforce_orthogonal: bool = False,
     mask_self_attention: bool = True,
     exact_diagonal_transport: bool = False,
@@ -138,117 +144,5 @@ def compute_kl_attention(
         )
 
     return beta, kl_matrix
-
-
-def aggregate_beliefs(
-    mu: torch.Tensor,
-    sigma: torch.Tensor,
-    beta: torch.Tensor,
-    block_exp_pairs: List[Tuple[torch.Tensor, Optional[torch.Tensor]]],
-    irrep_dims: List[int],
-    mode: str = 'mixture',
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    r"""Aggregate transported beliefs using attention weights.
-
-    Computes the transported message mean (Section 4 of VFE_Transformer_Idea.md):
-
-    .. math::
-        \bar{\mu}_i = \sum_j \beta_{ij}\, \Omega_{ij}\, \mu_j
-
-    where :math:`\Omega_{ij} = \exp(\phi_i \cdot G)\,\exp(-\phi_j \cdot G)`.
-
-    **Mixture (moment-matching, Section 4.1)**:
-
-    .. math::
-        \bar{\Sigma}_i = \sum_j \beta_{ij} \bigl(
-            \Omega_{ij}\Sigma_j\Omega_{ij}^\top
-            + (\Omega_{ij}\mu_j - \bar{\mu}_i)(\cdots)^\top
-        \bigr)
-
-    Total uncertainty = average within-component + between-component spread.
-
-    **Precision (product-of-experts, Section 4.2)**:
-
-    .. math::
-        \bar{\Lambda}_i = \sum_j \beta_{ij}\, \Lambda_{ij}, \quad
-        \bar{\Sigma}_i = \bar{\Lambda}_i^{-1}
-
-    where :math:`\Lambda_{ij} = (\Omega_{ij} \Sigma_j \Omega_{ij}^\top)^{-1}`.
-
-    Args:
-        mu: ``(B, N, K)`` belief means.
-        sigma: ``(B, N, K)`` diagonal variances.
-        beta: ``(B, N, N)`` attention weights.
-        block_exp_pairs: Per-block ``(exp_h, exp_neg_h)`` from
-            :func:`compute_gauge_transport`.
-        irrep_dims: Block dimensions from ``VFEConfig.irrep_dims``.
-        mode: ``'mixture'`` or ``'precision'``.
-
-    Returns:
-        mu_agg: ``(B, N, K)`` aggregated means.
-        sigma_agg: ``(B, N, K)`` aggregated diagonal variances.
-    """
-    B, N, K = mu.shape
-    is_diagonal = sigma.dim() == 3
-
-    mu_agg_parts = []
-    sigma_agg_parts = []
-    block_start = 0
-
-    for h, d_h in enumerate(irrep_dims):
-        block_end = block_start + d_h
-        exp_h, exp_neg_h = block_exp_pairs[h]  # (B, N, d_h, d_h)
-        mu_h = mu[:, :, block_start:block_end]  # (B, N, d_h)
-
-        # Transport: Omega_ij mu_j = exp_phi_i @ exp_neg_phi_j @ mu_j
-        # Step 1: rotate mu_j into neutral frame
-        rotated_mu_j = torch.einsum('bjkl,bjl->bjk', exp_neg_h, mu_h)  # (B, N, d_h)
-        # Step 2: rotate into frame i for all (i, j) pairs
-        transported_ij = torch.einsum('bikl,bjl->bijk', exp_h, rotated_mu_j)  # (B, N, N, d_h)
-        # Step 3: weighted sum
-        mu_agg_h = torch.einsum('bij,bijd->bid', beta, transported_ij)  # (B, N, d_h)
-        mu_agg_parts.append(mu_agg_h)
-
-        if is_diagonal:
-            sigma_h = sigma[:, :, block_start:block_end]  # (B, N, d_h)
-
-            # Transported covariance diagonal: diag(Omega @ diag(sigma) @ Omega^T)_k
-            #   = sum_l Omega_kl^2 * sigma_l
-            #   = sum_{m1,m2} exp_h[i,k,m1] * exp_h[i,k,m2] *
-            #     (sum_l exp_neg_h[j,m1,l] * exp_neg_h[j,m2,l] * sigma_h[j,l])
-            # The (m1,m2) factorisation avoids materialising the full
-            # (B, N, N, d_h, d_h) pairwise Omega tensor; the (B, N, d_h, d_h)
-            # S_h intermediate is O(N) smaller than the full Omega.
-            S_h = torch.einsum(
-                'bjml,bjnl,bjl->bjmn', exp_neg_h, exp_neg_h, sigma_h,
-            )  # (B, N, d_h, d_h)
-            sigma_transported_ij = torch.einsum(
-                'bikm,bikn,bjmn->bijk', exp_h, exp_h, S_h,
-            )  # (B, N, N, d_h)
-
-            if mode == 'precision':
-                # Precision aggregation: Lambda_bar = sum_j beta_ij * Lambda_ij
-                precision_ij = 1.0 / sigma_transported_ij.clamp(min=1e-6)
-                precision_agg = torch.einsum('bij,bijd->bid', beta, precision_ij)  # (B, N, d_h)
-                sigma_agg_h = 1.0 / precision_agg.clamp(min=1e-6)
-            else:
-                # Mixture (moment-matching): E[Sigma] + Var[mu]
-                sigma_within = torch.einsum(
-                    'bij,bijd->bid', beta, sigma_transported_ij,
-                )  # (B, N, d_h)
-                mu_dev = transported_ij - mu_agg_h.unsqueeze(2)  # (B, N, N, d_h)
-                sigma_between = torch.einsum(
-                    'bij,bijd->bid', beta, mu_dev ** 2,
-                )  # (B, N, d_h)
-                sigma_agg_h = (sigma_within + sigma_between).clamp(min=1e-6)
-
-            sigma_agg_parts.append(sigma_agg_h)
-
-        block_start = block_end
-
-    mu_agg = torch.cat(mu_agg_parts, dim=-1)
-    sigma_agg = torch.cat(sigma_agg_parts, dim=-1) if sigma_agg_parts else sigma
-
-    return mu_agg, sigma_agg
 
 

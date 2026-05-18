@@ -57,6 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 
 # Add project root to sys.path so the absolute imports below resolve when
 # the file is run as a script from inside transformer/vfe/.
@@ -180,15 +181,10 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'log_interval':             200,
     'eval_interval':            2000,
     'checkpoint_interval':      25000,
-    
-    'semantic_analysis_interval': 10000,
-    'gauge_geometry_interval':    5000,
-    'fiber_trajectory_interval':  5000,
-    
+
     'track_layer_diagnostics':      False,
-    'track_iteration_diagnostics':  False,
-    'diagnostics_interval'       :  25,
-    
+    'monitor_monotonicity':         False,
+
     # === Driver-only (not VFEConfig fields) ===
     'dataset':                  'wikitext-103',
 }
@@ -446,8 +442,8 @@ def run_single_vfe_experiment(
     cfg: Dict[str, Any],
     device: torch.device,
     run_dir: Path,
-    train_loader,
-    val_loader,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
     vocab_size: int,
     seed: int,
 ) -> Dict[str, Any]:
@@ -489,7 +485,11 @@ def run_single_vfe_experiment(
     if trainer._pub_tracker is not None:
         try:
             summary = trainer._pub_tracker.get_summary() or {}
-        except Exception:
+        except (AttributeError, KeyError, ValueError) as exc:
+            # Tracker can return empty/partial state if a run aborted before
+            # the first eval. Log loudly so a genuine bug doesn't get silently
+            # masked by an empty summary downstream.
+            print(f"  WARNING: _pub_tracker.get_summary() failed: {exc!r}")
             summary = {}
 
     best_val_ppl = summary.get('best_val_ppl')
@@ -528,7 +528,22 @@ def run_single_vfe_experiment(
 # =============================================================================
 
 def _sanitize_label(label: str) -> str:
-    return label.replace('=', '_').replace(' ', '_').replace('/', '_')
+    """Make `label` safe as a single filesystem path component.
+
+    Strips path separators (``/``, ``\\``), parent-directory tokens (``..``),
+    drive prefixes, and whitespace so a malformed sweep label cannot escape
+    its sweep directory via Path concatenation.
+    """
+    out = (
+        label.replace('=', '_')
+             .replace(' ', '_')
+             .replace('/', '_')
+             .replace('\\', '_')
+             .replace('..', '_')
+             .replace(':', '_')
+    )
+    # Strip leading separators so Path() does not treat the label as absolute.
+    return out.lstrip('._') or '_'
 
 
 def run_sweep(
@@ -536,8 +551,8 @@ def run_sweep(
     base_config: Dict[str, Any],
     device: torch.device,
     output_dir: Path,
-    train_loader,
-    val_loader,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader],
     vocab_size: int,
     seed: int = 6,
     max_steps_override: Optional[int] = None,
@@ -679,7 +694,11 @@ def analyze_sweep(sweep_dir: Path) -> Dict[str, Any]:
 
     df = pd.read_csv(csv_path)
     meta_path = sweep_dir / 'sweep_meta.json'
-    meta = json.load(open(meta_path)) if meta_path.exists() else {}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+    else:
+        meta = {}
 
     print(f"\n{'=' * 70}")
     print(f"ANALYSIS: {meta.get('sweep_name', sweep_dir.name)}")
@@ -767,7 +786,11 @@ def generate_plots(output_dir: Path) -> None:
     for sweep_dir in sweep_dirs:
         df = pd.read_csv(sweep_dir / 'sweep_results.csv')
         meta_path = sweep_dir / 'sweep_meta.json'
-        meta = json.load(open(meta_path)) if meta_path.exists() else {}
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        else:
+            meta = {}
         sweep_name = meta.get('sweep_name', sweep_dir.name)
 
         valid = df[df['final_ppl'] < float('inf')].copy()
@@ -819,7 +842,12 @@ def generate_plots(output_dir: Path) -> None:
     all_bests = []
     for sweep_dir in sweep_dirs:
         df = pd.read_csv(sweep_dir / 'sweep_results.csv')
-        meta = json.load(open(sweep_dir / 'sweep_meta.json')) if (sweep_dir / 'sweep_meta.json').exists() else {}
+        meta_path = sweep_dir / 'sweep_meta.json'
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        else:
+            meta = {}
         valid = df[df['final_ppl'] < float('inf')]
         if valid.empty:
             continue
@@ -855,7 +883,9 @@ def generate_plots(output_dir: Path) -> None:
 # DATASET CONSTRUCTION (one set of loaders per sweep, reused across runs)
 # =============================================================================
 
-def _build_loaders(base_config: Dict[str, Any]):
+def _build_loaders(
+    base_config: Dict[str, Any],
+) -> Tuple[DataLoader, Optional[DataLoader], int]:
     """Build (train_loader, val_loader, vocab_size) from base_config."""
     return create_dataloaders(
         max_seq_len=int(base_config['max_seq_len']),

@@ -69,11 +69,10 @@ class VFEConfig:
     exact_diagonal_transport: bool = False   # Lift diagonal σ to full for exact Ω@Σ@Ω^T transport
     sigma_max: float = 5.0              # Upper bound on sigma
     sigma_init: float = 1.0             # Initial covariance scale
-    sigma_aggregation: str = 'mixture'   # 'mixture' or 'precision' (for aggregate_beliefs utility; not used in gradient-based E-step)
 
     # === Gauge geometry ===
-    gauge_group: str = 'GLK'             # 'SO3', 'SON', 'GLK'
-    phi_preconditioner: str = 'killing'  # 'clip', 'cartan', 'killing', 'pullback'
+    gauge_group: Literal['SO3', 'SON', 'GLK'] = 'GLK'
+    phi_preconditioner: Literal['clip', 'cartan', 'killing', 'pullback'] = 'killing'
     # GL(K) determinant control (no-op for SO(N), tr(G)=0 already). Pick at most one:
     phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
     phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
@@ -119,7 +118,8 @@ class VFEConfig:
     # Making it truly learnable requires restructuring the AI gradient computation.
 
     # === Normalization ===
-    norm_type: str = 'mahalnorm'         # 'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm' (gauge-blind, ablation-only), 'none'
+    # 'layernorm' is gauge-blind (ablation-only); 'none' disables normalization.
+    norm_type: Literal['mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm', 'none'] = 'mahalnorm'
 
     # === Gauge parameterization ===
     # 'phi' (default): per-token φ ∈ g is the state; Ω is recomputed via
@@ -135,7 +135,7 @@ class VFEConfig:
     # Validation: omega_direct currently requires diagonal_covariance=True,
     # rope_full_gauge='off', and use_autograd_mu_sigma=True (the analytic
     # gradient kernel is φ-only). __post_init__ enforces all three.
-    gauge_parameterization: str = 'phi'
+    gauge_parameterization: Literal['phi', 'omega_direct'] = 'phi'
     omega_normalize_every: int = 0     # 0 = never; >0 = renormalize det every N E-steps
     omega_project_slk: bool = False    # True = renormalize per-block det → 1 (controls trace drift on R·I)
 
@@ -199,14 +199,13 @@ class VFEConfig:
     log_interval: int = 100
     eval_interval: int = 3000
     checkpoint_interval: int = 25000
-    semantic_analysis_interval: int = 10000
-    gauge_geometry_interval: int = 5000
-    fiber_trajectory_interval: int = 5000
 
     # === Diagnostics ===
     track_layer_diagnostics: bool = False
-    track_iteration_diagnostics: bool = False
-    diagnostics_interval: int = 25
+    # F-monotone monitor: when True, the E-step records F at every iter and
+    # warns on non-monotone descent. Fires .item() CUDA syncs per iter — leave
+    # off for production training. See e_step.py around the f_history block.
+    monitor_monotonicity: bool = False
 
     # === E-step gradient kernel selection ===
     # When True, route (mu, sigma) E-step gradient through torch.autograd.grad
@@ -322,6 +321,32 @@ class VFEConfig:
                     stacklevel=2,
                 )
                 self.use_autograd_mu_sigma = True
+
+        # --- alpha_divergence is only honored by the analytic gradient kernel.
+        # The autograd, non-flat, and omega_direct paths reconstruct the
+        # standard KL functional from scratch and silently ignore the Renyi
+        # alpha exponent. Warn the user if they combined alpha != 1.0 with any
+        # of those paths so the divergence is not silently dropped.
+        if (
+            self.alpha_divergence != 1.0
+            and (
+                self.use_autograd_mu_sigma
+                or self.use_non_flat_transport
+                or self.gauge_parameterization == 'omega_direct'
+            )
+        ):
+            import warnings
+            warnings.warn(
+                f"alpha_divergence={self.alpha_divergence} is only honored by "
+                f"the analytic gradient kernel. The current configuration "
+                f"(use_autograd_mu_sigma={self.use_autograd_mu_sigma}, "
+                f"use_non_flat_transport={self.use_non_flat_transport}, "
+                f"gauge_parameterization={self.gauge_parameterization!r}) "
+                f"routes through a path that reconstructs the standard KL and "
+                f"will ignore the Renyi exponent.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     @property
     def irrep_dims(self) -> List[int]:

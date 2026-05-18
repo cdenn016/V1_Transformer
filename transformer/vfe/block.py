@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, CenteredMahalanobisNorm, RMSNorm
 from transformer.vfe.e_step import VFEEStep
-from transformer.vfe.head_mixer import VFEHeadMixer, maybe_warn_independent_gauges
+from transformer.vfe.head_mixer import VFEHeadMixer
 
 
 class _LayerNormSigmaAdapter(nn.Module):
@@ -112,7 +112,6 @@ class VFEBlock(nn.Module):
         # BEFORE normalization so it sees the converged belief and feeds the
         # norm/handoff path. None when the flag is off — zero compute cost.
         if cfg.use_equivariant_head_mixer:
-            maybe_warn_independent_gauges(cfg.irrep_dims)
             self.head_mixer = VFEHeadMixer(cfg.irrep_spec, cfg.embed_dim)
         else:
             self.head_mixer = None
