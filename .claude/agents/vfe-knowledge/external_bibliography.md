@@ -61,6 +61,16 @@ These are the load-bearing sources both agents treat as canon. Citations elsewhe
 
 - See [Su2024RoPE] above.
 
+## Scaling Laws for Language Models
+
+- **[Kaplan2020]** Kaplan, J. et al. (2020). "Scaling laws for neural language models." *arXiv:2001.08361*. Power-law scaling of loss with model size, dataset size, compute.
+- **[Hoffmann2022]** Hoffmann, J. et al. (2022). "Training compute-optimal large language models." *NeurIPS* / *arXiv:2203.15556*. The "Chinchilla" paper. Compute-optimal data-to-parameter ratio; revises Kaplan-style scaling fits.
+
+## Bootstrap and Resampling Methodology
+
+- **[EfronTibshirani1993]** Efron, B. & Tibshirani, R. J. (1993). *An Introduction to the Bootstrap*. Chapman & Hall. Canonical reference for bootstrap confidence intervals and resampling methods.
+- **[Wasserman2004]** Wasserman, L. (2004). *All of Statistics*. Springer. General modern statistics reference covering bootstrap, hypothesis testing, multiple-comparison correction.
+
 ## Coverage gaps — extend on demand
 
 The three external-canon files in this directory cover information geometry, differential geometry / gauge theory, FEP / active inference / variational inference, attention / transformers / GDL, and manifold optimization. They do **not** cover the following topics that appear in the user's manuscripts:
