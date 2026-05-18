@@ -208,6 +208,17 @@ class VFEModel(nn.Module):
                 phi_norm_sq = (beliefs.phi ** 2).sum() / (beliefs.phi.shape[0] * beliefs.phi.shape[1])
                 loss = loss + 0.5 * self.cfg.mass_phi * phi_norm_sq
 
+            # Auxiliary hyperparameter loss: each E-step caches a scalar F
+            # (mu/sigma/phi detached, kappa/alpha attached) so raw_c0,
+            # raw_b0, log_kappa receive gradients on the outer backward.
+            # Without this, the descent kernels' inner torch.autograd.grad
+            # calls discard the hyperparameter subgraph and m_hyper_lr is a
+            # no-op. None per layer when neither hyperparameter is learnable.
+            for block in self.stack.blocks:
+                aux = getattr(block.e_step, '_aux_hyperparam_loss', None)
+                if aux is not None:
+                    loss = loss + aux
+
             return logits, loss, ce_for_log
 
         return logits

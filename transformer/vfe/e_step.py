@@ -343,6 +343,123 @@ class VFEEStep(nn.Module):
             return k.clamp(min=0.5 * k0, max=2.0 * k0)
         return self.kappa
 
+    def _auxiliary_hyperparam_loss(
+        self,
+        mu: torch.Tensor,
+        sigma: torch.Tensor,
+        phi: torch.Tensor,
+        mu_p: torch.Tensor,
+        sigma_p: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        r"""Scalar F evaluated with hyperparameters live and beliefs detached.
+
+        Without this term, the M-step parameters ``raw_c0``, ``raw_b0``, and
+        ``log_kappa`` are gradient-starved. The descent kernels
+        (analytic + autograd) extract gradients only w.r.t. ``(mu, sigma)``
+        via ``torch.autograd.grad``; ``_update_phi`` does the same w.r.t.
+        ``phi``. Hyperparameters appearing in those inner subgraphs never
+        accumulate ``.grad`` on the outer ``loss.backward()``. This routes a
+        single auxiliary scalar to CE so the canonical gradients survive:
+
+        - :math:`\partial F/\partial c_0 = \mathrm{KL}_k / (b_0 + \mathrm{KL}_k)`
+          and analogous for :math:`b_0`, both through ``get_bayesian_alpha``.
+        - :math:`\partial F/\partial \kappa = \sqrt{K}\,\bigl(\sum \beta
+          \log(\beta N) + \text{coupling-envelope terms}\bigr)`,
+          through ``effective_kappa`` in the entropy term.
+
+        Beliefs (mu, sigma, phi) and M-step priors (mu_p, sigma_p) are
+        DETACHED so this loss contributes nothing to base_mu /
+        base_log_sigma / phi_embed / previous-layer phi gradients. The
+        single backward path is hyperparameter -> F -> CE.
+
+        Returns ``None`` when neither hyperparameter is learnable; callers
+        skip the aux-term contribution to ``loss`` in that case.
+        """
+        if not (self.E_learnable_alpha or self._learnable_kappa):
+            return None
+
+        # Detach everything the aux loss reads except the hyperparameters
+        # themselves. sigma_p is already detached by the forward() preamble,
+        # but defensively re-detach in case of future refactor.
+        mu_d = mu.detach()
+        sigma_d = sigma.detach()
+        phi_d = phi.detach()
+        mu_p_d = mu_p.detach()
+        sigma_p_d = sigma_p.detach()
+
+        eps = 1e-6
+        aux: Optional[torch.Tensor] = None
+
+        # Normalize per-token to match F.cross_entropy's mean reduction, so
+        # m_hyper_lr operates on the same scale as m_mu_lr / m_phi_lr / etc.
+        # B * N_q (queries) is the token count; sigma/alpha live on K-dim
+        # per token; beta lives on N_k per query per batch.
+        B, N_q = mu_d.shape[0], mu_d.shape[1]
+        token_count = float(max(B * N_q, 1))
+
+        # Self-coupling alpha * KL(q || p) -- delivers gradient to raw_c0, raw_b0.
+        if self.E_learnable_alpha:
+            # Extract diagonals for both sigma_q and sigma_p; get_bayesian_alpha
+            # also does this internally but doing it once here keeps the KL
+            # computation aligned and avoids duplicate diagonal() calls.
+            sigma_d_diag = (
+                torch.diagonal(sigma_d, dim1=-2, dim2=-1) if sigma_d.dim() == 4
+                else sigma_d
+            )
+            sigma_p_d_diag = (
+                torch.diagonal(sigma_p_d, dim1=-2, dim2=-1) if sigma_p_d.dim() == 4
+                else sigma_p_d
+            )
+            alpha_attached = self.get_bayesian_alpha(
+                mu_d, mu_p_d, sigma_d_diag, sigma_p_d_diag, eps=eps,
+            )
+            kl_qp_per_dim = _diag_kl(
+                mu_d, mu_p_d, sigma_d_diag, sigma_p_d_diag, eps=eps,
+            )
+            self_term = (alpha_attached * kl_qp_per_dim).sum() / token_count
+            aux = self_term if aux is None else aux + self_term
+
+        # Attention term lambda_align * [sum beta * KL + tau * sum beta * log(beta * N)]
+        # -- delivers gradient to log_kappa via effective_kappa.
+        # Skipped when learnable_kappa is False (raw_c0/raw_b0 path above is
+        # the only signal needed in that mode).
+        if self._learnable_kappa:
+            kappa_attached = self.effective_kappa  # fresh exp(log_kappa).clamp(...)
+            beta, kl_attn = compute_kl_attention(
+                mu_d, sigma_d, phi_d, self.generators,
+                self.irrep_dims, kappa_attached, mask,
+                use_rope=self.use_rope,
+                rope_base=self.rope_base,
+                enforce_orthogonal=self.enforce_orthogonal,
+                mask_self_attention=self.mask_self_attention,
+                exact_diagonal_transport=self.exact_diagonal_transport,
+            )
+            beta_safe = beta.clamp(min=1e-30)
+            sum_beta_kl = (beta * kl_attn).sum()
+            # Entropy with uniform prior pi = 1/N: tau * sum beta * log(beta * N)
+            #   = tau * sum beta * log beta + tau * log N * sum beta
+            # The +tau*log(N)*sum(beta) constant is essential: without it the
+            # kappa-equilibrium of dF/dkappa is shifted by exactly sqrt(K)*B*N*log N.
+            # See manuscript eq:free_energy_functional_final.
+            if mask is not None and mask.dim() >= 2:
+                # mask is (B, N) or (B, N, N) with 1 = valid, 0 = masked.
+                # Per-row N_valid (count of valid keys); use mean log so the
+                # constant is a single scalar that scales correctly with batch.
+                n_valid = mask.sum(dim=-1).clamp(min=1).to(beta.dtype)
+                log_N_const = n_valid.log().mean()
+            else:
+                log_N_const = math.log(max(beta.shape[-1], 1))
+            tau = kappa_attached * self._dim_scale
+            entropy_term = (
+                tau * (beta_safe * beta_safe.log()).sum()
+                + tau * log_N_const * beta.sum()
+            )
+            attn_term = self.lambda_align * (sum_beta_kl + entropy_term) / token_count
+            aux = attn_term if aux is None else aux + attn_term
+
+        return aux
+
     def forward(
         self,
         beliefs: BeliefState,
@@ -364,6 +481,15 @@ class VFEEStep(nn.Module):
         Returns:
             Updated BeliefState after E-step convergence.
         """
+        # Reset hyperparameter-aux-loss cache at every forward() entry, before
+        # any branch. Otherwise a stale tensor from the previous batch's graph
+        # (already freed by backward()) survives on the instance and either
+        # delivers wrong gradients or errors on .backward(). Every path that
+        # exits forward() must overwrite this with either None (when
+        # E_learnable_alpha and learnable_kappa are both False) or a fresh
+        # scalar built from the current batch's beliefs.
+        self._aux_hyperparam_loss = None
+
         # Dispatch to the omega-direct iteration when the gauge state is
         # group-level. Keeps the φ-mode loop below unchanged.
         if self.gauge_parameterization == 'omega_direct':
@@ -700,6 +826,14 @@ class VFEEStep(nn.Module):
                 # path. The dead arg is dropped from the call to make this
                 # explicit.
                 phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
+
+        # Cache an auxiliary scalar F to deliver gradients to raw_c0, raw_b0,
+        # log_kappa. None when neither hyperparameter is learnable. The model
+        # walks stack.blocks post-stack and adds these to CE.
+        self._aux_hyperparam_loss = self._auxiliary_hyperparam_loss(
+            mu=mu, sigma=sigma, phi=phi,
+            mu_p=mu_p, sigma_p=sigma_p, mask=mask,
+        )
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi)
 
@@ -1363,5 +1497,15 @@ class VFEEStep(nn.Module):
                 and (t + 1) % self.omega_normalize_every == 0
             ):
                 omega = project_omega_to_slk(omega, self.irrep_dims)
+
+        # Hyperparameter aux loss (raw_c0, raw_b0, log_kappa gradient delivery).
+        # phi is held at encode-time value in this path but is still the input
+        # the attention term reads from; aux loss only needs (mu, sigma, phi,
+        # mu_p, sigma_p) and uses them all detached so the omega-direct
+        # iteration semantics are not perturbed.
+        self._aux_hyperparam_loss = self._auxiliary_hyperparam_loss(
+            mu=mu, sigma=sigma, phi=phi,
+            mu_p=mu_p, sigma_p=sigma_p, mask=mask,
+        )
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi, omega=omega)
