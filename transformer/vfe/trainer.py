@@ -73,12 +73,14 @@ class VFETrainer:
         val_loader: Optional[DataLoader] = None,
         device: str = 'cpu',
         output_dir: Optional[str] = None,
+        generate_figures: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.cfg = cfg
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self.generate_figures = generate_figures
 
         # Optimizer with per-type learning rates
         self.optimizer = self._build_optimizer()
@@ -384,7 +386,7 @@ class VFETrainer:
         Reads from ``block.e_step._last_attention`` (populated in
         ``vfe/e_step.py`` at the end of the final E-step iteration).
         """
-        if self.output_dir is None:
+        if self.output_dir is None or not self.generate_figures:
             return
         try:
             import numpy as np
@@ -738,6 +740,8 @@ class VFETrainer:
         """Generate publication figures at end of training."""
         if self._pub_tracker is None or self.output_dir is None:
             return
+        if not self.generate_figures:
+            return
         try:
             from transformer.analysis.publication_metrics import PublicationFigures
             fig_dir = self.output_dir / 'figures'
@@ -762,6 +766,16 @@ class VFETrainer:
                 logger.info(f"VFE dynamics figures saved to {vfe_fig_dir}")
             except Exception as e:
                 logger.warning(f"VFE dynamics figure generation failed: {e}")
+
+        # plot_training_curves / plot_gradient_norms_split return Figure
+        # objects that they savefig'd but did not close — close everything
+        # left behind so figures don't accumulate across runs (the
+        # "More than 20 figures have been opened" RuntimeWarning).
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except ImportError:
+            pass
 
     def _log_vfe_dynamics_to_csv(self, step: int, metrics: Dict[str, float]) -> None:
         """Append VFE-specific columns to the metrics CSV."""

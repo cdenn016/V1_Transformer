@@ -182,7 +182,7 @@ EM_CONFIG = {
 
     'use_layernorm':              True,  #breaks gauge equivariance unless mahal
     'use_residual':               False,  #set False if skip-attention=True
-    'use_output_projection':      True,
+    'use_output_projection':      False,
    
     'use_equivariant_head_mixer': False,  # Opt-in principled replacement for W_o
     
@@ -190,7 +190,7 @@ EM_CONFIG = {
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
-    'normalize_ce_by_dim':        False,
+    'normalize_ce_by_dim':        True,
     'ce_label_smoothing':         0.0,    # Label smoothing on CE loss only; PPL stays un-smoothed
 
     'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension
@@ -276,7 +276,7 @@ EM_CONFIG = {
 
 
     # === Logging ===
-    'log_interval':               100,
+    'log_interval':               200,
     'eval_interval':              2000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 4000,
@@ -323,6 +323,7 @@ EM_CONFIG = {
     'sigma_max':                   12.0,
     'grad_clip':                   50.0,
     'hidden_dim':                  508,
+    'gauge_covariant_ridge':       False,
     
     'spd_floor_mode':             'eigclamp',      # new default, can omit
     'enable_spd_diagnostics':     True,    # shows spd_eig_min_t/q and cond

@@ -81,30 +81,39 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'vocab_size':               None,      # populated after dataloader build
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
-    'batch_size':               64,
-    'max_seq_len':              64,
-    'max_steps':                5000,
+    
+    'batch_size':               128,
+    
+    'max_seq_len':              32,
+    'max_steps':                2000,
 
     'use_prior_bank':           False,
-
+    'mask_self_attention':      False,
+    'E_learnable_alpha':        True,
+    'learnable_kappa':          False,
+    
+    'use_autograd_mu_sigma':       False,
+    'use_equivariant_head_mixer':  False,
+    'gauge_covariant_ridge':       False,
+    
     # === E-step dynamics ===
     'n_e_steps':                1,
     'n_layers':                 1,
 
+    'alpha_divergence':         1,
+
     'e_mu_lr':                  0.3,
     'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.05,
-
+   
     'alpha':                    1.0,
-    'alpha_divergence':         0.3,
-
-    'E_learnable_alpha':        True,
-
     'lambda_align':             1.0,
     'lambda_soft':              0.0,
+    'mass_phi':                 0.0,
 
     'kappa':                    1.0,
-    'learnable_kappa':          False,
+
+
 
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,
@@ -114,15 +123,16 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'diagonal_covariance':      True,
     'isotropic_covariance':     False,
     'exact_diagonal_transport': False,
-
+    'enforce_orthogonal':       False,
+    
+    
     # === Gauge geometry ===
     'gauge_group':              'GLK',
+    
     'phi_project_slk':          False,
     'phi_trace_clamp':          0.75,
-    'phi_preconditioner':       'killing',
-    'enforce_orthogonal':       False,
-    'mask_self_attention':      True,
-    'mass_phi':                 0.0,
+    
+    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
 
     # === Positional encoding ===
     'use_rope':                 True,
@@ -141,6 +151,13 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'epistemic_samples':        4,
     'decode_tau':               1.0,
 
+    'use_non_flat_transport':       False,
+    'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
+    'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+    'non_flat_tile_size':           0,    # 0 = no tiling; >0 = j-axis chunk size
+
+
+
     # === Normalization ===
     'norm_type':                'layernorm',
     'normalize_ce_by_dim':      True,
@@ -148,20 +165,30 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Training ===
     'learning_rate':            0.02,
     'weight_decay':             0.001,
+    
     'warmup_steps':             100,
     'grad_clip':                50.0,
     'sigma_max':                12.0,
+    
     'bch_order':                3,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  True,
+    'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       False,
 
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            1000,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
-
+    
+    'semantic_analysis_interval': 10000,
+    'gauge_geometry_interval':    5000,
+    'fiber_trajectory_interval':  5000,
+    
+    'track_layer_diagnostics':      False,
+    'track_iteration_diagnostics':  False,
+    'diagnostics_interval'       :  25,
+    
     # === Driver-only (not VFEConfig fields) ===
     'dataset':                  'wikitext-103',
 }
@@ -447,6 +474,13 @@ def run_single_vfe_experiment(
         val_loader=val_loader,
         device=str(device),
         output_dir=str(run_dir),
+        # Per-run training_curves / gradient_norms / vfe_dynamics figures
+        # (and periodic attention β heatmaps) are skipped: the ablation
+        # suite produces its own sweep-level plots in generate_plots().
+        # Suppressing them also avoids the "More than 20 figures open"
+        # RuntimeWarning that accumulated across runs (~4 leaked figures
+        # per call to trainer._generate_figures()).
+        generate_figures=False,
     )
     trainer.train(num_steps=vcfg.max_steps)
 

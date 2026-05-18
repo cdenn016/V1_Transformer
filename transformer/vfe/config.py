@@ -43,6 +43,7 @@ class VFEConfig:
                                          # for the diagonal-sigma retraction. Independent of
                                          # the step LR (CLAUDE.md, 2026-05-13 onward).
     e_phi_lr: float = 0.05              # eta_phi: gauge frame step size
+    
     alpha: float = 1.0                   # KL(q||p) prior self-coupling weight
     alpha_divergence: float = 1.0        # Rényi α (1.0=KL, 0.5=Bhattacharyya)
     E_learnable_alpha: bool = False      # Bayesian adaptive α_i = c0/(b0+KL) per dim

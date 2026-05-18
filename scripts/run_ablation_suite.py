@@ -44,15 +44,15 @@ from transformer.training.experiment_runner import (
 BASELINE_CONFIG = {
    # === Architecture ===
    'vocab_size':                 50257,
-   'embed_dim':                  10,
-   'max_seq_len':                128,
+   'embed_dim':                  20,
+   'max_seq_len':                108,
    
    
    
-   'batch_size':                 64, 
-   'max_steps':                  15000,
+   'batch_size':                 88, 
+   'max_steps':                  10000,
     
-   'stride':                     128,  
+   'stride':                     108,  
    #'eval_stride':                128,                                                                                              
    'random_offset_per_epoch':    True,
    'stride_base_seed':           6,
@@ -137,7 +137,7 @@ BASELINE_CONFIG = {
    # === E-step Weights ===
 
    'E_alpha':                    1,      # E-step prior coupling weight
-   'E_lambda_belief':            9,    # E-step belief alignment weight
+   'E_lambda_belief':            10,    # E-step belief alignment weight
    'E_lambda_softmax':           0,
       
    # === E-step Learning Rates ===
@@ -409,15 +409,15 @@ SWEEPS = {
     'E_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
         'param': 'E_alpha',
-        'range': [5, 1, 0.1],
-        'baseline_value': 5,
+        'range': [0, 1, 0.1],
+        'baseline_value': 1,
     },
 
     
     'E_lambda_belief': {
         'description': 'E-step belief alignment weight (VFE coupling term)',
         'param': 'E_lambda_belief',
-        'range': [5, 15, 1],
+        'range': [1, 20, 2],
         'baseline_value': 1,
     },
 
@@ -475,7 +475,7 @@ SWEEPS = {
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'M_vfe_hyperparam_lr',
-        'values': [0, 1e-4, 1e-3, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3],
+        'values': [0, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
         'baseline_value': 0.15,
     },
 
@@ -489,7 +489,7 @@ SWEEPS = {
     'M_output_lr': {
         'description': 'Output projection learning rate',
         'param': 'M_output_lr',
-        'values': [0, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1, 0.2],
+        'values': [0, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.065,
     },
 
@@ -508,7 +508,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'values': [0, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2],
+        'values': [0, 0.0001, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2],
         'baseline_value': 0,
     },
 
@@ -516,7 +516,7 @@ SWEEPS = {
         'description': 'Weight decay on non-embedding parameters',
 
         'param': 'non_embed_weight_decay',
-        'values': [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 0.2],
+        'values': [0, 1e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1],
         'baseline_value': 0.005,
     },
     
@@ -524,7 +524,7 @@ SWEEPS = {
     'phi_scale': {
         'description': 'phi init scale',
         'param': 'phi_scale',
-        'values': [0, 1e-5, 1e-4, 1e-3, 1e-2],
+        'values': [0, 1e-4, 1e-3, 1e-2, 0.1],
         'baseline_value': 0.5,
     },
 
@@ -532,7 +532,7 @@ SWEEPS = {
     'mu_init_std': {
         'description': 'mu-init-scale',
         'param': 'mu_init_std',
-        'values': [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
+        'values': [0, 1e-4, 1e-3, 1e-2, 1e-1],
         'baseline_value': 0.01,
     },
 
@@ -565,21 +565,22 @@ SWEEP_ORDER = [
    # 'E_lambda_belief',
     #'E_lambda_softmax',
     'M_mu_p_lr',     #0.0825
-   # 'M_phi_lr', #0.00325 
+    'M_phi_lr', #0.00325 
     'M_sigma_p_lr',  #0.015
-    
-   
+    'M_vfe_hyperparam_lr', #0.1
+    'embed_weight_decay',   #0.002
     'E_mu_q_lr',
+    'M_output_lr',       #0.065
     
     'alpha_divergence',     #0.275
     
 
    
   
-    'M_vfe_hyperparam_lr', #0.1
-    'embed_weight_decay',   #0.002
     
-    'M_output_lr',       #0.065
+    
+    
+    
    # 'M_attention_lr',    #0.06
     'non_embed_weight_decay', #0.005
  

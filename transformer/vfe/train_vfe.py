@@ -24,105 +24,115 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
 config = {
     # === Structure ===
-    'vocab_size':               None,    # None = full GPT-2 vocabulary (50257)
+    'vocab_size':               None,      # populated after dataloader build
     'embed_dim':                20,
-    
-    'irrep_spec':      [('fund', 2, 10)],   # 2 heads x dim 10 = K=20
-    
-    
-    'batch_size':               64,    
+    'irrep_spec':               [('fund', 2, 10)],
+    'batch_size':               128,
     'max_seq_len':              64,
     'max_steps':                5000,
- 
-    'use_prior_bank':           False, 
-    # === E-step dynamics ===
-    'n_e_steps':                1,         # Inner-loop iterations per layer
-    'n_layers':                 1,
-    
-    'e_mu_lr':                  0.3,       # Mean natural gradient step size
-    'e_sigma_lr':               0.015,     # Covariance retraction step size
-    'e_phi_lr':                 0.05,      # Gauge frame step size
-    
-    'alpha':                    1.0,       # KL(q||p) prior self-coupling weight
-    'alpha_divergence':         0.3,       # Rényi α (1.0=KL, 0.5=Bhattacharyya)
-    
-    'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
-    
-    'lambda_align':             1.0,       # Direct attention coupling (β · ∂KL/∂θ)
-    'lambda_soft':              0.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
-    
-    'kappa':                    1.0,       # Attention temperature
-    'learnable_kappa':          False,     # Learn per-layer kappa
 
-
-    # === Cross-layer prior handoff ===
-    'prior_handoff_rho':        1.0,       # μ damping (1.0 = full flow, <1 = smoother)
-    'prior_handoff_sigma':      0.0,       # Σ handoff (0.0 = frozen, >0 = blends posterior)
-
-
-    # === Covariance ===
-    'diagonal_covariance':      True,      # True = (B,N,K), False = (B,N,K,K) full
-    'isotropic_covariance':     False,     # Force Σ = σ²I
-    'exact_diagonal_transport': False,      # Lift diagonal for exact Ω@Σ@Ω^T
-    
-    
-    
-
-    # === Gauge geometry ===
-    'gauge_group':              'GLK',      # 'SO3', 'SON', 'GLK'
-    'phi_project_slk':          False,      # GL(K) only: hard project φ → sl(K) ⇒ det(Ω) ≡ 1
-    'phi_trace_clamp':          0.75,       # GL(K) only: soft cap |tr(φ·G)| ≤ T (e.g., 0.35)
-    
-    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
-    'enforce_orthogonal':       False,      # Project Ω to SO(K)
-    'mask_self_attention':      True,       # Mask diagonal (prevents KL=0 self-attention)
-    'mass_phi':                 0.0,        # Gauge prior: (mass_φ/2) mean(||φ||²)
-
-
-    # === Positional encoding ===
-    'use_rope':                 True,
-    'rope_full_gauge':          'off',      # 'off' | 'vfe_only' | 'both'. Requires diagonal_covariance=False when != 'off'.
-    'rope_base':                100,
-    
-    
-    # === Embedding init ===
-    'mu_init_std':              0.4,        # Std for base prior mean
-    'phi_scale':                0.05,        # Scale for per-token gauge frames
-    'sigma_init':               0.4,
-    
-    
-    
-    # === Active inference ===
-    'active_inference':         False,      # Target-free E-step shaping
-    'pragmatic_weight':         1.0,        # Entropy minimization weight
-    'epistemic_weight':         0.5,        # BALD MI weight (counterpressure)
-    'epistemic_samples':        4,          # MC samples for MI estimate
-    'decode_tau':               1.0,        # Temperature for AI readout
-
-
-    # === Normalization ===
-    'norm_type':                'layernorm',  # 'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm' (gauge-blind ablation), 'none'
-    'normalize_ce_by_dim':      True,      # Divide CE by sqrt(K)
-
-
-    # === Training ===
-    'learning_rate':            0.02,
-    'weight_decay':             0.001,
-    'warmup_steps':             100,
-    
-    'grad_clip':                50,
-    'sigma_max':                12.0,
-    'bch_order':                3,          # BCH truncation (1=additive, ≥2=commutator terms)
+    'use_prior_bank':           False,
+    'mask_self_attention':      False,
+    'E_learnable_alpha':        True,
+    'learnable_kappa':          False,
     
     'use_autograd_mu_sigma':       False,
     'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       False,
     
+    # === E-step dynamics ===
+    'n_e_steps':                1,
+    'n_layers':                 1,
+
+    'alpha_divergence':         1,
+
+    'e_mu_lr':                  0.3,
+    'e_sigma_lr':               0.015,
+    'e_phi_lr':                 0.05,
+   
+    'alpha':                    1.0,
+    'lambda_align':             1.0,
+    'lambda_soft':              0.0,
+    'mass_phi':                 0.0,
+
+    'kappa':                    1.0,
+
+
+
+    # === Cross-layer prior handoff ===
+    'prior_handoff_rho':        1.0,
+    'prior_handoff_sigma':      0.0,
+
+    # === Covariance ===
+    'diagonal_covariance':      True,
+    'isotropic_covariance':     False,
+    'exact_diagonal_transport': False,
+    'enforce_orthogonal':       False,
     
+    
+    # === Gauge geometry ===
+    'gauge_group':              'GLK',
+    
+    'phi_project_slk':          False,
+    'phi_trace_clamp':          0.75,
+    
+    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
+
+    # === Positional encoding ===
+    'use_rope':                 True,
+    'rope_full_gauge':          'off',
+    'rope_base':                100,
+
+    # === Embedding init ===
+    'mu_init_std':              0.4,
+    'phi_scale':                0.05,
+    'sigma_init':               0.4,
+
+    # === Active inference ===
+    'active_inference':         False,
+    'pragmatic_weight':         1.0,
+    'epistemic_weight':         0.5,
+    'epistemic_samples':        4,
+    'decode_tau':               1.0,
+
+    'use_non_flat_transport':       False,
+    'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
+    'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+    'non_flat_tile_size':           0,    # 0 = no tiling; >0 = j-axis chunk size
+
+
+
+    # === Normalization ===
+    'norm_type':                'layernorm',
+    'normalize_ce_by_dim':      True,
+
+    # === Training ===
+    'learning_rate':            0.05,
+    'weight_decay':             0.001,
+    
+    'warmup_steps':             100,
+    'grad_clip':                50.0,
+    'sigma_max':                12.0,
+    
+    'bch_order':                3,
+
+    'use_autograd_mu_sigma':       False,
+    'use_equivariant_head_mixer':  False,
+    'gauge_covariant_ridge':       False,
+
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            1000,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
+    
+    'semantic_analysis_interval': 10000,
+    'gauge_geometry_interval':    5000,
+    'fiber_trajectory_interval':  5000,
+    
+    'track_layer_diagnostics':      False,
+    'track_iteration_diagnostics':  False,
+    'diagnostics_interval'       :  25,
+   
 }
 
 # ============================================================================
