@@ -21,6 +21,7 @@ Provides:
 
 import logging
 import math
+import os
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -29,6 +30,30 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tupl
 from math_utils.numerical_monitor import record as _nr
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Diagnostics toggle
+# =============================================================================
+# Gates host-syncing instrumentation across the gradient/transport hot path:
+#  - safe_kl_clamp's `_nr("kl_nonfinite")` / `_nr("kl_saturated")`
+#  - _fused_attention_and_vfe_gradients_block_diag's `_nr("fused_vfe_*_nan")`
+#  - stable_matrix_exp_pair's `_nr("matexp_norm_clamp")`
+# Off by default — each emit-site otherwise fires a `.any()` + `.sum().item()`
+# host sync per call. Set env-var VFE_KL_DIAGNOSTICS=1 or call
+# enable_kl_diagnostics() to turn the whole observability layer on for a
+# diagnostic sweep.
+_KL_DIAGNOSTICS_ENABLED: bool = bool(int(os.environ.get("VFE_KL_DIAGNOSTICS", "0")))
+
+
+def enable_kl_diagnostics(enabled: bool = True) -> None:
+    """Toggle host-sync diagnostic counters at runtime."""
+    global _KL_DIAGNOSTICS_ENABLED
+    _KL_DIAGNOSTICS_ENABLED = bool(enabled)
+
+
+def kl_diagnostics_enabled() -> bool:
+    """Return whether host-sync diagnostic counters are currently enabled."""
+    return _KL_DIAGNOSTICS_ENABLED
 
 # =============================================================================
 # Module-level constants
