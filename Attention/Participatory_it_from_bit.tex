@@ -526,7 +526,7 @@ For Gaussian distributions specifically, the KL divergence has closed form:
 \label{eq:gaussian_kl}
 \end{equation}
 
-This formula will be used extensively for computing belief and prior alignment terms.
+This formula will be used extensively for computing belief and prior alignment terms; the associated Fisher information matrix on the Gaussian fiber, the matrix exponential identities for $\mathrm{SO}(3)$ transport, and the Cholesky parameterisation of positive-definite covariances used in the numerical implementation are collected with their derivations in Appendix~\ref{app:math}, and the gradient-flow analysis of the resulting covariance fixed-point equation is in Appendix~\ref{app:covariance_dynamics}.
 
 \subsection{Cross-Scale Shadows: Priors and Hyper-priors as Cross-Scale Constructs}
 \label{sec:cross_scale_shadows}
@@ -4080,15 +4080,17 @@ This is a matrix-valued fixed-point equation coupling all agents: each agent's p
 
 \subsubsection{Homogeneous limit}
 
-In the homogenous limit we assume
+In the homogeneous limit we assume
 
 (i) all agents are identical, so $\Sigma_i = \Sigma_\infty$ for all $i$,
 
 (ii) $\Omega_{ij} \approx I$ (weak misalignment),
 
-(iii) $\Sigma_{p,i} = \Sigma_0$ (shared prior).
+(iii) $\Sigma_{p,i} = \Sigma_0$ (shared prior),
 
-Then \eqref{eq:sigma_fixed_point_beta} becomes
+(iv) $\Lambda_{o_i} = 0$ (observation-free limit, sensory channel inactive).
+
+Assumption (iv) is required for the clean conclusion below; the general case $\Lambda_{o_i} > 0$ replaces $\Sigma_0^{-1}$ by $\Sigma_0^{-1} + \Lambda_{o_i}$ on the right-hand side and produces the observation-modified equilibrium $\Sigma_\infty = (\Sigma_0^{-1} + \Lambda_{o_i})^{-1}$ in place of the bare $\Sigma_\infty = \Sigma_0$. Under (i)--(iv), \eqref{eq:sigma_fixed_point_beta} becomes
 
 \begin{equation}
 \Sigma_\infty^{-1}
@@ -4101,7 +4103,7 @@ Then \eqref{eq:sigma_fixed_point_beta} becomes
 \Sigma_\infty = \Sigma_0.
 \end{equation}
 
-Hence, in a perfectly symmetric population, the equilibrium covariance reproduces the shared prior.
+Hence, in a perfectly symmetric observation-free population, the equilibrium covariance reproduces the shared prior.
 
 \subsubsection{Alignment-dominated regime}
 
@@ -4361,7 +4363,7 @@ Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
 \mathcal{D}(q,p)
 = \int p(c)f\left(\frac{q(c)}{p(c)}\right)dc,
 \]
-with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Let $B := \sum_j \beta_{ij}$ be the total alignment coupling for agent $i$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app}. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
+with $f$ \emph{real-analytic on $(0, \infty)$}, convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. The real-analyticity hypothesis is used in Step~3 of the proof to extend pointwise identification of $f'(t)$ from any open subinterval of attainable ratios to all of $(0, \infty)$ by analytic continuation; without it, the conclusion holds only on the attainable subinterval, not as the global identification stated below. Let $B := \sum_j \beta_{ij}$ be the total alignment coupling for agent $i$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app}. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
 \begin{equation}
 q_i^*(c) \propto p_i(c)^{1/(1+B)}\prod_{j}\bigl[\Omega_{ij}(c)q_j(c)\bigr]^{\beta_{ij}/(1+B)}
 \label{eq:geometric_mean_target_app}
