@@ -645,6 +645,7 @@ class VFETrainer:
             from transformer.analysis.publication_metrics import TrainingTracker
             from transformer.training.bpc import tokens_per_char_from_dataset
             self._pub_tracker = TrainingTracker(
+                save_dir=(self.output_dir / 'figures') if self.output_dir else None,
                 tokens_per_char=tokens_per_char_from_dataset(
                     getattr(self, 'train_loader', None),
                 ),

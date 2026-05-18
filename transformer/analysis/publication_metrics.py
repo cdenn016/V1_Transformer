@@ -195,10 +195,19 @@ class TrainingTracker:
                 BPC is reported as bits-per-token with a one-time warning
                 (see transformer/training/bpc.py).
         """
-        self.save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+        # Stored on _save_dir; the public `save_dir` property mkdir's on
+        # read so the directory is only created when something actually
+        # writes to it. Previously the constructor unconditionally created
+        # ./outputs/figures even when the tracker had no save_dir passed
+        # and was never used to write, leaving a dead folder in the cwd.
+        self._save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
         self.tokens_per_char = tokens_per_char
         self.history: List[TrainingSnapshot] = []
+
+    @property
+    def save_dir(self) -> Path:
+        self._save_dir.mkdir(parents=True, exist_ok=True)
+        return self._save_dir
 
     def record(
         self,
@@ -368,9 +377,14 @@ class PublicationFigures:
     """
 
     def __init__(self, save_dir: Optional[Path] = None):
-        self.save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+        # See TrainingTracker for the lazy-mkdir rationale.
+        self._save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
         apply_publication_style()
+
+    @property
+    def save_dir(self) -> Path:
+        self._save_dir.mkdir(parents=True, exist_ok=True)
+        return self._save_dir
 
     def plot_training_curves(
         self,
