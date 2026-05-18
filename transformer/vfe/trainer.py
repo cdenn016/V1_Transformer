@@ -546,8 +546,8 @@ class VFETrainer:
         # misleading zeros.
         csv_metrics = {
             'train_loss_total': metrics['loss'],
-            'train_loss_ce': metrics['loss'],
-            'train_loss_ce_raw': metrics['loss'],
+            'train_loss_ce': metrics['ce'],
+            'train_loss_ce_raw': metrics['ce'],
             'train_ppl': metrics['ppl'],
             'train_bpc': metrics['bpc'],
             'beta_mean': metrics.get('beta_mean', 0),
@@ -589,8 +589,8 @@ class VFETrainer:
 
         train_metrics = {
             'loss': metrics['loss'],
-            'ce_loss': metrics['loss'],
-            'ce_loss_raw': metrics['loss'],
+            'ce_loss': metrics['ce'],
+            'ce_loss_raw': metrics['ce'],
             'attention_entropy': metrics.get('attention_entropy', 0),
             'attention_concentration': metrics.get('attention_concentration', 0),
         }
