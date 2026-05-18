@@ -899,9 +899,9 @@ class VFETrainer:
         if _HAS_TQDM:
             pbar = _tqdm(
                 range(num_steps),
-                desc="Training",
+                desc="Step",
                 dynamic_ncols=True,
-                mininterval=0.5,
+                mininterval=0.1,
                 leave=True,
             )
             _write = pbar.write
@@ -935,6 +935,23 @@ class VFETrainer:
             self._log_to_csv(step + 1, metrics, B, N)
             self._log_to_pub_tracker(step + 1, metrics)
 
+            step_time = metrics.get('step_time', 0.0)
+            it_per_sec = (1.0 / step_time) if step_time > 0 else 0.0
+
+            # Per-step live status on the tqdm bar. Postfix uses only fields
+            # already in `metrics` (no extra GPU sync) — β is excluded here
+            # because _attention_summary() does a .tolist() sync.
+            if pbar is not None:
+                pbar.set_postfix(
+                    {
+                        'loss': f"{metrics['loss']:.4f}",
+                        'ce':   f"{metrics['ce']:.4f}",
+                        'ppl':  f"{metrics['ppl']:.1f}",
+                        'it/s': f"{it_per_sec:.2f}",
+                    },
+                    refresh=False,
+                )
+
             # Console logging: bare line, no asctime prefix — matches the
             # core/training format. Printed via tqdm.write so the progress
             # bar redraws cleanly underneath each log line.
@@ -946,7 +963,8 @@ class VFETrainer:
                     f"Loss: {metrics['loss']:.4f} | "
                     f"CE: {metrics['ce']:.4f} | "
                     f"β: {beta_kl:.4f} | "
-                    f"PPL: {metrics['ppl']:.1f}"
+                    f"PPL: {metrics['ppl']:.1f} | "
+                    f"it/s: {it_per_sec:.2f}"
                 )
                 _write(msg)
 
