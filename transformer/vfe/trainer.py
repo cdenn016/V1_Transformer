@@ -102,51 +102,52 @@ class VFETrainer:
         self._last_val_input_ids = None
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
-        """Build AdamW optimizer with parameter groups."""
+        """Build AdamW optimizer with per-group LRs (cfg.m_*_lr)."""
         cfg = self.cfg
         model = self.model
 
-        # Group parameters by type
-        prior_mu_params = []
-        prior_sigma_params = []
-        prior_phi_params = []
-        e_step_params = []
-        other_params = []
+        # Group parameters by type. Match order is significant: a param name
+        # containing 'phi_embed' must hit the m_phi bucket before the
+        # 'e_step' bucket (no overlap in practice today, but the order
+        # enforces it).
+        m_mu_params = []
+        m_sigma_params = []
+        m_phi_params = []
+        m_hyper_params = []
+        m_other_params = []
 
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
             if 'base_mu' in name:
-                prior_mu_params.append(param)
+                m_mu_params.append(param)
             elif 'base_log_sigma' in name or 'decode_log_scale' in name:
-                prior_sigma_params.append(param)
+                m_sigma_params.append(param)
             elif 'phi_embed' in name or 'pos_phi' in name:
-                prior_phi_params.append(param)
-            elif 'e_step' in name or '_phi_preconditioner' in name:
-                e_step_params.append(param)
+                m_phi_params.append(param)
+            elif 'e_step' in name:
+                # NOTE: _phi_preconditioner is a register_buffer (not a
+                # Parameter), so named_parameters() never yields it; it stays
+                # frozen at init by design. The pattern is intentionally
+                # omitted here.
+                m_hyper_params.append(param)
             else:
-                other_params.append(param)
+                m_other_params.append(param)
 
         param_groups = [
-            {'params': prior_mu_params, 'lr': cfg.learning_rate * 3.0, 'name': 'prior_mu'},
-            {'params': prior_sigma_params, 'lr': cfg.learning_rate * 0.15, 'name': 'prior_sigma'},
-            {'params': prior_phi_params, 'lr': cfg.learning_rate * 0.3, 'name': 'prior_phi'},
+            {'params': m_mu_params,    'lr': cfg.m_mu_lr,    'name': 'm_mu'},
+            {'params': m_sigma_params, 'lr': cfg.m_sigma_lr, 'name': 'm_sigma'},
+            {'params': m_phi_params,   'lr': cfg.m_phi_lr,   'name': 'm_phi'},
+            {'params': m_hyper_params, 'lr': cfg.m_hyper_lr, 'name': 'm_hyper'},
+            {'params': m_other_params, 'lr': cfg.m_other_lr, 'name': 'm_other'},
         ]
-        if e_step_params:
-            param_groups.append(
-                {'params': e_step_params, 'lr': cfg.learning_rate * 0.03, 'name': 'e_step'}
-            )
-        if other_params:
-            param_groups.append(
-                {'params': other_params, 'lr': cfg.learning_rate, 'name': 'other'}
-            )
-
-        # Filter empty groups
+        # Filter empty groups (e.g. m_hyper is empty when raw_c0/raw_b0 are
+        # not registered because E_learnable_alpha=False and learnable_kappa=False).
         param_groups = [g for g in param_groups if g['params']]
 
         return torch.optim.AdamW(
             param_groups,
-            lr=cfg.learning_rate,
+            lr=cfg.m_other_lr,    # AdamW requires a default; every group sets its own.
             weight_decay=cfg.weight_decay,
             betas=(0.9, 0.999),
         )
@@ -320,18 +321,6 @@ class VFETrainer:
             if isinstance(v, (int, float)):
                 diag[f'{k}_final'] = float(v)
         return diag
-
-    def _get_learning_rates(self) -> Dict[str, float]:
-        """Get current learning rates per parameter group.
-
-        LambdaLR modifies group['lr'] in place, so it already includes
-        both the per-group scale and the schedule factor.
-        """
-        lrs = {}
-        for group in self.optimizer.param_groups:
-            name = group.get('name', 'default')
-            lrs[name] = group['lr']
-        return lrs
 
     def _collect_bayesian_alpha_stats(self) -> Dict[str, float]:
         """Collect Bayesian alpha diagnostics if E_learnable_alpha is enabled."""
@@ -686,15 +675,19 @@ class VFETrainer:
         }
 
         lrs = {}
+        # Map current param-group names → legacy CSV column names so downstream
+        # analysis tooling that expects {mu_embed, sigma_embed, phi_embed, ffn,
+        # other} keeps working after the m_*_lr rename. Groups not in the map
+        # (none today) pass through under their own name.
+        lr_map = {
+            'm_mu':    'mu_embed',
+            'm_sigma': 'sigma_embed',
+            'm_phi':   'phi_embed',
+            'm_hyper': 'ffn',
+            'm_other': 'other',
+        }
         for group in self.optimizer.param_groups:
             name = group.get('name', 'default')
-            # Map to legacy LR names
-            lr_map = {
-                'prior_mu': 'mu_embed',
-                'prior_sigma': 'sigma_embed',
-                'prior_phi': 'phi_embed',
-                'e_step': 'ffn',
-            }
             lrs[lr_map.get(name, name)] = group['lr']
 
         self._metrics_tracker.log_step(
@@ -933,39 +926,39 @@ class VFETrainer:
             _ids = batch[0] if isinstance(batch, (list, tuple)) else batch['input_ids']
             B, N = _ids.shape[0], _ids.shape[1]
             self._log_to_csv(step + 1, metrics, B, N)
+            self._log_vfe_dynamics_to_csv(step + 1, metrics)
             self._log_to_pub_tracker(step + 1, metrics)
 
             step_time = metrics.get('step_time', 0.0)
             it_per_sec = (1.0 / step_time) if step_time > 0 else 0.0
 
-            # Per-step live status on the tqdm bar. Postfix uses only fields
-            # already in `metrics` (no extra GPU sync) — β is excluded here
-            # because _attention_summary() does a .tolist() sync.
+            # Per-step live status. The full "Step | Loss | CE | β | PPL | it/s"
+            # line is rebuilt every iteration and pushed onto the tqdm bar's
+            # description so the bar tracks live metrics (same visual pattern
+            # as experiment_runner.py's set_description path). β requires one
+            # .tolist() sync on the most recent attention matrices per step;
+            # the rest are already host-side floats.
+            attn = self._attention_summary()
+            beta_kl = attn.get('beta_kl', float('nan'))
+            msg = (
+                f"Step {step+1}/{num_steps} | "
+                f"Loss: {metrics['loss']:.4f} | "
+                f"CE: {metrics['ce']:.4f} | "
+                f"β: {beta_kl:.4f} | "
+                f"PPL: {metrics['ppl']:.1f} | "
+                f"it/s: {it_per_sec:.2f}"
+            )
             if pbar is not None:
-                pbar.set_postfix(
-                    {
-                        'loss': f"{metrics['loss']:.4f}",
-                        'ce':   f"{metrics['ce']:.4f}",
-                        'ppl':  f"{metrics['ppl']:.1f}",
-                        'it/s': f"{it_per_sec:.2f}",
-                    },
-                    refresh=False,
-                )
+                # set_description_str (not set_description): drops the trailing
+                # ": " that tqdm would otherwise append before the bar glyph.
+                # refresh=False: defer redraw to tqdm's mininterval=0.1 timer
+                # so we don't force a screen refresh every iteration.
+                pbar.set_description_str(msg, refresh=False)
 
-            # Console logging: bare line, no asctime prefix — matches the
-            # core/training format. Printed via tqdm.write so the progress
-            # bar redraws cleanly underneath each log line.
+            # At log_interval boundaries, also emit the line above the bar so
+            # scrollback retains a permanent record. Without tqdm this is the
+            # only place metrics surface to console.
             if (step + 1) % log_interval == 0:
-                attn = self._attention_summary()
-                beta_kl = attn.get('beta_kl', float('nan'))
-                msg = (
-                    f"Step {step+1}/{num_steps} | "
-                    f"Loss: {metrics['loss']:.4f} | "
-                    f"CE: {metrics['ce']:.4f} | "
-                    f"β: {beta_kl:.4f} | "
-                    f"PPL: {metrics['ppl']:.1f} | "
-                    f"it/s: {it_per_sec:.2f}"
-                )
                 _write(msg)
 
             # Periodic evaluation

@@ -75,7 +75,7 @@ def compute_kl_attention(
     phi: torch.Tensor,
     generators: torch.Tensor,
     irrep_dims: List[int],
-    kappa: float,
+    kappa: "float | torch.Tensor",
     mask: Optional[torch.Tensor] = None,
     use_rope: bool = False,
     rope_base: float = 10000.0,

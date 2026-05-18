@@ -44,7 +44,7 @@ exceptions`` and the legacy mixer at ``transformer/core/attention.py``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -89,7 +89,7 @@ class VFEHeadMixer(nn.Module):
         # `_apply_block` is contiguous per-type only when irrep_spec is sorted
         # by type — we don't enforce that here; the per-type slice list
         # captures whatever the layout actually is.
-        type_to_slices: "OrderedDict[str, List[Tuple[int, int]]]" = OrderedDict()
+        type_to_slices: "OrderedDict[str, List[Tuple[int, int, int]]]" = OrderedDict()
         cursor = 0
         for type_name, mult, dim in irrep_spec:
             slices = type_to_slices.setdefault(type_name, [])
@@ -102,7 +102,7 @@ class VFEHeadMixer(nn.Module):
         # (no float rounding from torch.eye on init) and makes the bitwise
         # equivalence to the no-mixer path obvious at step 0.
         self._type_names: List[str] = list(type_to_slices.keys())
-        self._type_slices: dict = dict(type_to_slices)
+        self._type_slices: "Dict[str, List[Tuple[int, int, int]]]" = dict(type_to_slices)
         self.mixer_delta = nn.ParameterDict()
         for type_name, slices in type_to_slices.items():
             n = len(slices)

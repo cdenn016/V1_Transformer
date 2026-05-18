@@ -19,6 +19,7 @@ from typing import Optional, Callable, List, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
@@ -238,7 +239,6 @@ class VFEEStep(nn.Module):
         # becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G) per block.
         # Init at zero ⇒ flat path bitwise-equivalent at step 0.
         self.use_non_flat_transport = cfg.use_non_flat_transport
-        self.non_flat_tile_size = cfg.non_flat_tile_size
         if cfg.use_non_flat_transport:
             self.non_flat_connection = VFENonFlatConnection(
                 generators=generators,
@@ -285,6 +285,16 @@ class VFEEStep(nn.Module):
             return x
         return math.log(math.exp(x) - 1.0)
 
+    def _get_alpha_c0(self) -> Optional[torch.Tensor]:
+        """Iter-independent Bayesian-alpha concentration c0 = softplus(raw_c0).
+
+        Returns None when E_learnable_alpha is disabled — the caller short-
+        circuits the per-dim Bayesian path in that case.
+        """
+        if not self.E_learnable_alpha:
+            return None
+        return F.softplus(self.raw_c0)
+
     def get_bayesian_alpha(
         self,
         mu_q: torch.Tensor,
@@ -302,9 +312,8 @@ class VFEEStep(nn.Module):
         Returns:
             alpha: ``(B, N, K)`` per-dimension precision.
         """
-        import torch.nn.functional as F_fn
-        c0 = F_fn.softplus(self.raw_c0)  # (K,)
-        b0 = F_fn.softplus(self.raw_b0)  # (K,)
+        c0 = F.softplus(self.raw_c0)  # (K,)
+        b0 = F.softplus(self.raw_b0)  # (K,)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
 
@@ -384,10 +393,7 @@ class VFEEStep(nn.Module):
         _kappa = self.effective_kappa
 
         # Hoist iter-independent softplus(raw_c0) out of the loop.
-        alpha_c0_full_hoisted: Optional[torch.Tensor] = None
-        if self.E_learnable_alpha:
-            import torch.nn.functional as F_fn
-            alpha_c0_full_hoisted = F_fn.softplus(self.raw_c0)
+        alpha_c0_full_hoisted = self._get_alpha_c0()
 
         # Bogacz 2017 invariant: F(t+1) <= F(t) for correct E-step descent.
         # Track the per-iteration scalar free energy so silent divergence is
@@ -437,7 +443,6 @@ class VFEEStep(nn.Module):
                     eps=eps,
                     kappa=_kappa,
                     alpha_eff=alpha_eff,
-                    alpha_c0_full=alpha_c0_full,
                     block_exp_pairs=block_exp_pairs,
                 )
             # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ.
@@ -561,12 +566,11 @@ class VFEEStep(nn.Module):
                     )
 
             # 2b. Monotone free-energy check (diagonal covariance only).
-            # Runs unconditionally on the diagonal path because downstream
-            # diagnostics (``_last_diagnostics['f_history']``) and the
-            # regression test ``test_f_history_populated_with_entropy`` depend
-            # on f_history being populated whenever ``track_layer_diagnostics``
-            # is on. The ``.item()`` CUDA syncs cost is real but documented.
-            if is_diagonal:
+            # Gated by monitor_monotonicity OR track_layer_diagnostics — the
+            # downstream test ``test_f_history_populated_with_entropy`` needs
+            # f_history when track_layer_diagnostics is on, but a default
+            # production run (both flags off) pays no .item() syncs here.
+            if is_diagonal and (self.monitor_monotonicity or self.track_layer_diagnostics):
                 with torch.no_grad():
                     f_prev = _f_monotone_step(
                         mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
@@ -633,10 +637,12 @@ class VFEEStep(nn.Module):
                         'sigma_q_max': sigma.max().item(),
                         'sigma_q_std': sigma.std().item(),
                         'sigma_p_mean': sigma_p.mean().item(),
-                        # Phi norms
-                        'phi_norm_mean': phi.norm(dim=-1).mean().item(),
-                        'phi_norm_std': phi.norm(dim=-1).std().item(),
-                        'phi_norm_max': phi.norm(dim=-1).max().item(),
+                        # Phi norms — share one norm() reduction across all three stats.
+                        **(lambda _pn: {
+                            'phi_norm_mean': _pn.mean().item(),
+                            'phi_norm_std': _pn.std().item(),
+                            'phi_norm_max': _pn.max().item(),
+                        })(phi.norm(dim=-1)),
                     }
                     # Per-dimension KL(q*||p) for prior-belief gap
                     if is_diagonal:
@@ -705,7 +711,7 @@ class VFEEStep(nn.Module):
         is_diagonal: bool,
         mask: Optional[torch.Tensor],
         eps: float,
-        kappa: Optional[torch.Tensor] = None,
+        kappa: "Optional[torch.Tensor | float]" = None,
     ) -> torch.Tensor:
         r"""Compute phi gradient via autograd and retract.
 
@@ -920,9 +926,14 @@ class VFEEStep(nn.Module):
         eps: float,
         kappa: 'torch.Tensor | float',
         alpha_eff: 'torch.Tensor | float',
-        alpha_c0_full,
-        block_exp_pairs: list,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list]:
+        block_exp_pairs: List[Tuple[torch.Tensor, Optional[torch.Tensor]]],
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        List[Tuple[torch.Tensor, torch.Tensor]],
+    ]:
         r"""One E-step iteration with non-flat transport.
 
         Drives the autograd path through:
@@ -1131,7 +1142,13 @@ class VFEEStep(nn.Module):
         phi = beliefs.phi
         omega = list(beliefs.omega)        # list of (Ω_h, Ω_h_inv)
         mu_p = priors.mu
-        sigma_p = priors.sigma
+        # Detach to match the phi-mode forward and the CLAUDE.md hard
+        # constraint: the E-step reads sigma_p but must not write gradients
+        # to it. Without this detach, get_bayesian_alpha() at the call below
+        # builds a live autograd path through priors.sigma; downstream
+        # consumers are all detached today so no actual leak materializes,
+        # but the asymmetry with the phi-mode path is a future-edit hazard.
+        sigma_p = priors.sigma.detach()
 
         is_diagonal = self.diagonal_covariance
         eps = 1e-6
@@ -1145,10 +1162,7 @@ class VFEEStep(nn.Module):
             )
 
         _kappa = self.effective_kappa
-        alpha_c0_full_hoisted: Optional[torch.Tensor] = None
-        if self.E_learnable_alpha:
-            import torch.nn.functional as F_fn
-            alpha_c0_full_hoisted = F_fn.softplus(self.raw_c0)
+        alpha_c0_full_hoisted = self._get_alpha_c0()
 
         f_history: List[float] = []
         f_prev: Optional[float] = None
@@ -1257,24 +1271,25 @@ class VFEEStep(nn.Module):
                         g_h = torch.zeros_like(omega[h][0])
                     grad_omega.append(g_h)
 
-            # 3. F-monotone monitor (detached, scalar). Runs unconditionally
-            # on the omega-direct path so f_history is available to
-            # ``_last_diagnostics`` whenever ``track_layer_diagnostics`` is on.
-            with torch.no_grad():
-                f_prev = _f_monotone_step(
-                    mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
-                    eps=eps,
-                    beta_det=beta_det, kl_det=kl_det,
-                    alpha_eff=alpha_eff, kappa=_kappa,
-                    dim_scale=self._dim_scale,
-                    include_attention_entropy=self.include_attention_entropy,
-                    lambda_align=self.lambda_align,
-                    f_history=f_history, f_prev=f_prev,
-                    f_abs_tol=f_monotone_abs_tol,
-                    f_rel_tol=f_monotone_rel_tol,
-                    iter_idx=t,
-                    label="E-step (omega-direct)",
-                )
+            # 3. F-monotone monitor (detached, scalar). Gated by
+            # monitor_monotonicity OR track_layer_diagnostics so default
+            # production runs don't pay the .item() syncs.
+            if self.monitor_monotonicity or self.track_layer_diagnostics:
+                with torch.no_grad():
+                    f_prev = _f_monotone_step(
+                        mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
+                        eps=eps,
+                        beta_det=beta_det, kl_det=kl_det,
+                        alpha_eff=alpha_eff, kappa=_kappa,
+                        dim_scale=self._dim_scale,
+                        include_attention_entropy=self.include_attention_entropy,
+                        lambda_align=self.lambda_align,
+                        f_history=f_history, f_prev=f_prev,
+                        f_abs_tol=f_monotone_abs_tol,
+                        f_rel_tol=f_monotone_rel_tol,
+                        iter_idx=t,
+                        label="E-step (omega-direct)",
+                    )
 
             # 4. Active inference (callback returns Euclidean grads on μ, σ).
             if active_inference_fn is not None:
