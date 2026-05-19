@@ -35,7 +35,8 @@ config = {
 
     'use_prior_bank':           False,
     'mask_self_attention':      False,
-
+    'causal_lower_triangle':    True,
+    
     # Prior parameterization:
     #   True  = shared base + per-token gauge-orbit (μ_v = A_v @ μ_0). Pure form;
     #           per-token capacity is V·n_gen (phi_embed only).
@@ -48,7 +49,7 @@ config = {
 
     'use_autograd_mu_sigma':       False,
     'use_equivariant_head_mixer':  True,
-    'gauge_covariant_ridge':       False,
+    'gauge_covariant_ridge':       True,
 
     # === E-step dynamics ===
     'n_e_steps':                1,
@@ -87,7 +88,7 @@ config = {
     'phi_project_slk':          False,
     'phi_trace_clamp':          0.75,
     
-    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
+    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'killing_per_block', 'pullback'
 
     # === Positional encoding ===
     'use_rope':                 True,
@@ -109,6 +110,17 @@ config = {
     'use_non_flat_transport':       False,
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+
+    # === Cross-head coupling (GL(K) multi-head) ===
+    # Off-diagonal gauge generators sparsely connecting selected head pairs.
+    # Each (a, b) entry adds d_head² generators that span head-a → head-b's
+    # subspace; the merged subspace becomes a single super-block with full
+    # GL(d_super) gauge. Empty default = standard block-diagonal gl(d_head)^H.
+    # See transformer/vfe/cross_coupling_metrics.py and
+    # transformer/vfe/cross_coupling_viz.py for diagnostics.
+    'cross_couplings':                  [],
+    'auto_close_cross_head_basis':      False,
+    'validate_cross_head_closure':      True,
 
     # === Normalization ===
     'norm_type':                'layernorm',

@@ -130,6 +130,7 @@ class VFENonFlatConnection(nn.Module):
         irrep_dims: List[int],
         max_strength: float = 1.0,
         per_edge_delta_max: float = 1.0,
+        head_sub_dims: Optional[List[List[int]]] = None,
     ) -> None:
         super().__init__()
 
@@ -141,6 +142,15 @@ class VFENonFlatConnection(nn.Module):
         self.irrep_dims = list(irrep_dims)
         self.max_strength = float(max_strength)
         self.per_edge_delta_max = float(per_edge_delta_max)
+        # Optional refinement: under cross_couplings each super-block holds
+        # several original heads. head_sub_dims[h] gives the per-head dims
+        # inside super-block h (e.g. [[d_head, d_head], [d_head], [d_head]]
+        # for super-blocks [2·d_head, d_head, d_head]). When provided the
+        # per-generator support is matched against the finer per-head
+        # sub-blocks first, so diagonal-head generators get a tight
+        # (d_head × d_head) mask while cross generators that span multiple
+        # heads inside a super-block fall back to the full super-block mask.
+        self.head_sub_dims = head_sub_dims
 
         # Build a per-generator block mask. Generator a is identified with the
         # smallest block containing all of its non-zero entries. For
@@ -151,11 +161,24 @@ class VFENonFlatConnection(nn.Module):
         # any future generator layout still works without touching this code.
         with torch.no_grad():
             block_mask = torch.zeros_like(generators)
-            block_starts = []
+            # Build block candidates: include both the super-block partition
+            # (irrep_dims) and, when head_sub_dims is provided, the finer
+            # per-head sub-blocks INSIDE each super-block. Sorting ascending
+            # by size means the first match in the inner loop is always the
+            # smallest containing block.
+            block_candidates: List[Tuple[int, int]] = []
             cursor = 0
-            for d_h in irrep_dims:
-                block_starts.append((cursor, cursor + d_h))
+            for h_idx, d_h in enumerate(irrep_dims):
+                block_candidates.append((cursor, cursor + d_h))
+                if head_sub_dims is not None and h_idx < len(head_sub_dims):
+                    sub_cursor = cursor
+                    for sub_d in head_sub_dims[h_idx]:
+                        block_candidates.append((sub_cursor, sub_cursor + sub_d))
+                        sub_cursor += sub_d
                 cursor += d_h
+            # Sort smallest-first (tightest containing block wins).
+            block_candidates.sort(key=lambda be: be[1] - be[0])
+            block_starts = block_candidates
             for a in range(n_gen):
                 G_a = generators[a]
                 # Identify smallest block containing G_a's support.

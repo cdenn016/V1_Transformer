@@ -86,23 +86,28 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
     
-    'batch_size':               128,
+    'batch_size':               192,
     
-    'max_seq_len':              32,
+    'max_seq_len':              64,
     'max_steps':                2000,
 
-    'use_prior_bank':           True,
+    'use_prior_bank':           False,
     'mask_self_attention':      False,
-    # Match train_vfe.py: per-token (μ_v, σ_v) lookup priors. Without this
-    # key the dataclass default (True = shared-base gauge-orbit) silently
-    # selects a structurally different prior than the live entry point uses.
+    'causal_lower_triangle':    True,
+    
+    # Prior parameterization:
+    #   True  = shared base + per-token gauge-orbit (μ_v = A_v @ μ_0). Pure form;
+    #           per-token capacity is V·n_gen (phi_embed only).
+    #   False = per-token (μ_v, σ_v) lookup; phi retained for transport only.
+    #           Per-token capacity is V·(2K + n_gen).
     'gauge_fixed_priors':       False,
+
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  False,
-    'gauge_covariant_ridge':       False,
+    'use_equivariant_head_mixer':  True,
+    'gauge_covariant_ridge':       True,
 
     # === E-step dynamics ===
     'n_e_steps':                1,
@@ -141,7 +146,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'phi_project_slk':          False,
     'phi_trace_clamp':          0.75,
     
-    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
+    'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'killing_per_block', 'pullback'
 
     # === Positional encoding ===
     'use_rope':                 True,
@@ -164,13 +169,19 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
 
+    # === Cross-head coupling (GL(K) multi-head only) ===
+    # See transformer/vfe/config.py docstring and metrics/viz modules.
+    'cross_couplings':                  [],
+    'auto_close_cross_head_basis':      False,
+    'validate_cross_head_closure':      True,
+
     # === Normalization ===
     'norm_type':                'layernorm',
     'normalize_ce_by_dim':      True,
 
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
-    'm_mu_lr':                  0.2,
+    'm_mu_lr':                  0.01,
     'm_sigma_lr':               0.015,
     'm_phi_lr':                 0.025,
     'm_hyper_lr':               0.001,
@@ -190,7 +201,6 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     'track_layer_diagnostics':      False,
     'monitor_monotonicity':         False,
-
     # === Driver-only (not VFEConfig fields) ===
     'dataset':                  'wikitext-103',
 }
@@ -322,7 +332,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'sigma_init': {
         'description': 'Embedding init: initial covariance scale (base_log_sigma = log(sigma_init))',
         'param': 'sigma_init',
-        'values': [0.1, 0.25, 0.4, 0.6, 0.8, 1.0, 1.5, 2.0],
+        'values': [0.001, 0.01, 0.1, 0.25, 0.5, 1.0],
         'baseline_value': 0.4,
     },
 
@@ -330,21 +340,21 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'm_mu_lr': {
         'description': 'M-step LR for PriorBank.base_mu',
         'param': 'm_mu_lr',
-        'values': [0.15, 0.25, 0.3, 0.4, 0.5],
+        'values': [0.001, 0.005, 0.0075,  0.01, 0.0125, 0.015],
         'baseline_value': 0.2,
     },
 
     'm_sigma_lr': {
         'description': 'M-step LR for PriorBank.base_log_sigma and decode_log_scale',
         'param': 'm_sigma_lr',
-        'values': [0.015, 0.025, 0.035, 0.045, 0.055, 0.075],
+        'values': [0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
         'baseline_value': 0.05,
     },
 
     'm_phi_lr': {
         'description': 'M-step LR for PriorBank.phi_embed and Positional.pos_phi',
         'param': 'm_phi_lr',
-        'values': [0.005, 0.015, 0.025, 0.035, 0.045],
+        'values': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
         'baseline_value': 0.01,
     },
 
@@ -376,24 +386,24 @@ SWEEP_ORDER: List[str] = [
   #  'e_mu_lr',
    # 'e_sigma_lr',
    # 'e_phi_lr',
-   'alpha_divergence',
-   # 'm_mu_lr',
-   # 'm_sigma_lr',
-    #'m_phi_lr',
-   # 'm_hyper_lr',
-   # 'm_other_lr',
+  # 'alpha_divergence',
+   'm_mu_lr',
+    'm_sigma_lr',
+    'm_phi_lr',
+    'm_hyper_lr',
+    'm_other_lr',
 
-   # 'weight_decay',
+    'weight_decay',
     
-  #  'lambda_align',
+    'lambda_align',
    # 'lambda_softmax',
    
    # 'rope_base',
   #  'mass_phi',
     
-   # 'mu_init_std',
-   # 'phi_scale',
-   # 'sigma_init',
+    'mu_init_std',
+    'phi_scale',
+    'sigma_init',
     # 'kappa',
    # 'phi_trace_clamp',
 ]

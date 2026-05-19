@@ -330,7 +330,12 @@ class VFEEStep(nn.Module):
                 # initial behavior matches the scalar-κ run. Config-level
                 # __post_init__ guarantees len(irrep_dims) > 1 and
                 # per_head_softmax=True when this branch is taken.
-                n_heads = len(cfg.irrep_dims)
+                #
+                # Under cross_couplings the "head" structure visible to the
+                # softmax is the super-block partition (effective_block_dims),
+                # so the per-head κ vector has one entry per super-block, not
+                # one per original head.
+                n_heads = len(cfg.effective_block_dims)
                 self.log_kappa_per_head = nn.Parameter(
                     torch.full((n_heads,), math.log(cfg.kappa))
                 )
@@ -349,7 +354,16 @@ class VFEEStep(nn.Module):
         self.isotropic_covariance = cfg.isotropic_covariance
         self.exact_diagonal_transport = cfg.exact_diagonal_transport
         self.alpha_divergence = cfg.alpha_divergence
-        self.irrep_dims: List[int] = cfg.irrep_dims
+        # Gauge-block partition: under cross_couplings this is the super-block
+        # layout (sum of merged-head dims) rather than the original per-head
+        # dims. All block-iteration sites in this module walk this list, so
+        # per-block softmax / per-block KL / per-block Ω naturally operate on
+        # the correct gauge-block-diagonal structure.
+        self.irrep_dims: List[int] = cfg.effective_block_dims
+        # Preserve the original per-head layout for the rare consumer that
+        # genuinely needs per-head granularity (e.g. cross-head-coupling
+        # diagnostics that compare super-block aggregates to per-head values).
+        self._original_irrep_dims: List[int] = cfg.irrep_dims
         self.use_rope = cfg.use_rope
         self.rope_base = cfg.rope_base
         self.rope_full_gauge = cfg.rope_full_gauge
@@ -397,11 +411,20 @@ class VFEEStep(nn.Module):
         # Init at zero ⇒ flat path bitwise-equivalent at step 0.
         self.use_non_flat_transport = cfg.use_non_flat_transport
         if cfg.use_non_flat_transport:
+            # Under cross_couplings, supply the per-head sub-partition inside
+            # each super-block so diagonal generators get a tight d_head mask
+            # while cross generators still receive the full super-block mask.
+            head_sub_dims: Optional[List[List[int]]] = None
+            if cfg.is_cross_coupled:
+                _, _n_heads, d_head = cfg.irrep_spec[0]
+                groups = cfg.super_block_head_groups or []
+                head_sub_dims = [[d_head] * len(g) for g in groups]
             self.non_flat_connection = VFENonFlatConnection(
                 generators=generators,
-                irrep_dims=cfg.irrep_dims,
+                irrep_dims=cfg.effective_block_dims,
                 max_strength=cfg.non_flat_max_strength,
                 per_edge_delta_max=cfg.non_flat_per_edge_delta_max,
+                head_sub_dims=head_sub_dims,
             )
         else:
             self.non_flat_connection = None
@@ -419,7 +442,7 @@ class VFEEStep(nn.Module):
             # cache is data-independent; computing it once at construction
             # saves a small constant per E-step iteration.
             self._omega_killing_cache = _build_killing_matrix_per_block(
-                generators, cfg.irrep_dims,
+                generators, cfg.effective_block_dims,
             )
         else:
             self._omega_killing_cache = None
@@ -438,7 +461,7 @@ class VFEEStep(nn.Module):
             _phi_prec = build_killing_form_preconditioner(generators)
         elif cfg.phi_preconditioner == 'killing_per_block':
             _phi_prec = build_killing_form_preconditioner_per_block(
-                generators, cfg.irrep_dims,
+                generators, cfg.effective_block_dims,
             )
         if _phi_prec is not None:
             self.register_buffer('_phi_preconditioner', _phi_prec)

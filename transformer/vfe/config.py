@@ -29,12 +29,30 @@ class VFEConfig:
        ``__post_init__`` mutates ``use_autograd_mu_sigma`` when
        ``gauge_parameterization == 'omega_direct'`` or
        ``use_non_flat_transport == True`` (promotion path that the analytic
-       gradient kernel cannot handle). ``dataclasses.replace(cfg, ...)`` does
-       NOT re-run ``__post_init__``, so a replace that toggles either of
-       those two flags will leave ``use_autograd_mu_sigma`` at the parent's
-       value and the new config will silently use the wrong kernel. Construct
-       a fresh ``VFEConfig`` via the normal constructor instead of using
-       ``replace`` when toggling those two flags.
+       gradient kernel cannot handle). It also dedups ``cross_couplings`` and
+       computes the ``super_block_dims`` / ``super_block_head_groups`` caches
+       on first access. ``dataclasses.replace(cfg, ...)`` does NOT re-run
+       ``__post_init__``, so a replace that toggles any of these flags
+       (``use_autograd_mu_sigma``, ``use_non_flat_transport``,
+       ``gauge_parameterization``, ``cross_couplings``,
+       ``auto_close_cross_head_basis``) will leave derived state stale or
+       skip validation. Construct a fresh ``VFEConfig`` via the normal
+       constructor instead of using ``replace`` when toggling those.
+
+    .. note::
+       **RoPE × cross_couplings.** RoPE rotations operate within each head's
+       ``d_head`` slot (which the super-block reordering preserves head-
+       contiguous), so the μ rotation itself is well-defined under cross
+       coupling. However, the cross-head generators do *not* commute with
+       per-head RoPE rotations, so the combined transport ``Ω · R`` and
+       ``R · Ω`` differ — RoPE × cross_couplings has the same "rotated μ
+       but un-rotated Σ" approximation as the existing single-head case
+       documented in CLAUDE.md "KNOWN GAP — RoPE × MahalanobisNorm", and
+       no worse. Strict joint covariance for cross_couplings would require
+       ``rope_full_gauge != 'off'`` plus a derived per-pair handling of the
+       cross generators that is not currently implemented; ``rope_full_gauge
+       != 'off'`` already requires full covariance via existing
+       ``__post_init__`` validation.
     """
 
     # === Structure ===
@@ -196,6 +214,42 @@ class VFEConfig:
     gauge_parameterization: Literal['phi', 'omega_direct'] = 'phi'
     omega_normalize_every: int = 0     # 0 = never; >0 = renormalize det every N E-steps
     omega_project_slk: bool = False    # True = renormalize per-block det → 1 (controls trace drift on R·I)
+
+    # === Cross-head coupling (GL(K) multi-head only) ===
+    # Sparse off-diagonal gauge mixing between heads. Each (a, b) pair adds
+    # d_head² generators that span the head-a → head-b subspace; the resulting
+    # Ω = exp(φ·G) acquires non-zero blocks at (a, b) and (b, a), so gauge
+    # transport itself moves information between heads (different mechanism
+    # from VFEHeadMixer, which is a fixed post-E-step value mixer).
+    #
+    # The math kernel lives in math_utils.generators (shared with legacy
+    # transformer/core/model.py):
+    #   - generate_glK_cross_head_generators: emits diag + cross generators
+    #   - merge_coupled_heads: union-find on coupling pairs → super-block dims
+    #   - reorder_cross_head_generators: permutes basis so super-blocks are
+    #     contiguous in the K dimension
+    #
+    # Constraints:
+    #   1. gauge_group must be 'GLK' (cross-head coupling is GL(K)-specific).
+    #   2. irrep_spec must be single-type multihead (one (type, n_heads,
+    #      d_head) entry with n_heads >= 2). Each head must have the same
+    #      d_head — heterogeneous-dim heads are not supported.
+    #   3. Pairs (a, b) with a == b are rejected. Distinct orientations
+    #      (a, b) vs (b, a) are preserved (directional generators).
+    #   4. Exact duplicate pairs are silently de-duplicated.
+    cross_couplings: List[Tuple[int, int]] = field(default_factory=list)
+    # When True, after building the cross-head basis, close it under the
+    # matrix commutator [.,.] so it forms a true Lie subalgebra. Required for
+    # mathematically exact BCH composition (otherwise the bracket silently
+    # projects onto the open basis, producing an approximation). Costs:
+    # changes phi_dim, breaks checkpoint compatibility, can introduce
+    # generators that cross the user-supplied super-block partition.
+    auto_close_cross_head_basis: bool = False
+    # When True (default), validate the cross-head basis is closed under
+    # [.,.] and emit a non-fatal warning if it is not. Disable to suppress
+    # the warning if you have verified the basis or are using an approximate
+    # BCH composition deliberately.
+    validate_cross_head_closure: bool = True
 
     # === Non-flat parallel transport ===
     # When True, transport becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G)
@@ -433,6 +487,62 @@ class VFEConfig:
                 f"tensor that apply_pullback_natural_gradient requires."
             )
 
+        # --- Cross-head coupling validation -------------------------------
+        if self.cross_couplings:
+            # GLK-only.
+            if self.gauge_group != 'GLK':
+                raise ValueError(
+                    f"cross_couplings is non-empty but gauge_group="
+                    f"{self.gauge_group!r}. Cross-head coupling adds GL(K)-"
+                    f"specific off-diagonal generators; it has no SO(N) or "
+                    f"SO(3) analog. Either drop cross_couplings or set "
+                    f"gauge_group='GLK'."
+                )
+            # Must be single-type multihead.
+            if len(self.irrep_spec) != 1:
+                raise ValueError(
+                    f"cross_couplings requires a single-type irrep_spec "
+                    f"(one entry of the form (type, n_heads, d_head)); "
+                    f"got {len(self.irrep_spec)} types: {self.irrep_spec!r}."
+                )
+            _type_name, n_heads, d_head = self.irrep_spec[0]
+            if n_heads < 2:
+                raise ValueError(
+                    f"cross_couplings requires n_heads >= 2; "
+                    f"got n_heads={n_heads} from irrep_spec={self.irrep_spec!r}."
+                )
+            # Dedup and validate pairs.
+            seen: set = set()
+            deduped: list = []
+            for pair in self.cross_couplings:
+                if not (isinstance(pair, (tuple, list)) and len(pair) == 2):
+                    raise ValueError(
+                        f"cross_couplings entries must be (a, b) pairs; "
+                        f"got {pair!r}."
+                    )
+                a, b = int(pair[0]), int(pair[1])
+                if a == b:
+                    raise ValueError(
+                        f"Self-coupling ({a},{a}) is not allowed in "
+                        f"cross_couplings — already covered by diagonal "
+                        f"generators."
+                    )
+                if not (0 <= a < n_heads and 0 <= b < n_heads):
+                    raise ValueError(
+                        f"cross_couplings pair ({a},{b}) has head index "
+                        f"out of range [0,{n_heads})."
+                    )
+                if (a, b) in seen:
+                    continue
+                seen.add((a, b))
+                deduped.append((a, b))
+            self.cross_couplings = deduped
+            # Non-flat path: per-pair Σ block-mask buffer needs to cover the
+            # super-block off-diagonal entries — we adapt the mask in
+            # non_flat.py to read super_block_dims, so this combination is
+            # supported as of 2026-05-19.
+            # Omega-direct: per-block Ω walks super_block_dims; supported.
+
         # --- non_flat_tile_size reserved future field ----------------------
         if self.non_flat_tile_size != 0:
             raise NotImplementedError(
@@ -573,15 +683,83 @@ class VFEConfig:
 
     @property
     def n_gen(self) -> int:
-        """Number of Lie algebra generators."""
+        """Number of Lie algebra generators.
+
+        With ``cross_couplings`` active, the count includes the off-diagonal
+        E_ij blocks: ``n_heads · d_head² + |cross_couplings| · d_head²``.
+        """
         if self.generators is not None:
             return self.generators.shape[0]
         # Estimate from gauge group and irrep structure
         if self.gauge_group == 'SO3':
             return 3
         elif self.gauge_group == 'GLK':
-            # Block-diagonal: sum of d_h^2 per head
-            return sum(d ** 2 for d in self.irrep_dims)
+            base = sum(d ** 2 for d in self.irrep_dims)
+            if self.cross_couplings:
+                _, _n_heads, d_head = self.irrep_spec[0]
+                base += len(self.cross_couplings) * d_head * d_head
+            return base
         else:  # SON
             K = self.embed_dim
             return K * (K - 1) // 2
+
+    @property
+    def is_cross_coupled(self) -> bool:
+        """True iff ``cross_couplings`` is non-empty (GL(K) multi-head)."""
+        return bool(self.cross_couplings)
+
+    @property
+    def super_block_dims(self) -> Optional[List[int]]:
+        """Super-block dimensions when ``cross_couplings`` is active.
+
+        Coupled heads are merged via union-find on the coupling pairs;
+        uncoupled heads remain singleton blocks. Sum equals ``embed_dim``.
+        Returns ``None`` when no cross-coupling is active.
+
+        Lazily computed from ``math_utils.generators.merge_coupled_heads``;
+        the result is cached on the instance.
+        """
+        if not self.cross_couplings:
+            return None
+        cached = getattr(self, '_super_block_dims_cache', None)
+        if cached is not None:
+            return cached
+        from math_utils.generators import merge_coupled_heads
+        _, n_heads, d_head = self.irrep_spec[0]
+        dims, groups = merge_coupled_heads(n_heads, d_head, list(self.cross_couplings))
+        # Cache both via object.__setattr__ to bypass dataclass __setattr__ in
+        # frozen configurations (not currently frozen, but defensive).
+        object.__setattr__(self, '_super_block_dims_cache', dims)
+        object.__setattr__(self, '_super_block_head_groups_cache', groups)
+        return dims
+
+    @property
+    def super_block_head_groups(self) -> Optional[List[List[int]]]:
+        """List of head-index groups per super-block.
+
+        Each entry is the list of original head indices unioned into that
+        super-block, in original order (sorted by smallest head). Returns
+        ``None`` when no cross-coupling is active.
+        """
+        if not self.cross_couplings:
+            return None
+        # Triggers computation + cache of both fields.
+        _ = self.super_block_dims
+        return getattr(self, '_super_block_head_groups_cache', None)
+
+    @property
+    def effective_block_dims(self) -> List[int]:
+        """Block dimensions for the gauge-block iteration.
+
+        Returns ``super_block_dims`` when ``cross_couplings`` is active;
+        otherwise returns ``irrep_dims``. This is the layout that downstream
+        block-iteration code in e_step / attention / prior_bank / etc.
+        should consume — under cross-coupling the gauge-block-diagonal
+        structure is the super-block partition, not the original per-head
+        partition.
+        """
+        if self.cross_couplings:
+            sbd = self.super_block_dims
+            assert sbd is not None
+            return sbd
+        return self.irrep_dims
