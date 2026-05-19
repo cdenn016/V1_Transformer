@@ -8,9 +8,14 @@ Reuses PublicationMetricsTracker (CSV) and TrainingTracker/PublicationFigures
 from the legacy training infrastructure for full diagnostic parity.
 """
 
+import dataclasses
+import json
 import math
+import subprocess
+import sys
 import time
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 
@@ -112,6 +117,10 @@ class VFETrainer:
         self.output_dir = Path(output_dir) if output_dir else None
         if self.output_dir:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+            # Per-run snapshot of config, environment, and git SHA. Without
+            # this, post-hoc "which flag did this run use" analysis is
+            # impossible — see post_edit_2026-05-19.md Wave 6.
+            self._dump_system_info()
 
         # Metrics infrastructure (lazy init in train())
         self._metrics_tracker = None
@@ -132,6 +141,85 @@ class VFETrainer:
         # current default (True). The flag actually lives on each block's
         # VFEEStep; the trainer toggles it on/off via helper.
         self._set_capture_attention_state(True)
+
+    def _dump_system_info(self) -> None:
+        """Write ``output_dir/system_info.json`` with config + environment.
+
+        Snapshot taken once at trainer init. Captures:
+
+        - ``config``: ``dataclasses.asdict(cfg)`` with non-JSON-serializable
+          fields (tensors, modules) stringified via ``default=str``.
+        - ``git_sha``: ``git rev-parse HEAD`` (None on failure).
+        - ``git_branch``: current branch (None on failure).
+        - ``torch_version``, ``cuda_version``, ``cudnn_version``.
+        - ``gpu``: GPU name and capability if CUDA available.
+        - ``python_version``, ``platform``.
+        - ``initial_seed``: ``torch.initial_seed()`` (the seed the caller
+          already set via ``torch.manual_seed``).
+        - ``start_time``: ISO-8601 UTC timestamp.
+
+        Errors are logged but never raised — system-info is diagnostic
+        only and must not block training.
+        """
+        if self.output_dir is None:
+            return
+        try:
+            cfg_dict = dataclasses.asdict(self.cfg)
+        except TypeError:
+            cfg_dict = {k: str(v) for k, v in vars(self.cfg).items()}
+
+        def _git(args: List[str]) -> Optional[str]:
+            try:
+                out = subprocess.run(
+                    ['git'] + args,
+                    capture_output=True, text=True, timeout=5,
+                    check=False,
+                )
+                if out.returncode == 0:
+                    return out.stdout.strip()
+            except (FileNotFoundError, subprocess.SubprocessError, OSError):
+                pass
+            return None
+
+        gpu_info: Dict[str, Any] = {}
+        if torch.cuda.is_available():
+            try:
+                idx = torch.cuda.current_device()
+                gpu_info = {
+                    'name': torch.cuda.get_device_name(idx),
+                    'capability': list(torch.cuda.get_device_capability(idx)),
+                    'count': torch.cuda.device_count(),
+                }
+            except Exception as exc:
+                gpu_info = {'error': str(exc)}
+
+        info: Dict[str, Any] = {
+            'start_time_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'git_sha': _git(['rev-parse', 'HEAD']),
+            'git_branch': _git(['rev-parse', '--abbrev-ref', 'HEAD']),
+            'git_dirty': _git(['status', '--porcelain']) not in (None, ''),
+            'torch_version': torch.__version__,
+            'cuda_version': getattr(torch.version, 'cuda', None),
+            'cudnn_version': (
+                torch.backends.cudnn.version()
+                if torch.backends.cudnn.is_available()
+                else None
+            ),
+            'gpu': gpu_info or None,
+            'python_version': sys.version.split()[0],
+            'platform': sys.platform,
+            'device': self.device,
+            'initial_seed': torch.initial_seed(),
+            'output_dir': str(self.output_dir),
+            'config': cfg_dict,
+        }
+
+        try:
+            out_path = self.output_dir / 'system_info.json'
+            with out_path.open('w', encoding='utf-8') as fh:
+                json.dump(info, fh, indent=2, default=str, sort_keys=False)
+        except OSError as exc:
+            logger.warning("Failed to write system_info.json: %s", exc)
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         """Build AdamW optimizer with per-group LRs (cfg.m_*_lr)."""
