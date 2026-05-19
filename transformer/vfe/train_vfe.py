@@ -16,7 +16,7 @@ from transformer.vfe.model import VFEModel
 from transformer.vfe.trainer import VFETrainer
 from transformer.data.datasets import create_dataloaders
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 # ============================================================================
 # CONFIGURATION — edit this dict, then press Run
@@ -47,7 +47,7 @@ config = {
     'learnable_kappa':          False,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  True,
+    'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       False,
 
     # === E-step dynamics ===
