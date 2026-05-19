@@ -784,6 +784,238 @@ class VFETrainer:
         except (OSError, ValueError, RuntimeError, IndexError, KeyError) as exc:
             logger.exception("  attention plot failed: %s", exc)
 
+    def _collect_cross_coupling_artifacts(
+        self,
+    ) -> Tuple[List[Dict[str, Any]], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        r"""Pull per-layer artifacts needed by ``cross_coupling_metrics`` /
+        ``cross_coupling_viz`` from each block's ``_last_attention_state``.
+
+        Returns:
+            per_layer: list of dicts (one per block), each containing keys
+                ``phi``, ``sigma``, ``omega``, ``beta_per_block``,
+                ``omega_pairwise`` (any of which may be ``None`` if the
+                cache is missing that artifact on this layer).
+            generators: the model's generator buffer.
+            cfg: the active VFEConfig.
+
+        No-op safe: returns empty list when no block has populated state.
+        """
+        import torch as _t
+        per_layer: List[Dict[str, Any]] = []
+        for block in self.model.stack.blocks:
+            e_step = block.e_step
+            state = getattr(e_step, '_last_attention_state', None)
+            if state is None:
+                continue
+            # Sample-0 slice to keep RAM bounded; the diagnostics aggregate
+            # over (B, N) anyway, so a single sample is a faithful estimator.
+            phi = state.get('phi')
+            sigma = state.get('sigma_q')
+            mu_q = state.get('mu_q')
+            bep = state.get('block_exp_pairs')
+            irrep_dims = state.get('irrep_dims') or []
+
+            # Assemble (B, N, K, K) omega = block_diag(exp(phi · G^h)) from
+            # the per-block exp pairs. Only the (sample-0) slice is kept.
+            omega_full: Optional[_t.Tensor] = None
+            omega_pairwise: Optional[List[Tuple[_t.Tensor, _t.Tensor]]] = None
+            if bep is not None and irrep_dims:
+                # Use sample 0 only for the global-Ω heatmap.
+                exp_h0_list = []
+                exp_neg_h0_list = []
+                ok = True
+                for p in bep:
+                    if p[0] is None:
+                        ok = False
+                        break
+                    exp_h0_list.append(p[0][0:1])         # (1, N, d_h, d_h)
+                    exp_neg_h0_list.append(
+                        p[1][0:1] if p[1] is not None else p[0][0:1].transpose(-1, -2)
+                    )
+                if ok:
+                    K = sum(irrep_dims)
+                    N = exp_h0_list[0].shape[1]
+                    omega_full = _t.zeros(
+                        1, N, K, K,
+                        device=exp_h0_list[0].device,
+                        dtype=exp_h0_list[0].dtype,
+                    )
+                    cursor = 0
+                    for d_h, eh in zip(irrep_dims, exp_h0_list):
+                        omega_full[..., cursor:cursor + d_h, cursor:cursor + d_h] = eh
+                        cursor += d_h
+                    # Pairwise per-block (sample 0). Materialize Ω_ij^h =
+                    # exp_h(i) · exp_h_inv(j).
+                    omega_pairwise = []
+                    for d_h, eh, eh_inv in zip(
+                        irrep_dims, exp_h0_list, exp_neg_h0_list,
+                    ):
+                        Om = _t.einsum('bikm,bjml->bijkl', eh, eh_inv)
+                        Om_inv = _t.einsum('bjkm,biml->bijkl', eh_inv, eh)
+                        omega_pairwise.append((Om, Om_inv))
+
+            # Beta per super-block: stack the per-head (super-block)
+            # attention tensors when the e_step has produced them. Convert
+            # the trainer's ``_last_attention_per_head`` (B, H, N, N) into
+            # (B, N, N, H_super) as the metric expects.
+            beta_per_block: Optional[_t.Tensor] = None
+            ph = getattr(e_step, '_last_attention_per_head', None)
+            if ph is not None:
+                # ph: (B, H, N, N) — permute to (B, N, N, H)
+                beta_per_block = ph.detach().permute(0, 2, 3, 1).contiguous()
+
+            per_layer.append(dict(
+                phi=phi[0:1] if phi is not None else None,
+                sigma=sigma[0:1] if sigma is not None else None,
+                mu_q=mu_q[0:1] if mu_q is not None else None,
+                omega=omega_full,
+                omega_pairwise=omega_pairwise,
+                beta_per_block=beta_per_block,
+            ))
+        return per_layer, self.model.generators, self.model.cfg
+
+    def _save_cross_coupling_diagnostics(self, step: int) -> Dict[str, Any]:
+        r"""Compute cross-coupling metrics and save figures at ``step``.
+
+        No-op when ``cfg.cross_couplings`` is empty or the output dir is
+        unset; safe to call unconditionally from the eval branch. Emits two
+        artifacts:
+        - ``cross_coupling/cross_coupling_step_{step}.json`` — scalar
+          metrics per layer plus per-super-block arrays serialized to lists.
+        - ``cross_coupling/cross_coupling_step_{step}_*.png`` — figures
+          generated by ``cross_coupling_viz`` (one per plot type).
+
+        Returns the computed metrics dict so callers can also forward
+        scalar entries to a CSV / pub tracker.
+        """
+        if self.output_dir is None:
+            return {}
+        cfg = self.model.cfg
+        if not cfg.is_cross_coupled:
+            return {}
+        try:
+            import numpy as _np
+            import matplotlib.pyplot as _plt
+            from transformer.vfe import cross_coupling_metrics as _ccm
+            from transformer.vfe import cross_coupling_viz as _ccv
+        except ImportError as exc:
+            logger.warning(
+                f"  cross-coupling diagnostics: import failed ({exc}); skipping."
+            )
+            return {}
+
+        try:
+            per_layer, generators, _ = self._collect_cross_coupling_artifacts()
+            if not per_layer:
+                return {}
+
+            out_dir = self.output_dir / 'cross_coupling'
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            per_layer_metrics: List[Dict[str, Any]] = []
+            for layer_idx, layer in enumerate(per_layer):
+                if layer.get('phi') is None or layer.get('sigma') is None:
+                    per_layer_metrics.append({})
+                    continue
+                m = _ccm.collect_cross_coupling_metrics(
+                    phi=layer['phi'],
+                    sigma=layer['sigma'],
+                    cfg=cfg,
+                    omega=layer.get('omega'),
+                    omega_pairwise=layer.get('omega_pairwise'),
+                    beta_per_block=layer.get('beta_per_block'),
+                    kl_per_block=None,  # not currently cached per super-block
+                )
+                # Convert numpy arrays to lists for JSON serialization.
+                m_json = {
+                    k: (v.tolist() if hasattr(v, 'tolist') else v)
+                    for k, v in m.items()
+                }
+                per_layer_metrics.append(m_json)
+
+            # Persist scalar/array metrics as JSON.
+            json_path = out_dir / f'cross_coupling_step_{step:08d}.json'
+            with open(json_path, 'w') as fh:
+                json.dump({
+                    'step': step,
+                    'cross_couplings': list(cfg.cross_couplings),
+                    'super_block_dims': cfg.super_block_dims,
+                    'super_block_head_groups': cfg.super_block_head_groups,
+                    'per_layer': per_layer_metrics,
+                }, fh, indent=2, default=str)
+
+            # Generate figures from layer-0 state (representative; the
+            # generator basis and super-block partition are layer-invariant).
+            layer0 = per_layer[0]
+            saved_figs: List[str] = []
+
+            def _save(name: str, fig) -> None:
+                p = out_dir / f'cross_coupling_step_{step:08d}_{name}.png'
+                fig.savefig(p, bbox_inches='tight', dpi=200)
+                _plt.close(fig)
+                saved_figs.append(p.name)
+
+            _save('generator_sparsity',
+                  _ccv.plot_generator_sparsity(generators, cfg))
+            _save('super_block_graph',
+                  _ccv.plot_super_block_graph(cfg))
+            if layer0.get('omega') is not None:
+                strength = _ccm.omega_block_strength(layer0['omega'], cfg)
+                _save('omega_block_strength',
+                      _ccv.plot_omega_block_strength(strength, cfg))
+
+            # Layer-aggregated plots: phi-energy partition + diagnostics bar.
+            phi_energy_per_layer = []
+            attn_entropy_per_layer = []
+            for layer in per_layer:
+                if layer.get('phi') is None:
+                    continue
+                phi_energy_per_layer.append(
+                    _ccm.phi_energy_partition(layer['phi'], cfg)
+                )
+                if layer.get('beta_per_block') is not None:
+                    attn_entropy_per_layer.append(
+                        _ccm.per_super_block_attention_entropy(
+                            layer['beta_per_block'], cfg,
+                        )
+                    )
+            if phi_energy_per_layer:
+                _save('phi_energy',
+                      _ccv.plot_phi_energy_partition(phi_energy_per_layer, cfg))
+
+            eff_rank = _ccm.per_super_block_effective_rank(layer0['sigma'], cfg)
+            attn_ent0 = (
+                _ccm.per_super_block_attention_entropy(layer0['beta_per_block'], cfg)
+                if layer0.get('beta_per_block') is not None else None
+            )
+            _save('super_block_diagnostics',
+                  _ccv.plot_super_block_diagnostics(
+                      effective_rank=eff_rank,
+                      attention_entropy=attn_ent0,
+                      cfg=cfg,
+                  ))
+
+            logger.info(
+                f"  cross-coupling diagnostics saved: "
+                f"{len(saved_figs)} figure(s), 1 JSON under {out_dir}"
+            )
+            # Aggregate scalar summary for CSV/log return.
+            agg: Dict[str, Any] = {}
+            if phi_energy_per_layer:
+                agg['cc_phi_energy_cross_share'] = float(_np.mean(
+                    [d['phi_energy_cross_share'] for d in phi_energy_per_layer]
+                ))
+                agg['cc_phi_energy_cross'] = float(_np.mean(
+                    [d['phi_energy_cross'] for d in phi_energy_per_layer]
+                ))
+                agg['cc_phi_energy_total'] = float(_np.mean(
+                    [d['phi_energy_total'] for d in phi_energy_per_layer]
+                ))
+            return agg
+        except (OSError, ValueError, RuntimeError, IndexError, KeyError) as exc:
+            logger.exception("  cross-coupling diagnostics failed: %s", exc)
+            return {}
+
     def train_step(
         self,
         batch: "Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]",
@@ -1474,6 +1706,11 @@ class VFETrainer:
                 # val-batch β the heatmap is meant to show.
                 attn = self._attention_summary()
                 self._plot_attention_patterns(step + 1)
+                # Cross-head coupling diagnostics + figures. No-op when
+                # cfg.cross_couplings is empty; otherwise saves a JSON of
+                # per-layer metrics + a small fan-out of figures under
+                # output_dir/cross_coupling/.
+                cc_metrics = self._save_cross_coupling_diagnostics(step + 1)
                 sample_text = self._generate_sample()
 
                 _write("")  # blank line above the block
@@ -1501,11 +1738,15 @@ class VFETrainer:
 
                 # Log validation to CSV (map to expected keys)
                 if self._metrics_tracker is not None:
-                    self._metrics_tracker.log_val(step + 1, {
+                    _val_log: Dict[str, float] = {
                         'loss': val_metrics['val_loss'],
                         'ce_loss': val_metrics['val_loss'],
                         'perplexity': val_metrics['val_ppl'],
-                    })
+                    }
+                    if cc_metrics:
+                        _val_log.update({k: float(v) for k, v in cc_metrics.items()
+                                          if isinstance(v, (int, float))})
+                    self._metrics_tracker.log_val(step + 1, _val_log)
 
                 # Save best model
                 if val_metrics['val_loss'] < best_val_loss:

@@ -61,6 +61,32 @@ import torch
 import torch.nn.functional as F
 
 from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
+from transformer.vfe._numerics import pre_exp_frobenius_clamp
+
+
+class VFEGaugeOrientationError(RuntimeError):
+    r"""Raised by :func:`project_omega_to_slk` under ``strict=True`` when one
+    or more per-block :math:`\Omega_h` carry ``det < 0``.
+
+    For the connected component :math:`GL_+(K)` of the gauge group the
+    matrix-exponential parameterization :math:`\Omega_h = \exp(\phi_h \cdot G)`
+    satisfies :math:`\det(\Omega_h) = \exp(\mathrm{tr}(\phi_h \cdot G)) > 0`
+    analytically, so a runtime ``det < 0`` is a numerical artifact relative
+    to the identity component. The full :math:`GL(K)` group permitted by the
+    manuscript (``Attention/GL(K)_attention.tex`` line 432; reflection
+    extension at lines 1096-1099) does contain ``det < 0`` elements, so the
+    default :func:`project_omega_to_slk` mode preserves the sign factor and
+    only ``strict=True`` raises.
+    """
+
+    def __init__(self, n_negative_blocks: int) -> None:
+        super().__init__(
+            f"project_omega_to_slk: {n_negative_blocks} per-block Omega(s) "
+            "with det < 0 under strict GL+(K) mode. Disable via "
+            "cfg.phi_strict_glplus = False to recover the sign-preserving "
+            "GL(K) repair."
+        )
+        self.n_negative_blocks = n_negative_blocks
 
 
 # -----------------------------------------------------------------------------
@@ -126,6 +152,8 @@ def compute_pairwise_omega_from_endpoints(
     irrep_dims: List[int],
     delta: Optional[torch.Tensor] = None,
     generators: Optional[torch.Tensor] = None,
+    *,
+    phi_spec_max: Optional[float] = None,
 ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     r"""Build pairwise :math:`(\Omega_{ij}, \Omega_{ij}^{-1})` from per-token
     endpoints, with optional non-flat correction :math:`\exp(\delta_{ij} \cdot G)`
@@ -171,6 +199,8 @@ def compute_pairwise_omega_from_endpoints(
         if use_delta:
             G_h = generators[:, block_start:block_end, block_start:block_end]
             algebra = torch.einsum('bija,akl->bijkl', delta, G_h)
+            if phi_spec_max is not None:
+                algebra, _ = pre_exp_frobenius_clamp(algebra, max_fro=phi_spec_max)
             with torch.amp.autocast('cuda', enabled=False):
                 exp_delta = torch.linalg.matrix_exp(algebra.float())
                 exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())
@@ -374,8 +404,10 @@ def project_omega_to_slk(
     omega_per_token: List[Tuple[torch.Tensor, torch.Tensor]],
     irrep_dims: List[int],
     eps: float = 1e-12,
+    *,
+    strict: bool = False,
 ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
-    r"""Rescale each per-block :math:`\Omega_h` so that :math:`\det(\Omega_h)
+    r"""Rescale each per-block :math:`\Omega_h` so that :math:`|\det(\Omega_h)|
     = 1`.
 
     For per-token :math:`(B, N, d_h, d_h)` blocks::
@@ -385,14 +417,29 @@ def project_omega_to_slk(
         Omega_h  ← Omega_h / scale
         Omega_inv_h ← Omega_inv_h · scale
 
-    The sign factor preserves orientation (keeps :math:`\Omega \in GL_+(d_h)`).
-    Apply on a cadence — every step is wasteful (the natural-gradient direction
-    is partially undone by the rescale) and noise is amplified at fp16.
+    The sign factor preserves orientation: dividing a ``det < 0`` block by a
+    negative scale produces a block with positive scale magnitude and the
+    same sign of ``det`` afterward, matching the manuscript's full
+    :math:`GL(K)` group (``Attention/GL(K)_attention.tex`` line 432, both
+    orientation components). Apply on a cadence — every step is wasteful
+    (the natural-gradient direction is partially undone by the rescale) and
+    noise is amplified at fp16.
+
+    Strict-mode aborts. When ``strict=True``, raises
+    :class:`VFEGaugeOrientationError` on encountering any per-block
+    ``det < 0``. Useful for ablations that wish to enforce the
+    :math:`GL_+(K)` identity component — under that constraint
+    :math:`\det(\exp(\phi \cdot G)) = \exp(\mathrm{tr}(\phi \cdot G)) > 0`
+    always, so a runtime ``det < 0`` is a numerical artifact, not a
+    geometric event.
 
     Args:
         omega_per_token: ``[(Omega_h, Omega_h_inv)]``.
         irrep_dims: Per-block dims.
-        eps: Floor for |det|.
+        eps: Floor for ``|det|`` before the power.
+        strict: When True, raise :class:`VFEGaugeOrientationError` on
+            detecting any per-block ``det(Omega) < 0`` instead of
+            preserving the sign factor.
 
     Returns:
         Renormalized pairs.
@@ -402,6 +449,10 @@ def project_omega_to_slk(
         Om, Om_inv = omega_per_token[h]
         with torch.amp.autocast('cuda', enabled=False):
             det = torch.linalg.det(Om.float())                      # (B, N)
+        if strict:
+            n_negative = int((det < 0).sum().item())
+            if n_negative > 0:
+                raise VFEGaugeOrientationError(n_negative)
         scale = det.sign() * det.abs().clamp(min=eps).pow(1.0 / d_h)  # (B, N)
         # Avoid zero / sign-zero issues at exact zero.
         scale = torch.where(scale == 0, torch.ones_like(scale), scale)

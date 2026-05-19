@@ -375,3 +375,69 @@ class TestCrossCouplingViz:
         ]
         fig = ccv.plot_phi_energy_partition(per_layer, cfg)
         assert fig is not None
+
+
+# ---------------------------------------------------------------------------
+# Trainer wiring (smoke): /vfe trainer's _save_cross_coupling_diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestVFETrainerWiring:
+
+    def test_save_cross_coupling_diagnostics_smoke(self, tmp_path):
+        """Build a tiny VFEModel with cross_couplings active, run one forward
+        with the attention-state cache enabled, then call the trainer's
+        diagnostics method and verify it produces a JSON + ≥1 PNG."""
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 4, 4)],
+            n_layers=1,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+            cross_couplings=[(0, 1)],
+            max_seq_len=16,
+        )
+        model = VFEModel(cfg)
+        # Build a minimal stand-in trainer instance with just the attributes
+        # _save_cross_coupling_diagnostics reads.
+        from transformer.vfe.trainer import VFETrainer
+        trainer = VFETrainer.__new__(VFETrainer)
+        trainer.model = model
+        trainer.output_dir = tmp_path
+        # Enable attention-state capture on every block.
+        for block in model.stack.blocks:
+            block.e_step._capture_attention_state = True
+        # Run one forward to populate _last_attention_state.
+        tokens = torch.randint(0, cfg.vocab_size, (2, 6))
+        model(tokens)
+        out = trainer._save_cross_coupling_diagnostics(step=42)
+        assert isinstance(out, dict)
+        cc_dir = tmp_path / 'cross_coupling'
+        assert cc_dir.exists()
+        json_files = list(cc_dir.glob('*.json'))
+        png_files = list(cc_dir.glob('*.png'))
+        assert len(json_files) == 1, f"expected 1 JSON, got {len(json_files)}"
+        assert len(png_files) >= 2, f"expected >=2 PNGs, got {len(png_files)}"
+
+    def test_save_cross_coupling_diagnostics_noop_when_empty(self, tmp_path):
+        """When cross_couplings is empty, the method is a no-op (no files)."""
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 4, 4)],
+            n_layers=1,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+            max_seq_len=16,
+        )
+        model = VFEModel(cfg)
+        from transformer.vfe.trainer import VFETrainer
+        trainer = VFETrainer.__new__(VFETrainer)
+        trainer.model = model
+        trainer.output_dir = tmp_path
+        out = trainer._save_cross_coupling_diagnostics(step=1)
+        assert out == {}
+        assert not (tmp_path / 'cross_coupling').exists()

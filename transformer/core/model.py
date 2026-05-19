@@ -135,9 +135,14 @@ class GaugeTransformerLM(nn.Module):
         config = copy.deepcopy(config)
         self.config = config
 
-        # Initialize cross-head coupling attributes (may be set later in gauge setup)
+        # Initialize cross-head coupling attributes (may be set later in gauge setup).
+        # All four are read by the cross-coupling diagnostics adapter
+        # (transformer/training/experiment_runner.py) so they must default to a
+        # well-typed "no coupling" value on every code path.
         self._cross_head_perm = None
         self._super_block_dims = None
+        self._super_block_head_groups = None
+        self._cross_couplings = []
 
         # Extract config
         vocab_size = config['vocab_size']
@@ -871,6 +876,13 @@ class GaugeTransformerLM(nn.Module):
                 self.register_buffer('_perm_tensor', torch.from_numpy(perm).long(), persistent=False)
                 self.register_buffer('_inv_perm_tensor', torch.from_numpy(np.argsort(perm)).long(), persistent=False)
                 self._super_block_dims = super_block_dims
+                # Stash the head-grouping and the (deduped) coupling list so the
+                # cross-coupling diagnostics adapter
+                # (transformer/training/experiment_runner.py:_build_cross_coupling_adapter)
+                # can read them without re-running merge_coupled_heads or
+                # parsing the raw config dict.
+                self._super_block_head_groups = super_block_head_groups
+                self._cross_couplings = list(cross_couplings)
 
                 n_cross = len(cross_couplings) * d_head**2
                 logger.info(f"GL(K) cross-head: {n_heads} heads x GL({d_head}), "
@@ -883,6 +895,8 @@ class GaugeTransformerLM(nn.Module):
             generators = generate_glK_multihead_generators(embed_dim, n_heads)
             self._cross_head_perm = None
             self._super_block_dims = None
+            self._super_block_head_groups = None
+            self._cross_couplings = []
             logger.info(f"GL(K) multi-head: {n_heads} heads x GL({d_head}), "
                         f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
             return generators

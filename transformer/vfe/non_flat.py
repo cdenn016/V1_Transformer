@@ -96,6 +96,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from transformer.vfe._numerics import pre_exp_frobenius_clamp
+
 
 class VFENonFlatConnection(nn.Module):
     r"""Per-edge Lie-algebra connection :math:`\delta_{ij}`.
@@ -347,6 +349,8 @@ def compute_pairwise_omega_with_delta(
     generators: torch.Tensor,
     irrep_dims: List[int],
     cached_block_exp_pairs: Optional[List[Tuple[torch.Tensor, Optional[torch.Tensor]]]] = None,
+    *,
+    phi_spec_max: Optional[float] = None,
 ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     r"""Build per-block pairwise Omega and its inverse from :math:`\phi` and
     :math:`\delta`.
@@ -400,6 +404,8 @@ def compute_pairwise_omega_with_delta(
 
         # algebra_ij[b, i, j, k, l] = sum_a delta[b, i, j, a] * G_h[a, k, l]
         algebra = torch.einsum('bija,akl->bijkl', delta, G_h)
+        if phi_spec_max is not None:
+            algebra, _ = pre_exp_frobenius_clamp(algebra, max_fro=phi_spec_max)
 
         # phi_pairs[h][1] is None iff fused_block_matrix_exp_pairs detected
         # skew-symmetric generators (SO(N)). In that case exp(-X) = exp(X)^T
