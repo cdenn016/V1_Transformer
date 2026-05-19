@@ -61,9 +61,33 @@ class VFEConfig:
     lambda_align: float = 1.0            # Boltzmann GLU weight (beta * grad_KL)
     lambda_soft: float = 1.0             # Attention-variance coupling (KL * grad_beta)
     kappa: float = 1.0                   # Attention temperature
+    # per_head_softmax: routing convention for multi-head (H > 1) attention.
+    # True (default, canonical per manuscript eq:per_head_temperature at
+    #   Attention/GL(K)_attention.tex:1744): one softmax per gauge head at
+    #   τ_h = κ · √d_head; per-head βs accumulated for both gradients and
+    #   plotting. Matches the reduced gauge group GL(d_head)^H ⊂ GL(K) the
+    #   multi-head decomposition prescribes and the legacy
+    #   transformer/core/variational_ffn.py pattern at lines 1997-2014.
+    # False: single global softmax over Σ_h KL_h at τ = κ · √K. Canonical
+    #   only in the single-head limit (H = 1). Retained as opt-in for
+    #   ablation against the multi-head reduction and for backward
+    #   compatibility with /vfe runs from before 2026-05-19.
+    # Takes effect only in the fused path (block-diagonal Σ, irrep_dims
+    # set, exact_diagonal_transport=False, use_autograd_mu_sigma=False);
+    # other paths run their existing single-call dispatch.
+    per_head_softmax: bool = True
     prior_handoff_rho: float = 1.0       # μ cross-layer damping (1.0 = no damping, <1 = smoother)
     prior_handoff_sigma: float = 0.0    # σ cross-layer handoff (0.0 = frozen at embedding, >0 = blends posterior)
     learnable_kappa: bool = False        # Learn per-layer kappa via log-space parameter
+    # Per-head learnable κ_h. When True, replaces the scalar log_kappa
+    # parameter with a per-head vector log_kappa_per_head of shape (H,),
+    # giving each gauge head its own softmax temperature
+    # τ_h = exp(log_kappa_per_head[h]).clamp(0.5·κ₀, 2·κ₀) · √d_head.
+    # Matches the manuscript's eq:per_head_temperature
+    # (Attention/GL(K)_attention.tex:1744) verbatim. Requires
+    # learnable_kappa=True AND per_head_softmax=True AND
+    # len(irrep_dims) > 1 (all enforced by __post_init__).
+    kappa_per_head: bool = False
     include_attention_entropy: bool = True  # Add κ·Σβ·log(β/π) to alignment_loss (manuscript eq:free_energy_functional_final).
                                             # Defaults ON for theoretical correctness; disable to recover
                                             # entropy-suppressed surrogate behavior (β.detach used so envelope
@@ -309,6 +333,36 @@ class VFEConfig:
                     f"freeze the corresponding param group; negative values are "
                     f"never valid."
                 )
+        # --- Per-head kappa validation -------------------------------------
+        # kappa_per_head requires both upstream flags: learnable_kappa
+        # (otherwise there's no parameter to make per-head) and
+        # per_head_softmax (otherwise per-head κ_h has nothing to apply to,
+        # since the single-softmax path uses one global κ). Also requires
+        # at least two heads — H=1 collapses to the scalar case.
+        if self.kappa_per_head:
+            if not self.learnable_kappa:
+                raise ValueError(
+                    "kappa_per_head=True requires learnable_kappa=True. "
+                    "Without learnable_kappa there is no κ parameter to "
+                    "split into per-head; the scalar self.kappa is the "
+                    "only state."
+                )
+            if not self.per_head_softmax:
+                raise ValueError(
+                    "kappa_per_head=True requires per_head_softmax=True. "
+                    "Per-head κ_h has no effect under the single global "
+                    "softmax (which uses one κ over the full-K KL)."
+                )
+            # irrep_dims is computed below from irrep_spec; check the
+            # spec directly to ensure H > 1.
+            n_heads_spec = sum(mult for _, mult, _ in self.irrep_spec)
+            if n_heads_spec <= 1:
+                raise ValueError(
+                    f"kappa_per_head=True requires more than one gauge "
+                    f"head; irrep_spec={self.irrep_spec!r} gives "
+                    f"{n_heads_spec} head(s)."
+                )
+
         if self.rope_full_gauge not in _ROPE_FULL_GAUGE_VALUES:
             raise ValueError(
                 f"rope_full_gauge must be one of {_ROPE_FULL_GAUGE_VALUES}; "

@@ -414,6 +414,94 @@ class TestLearnableKappa:
             assert block.e_step.log_kappa.grad is not None
 
 
+class TestKappaPerHead:
+    """Per-head learnable kappa (Wave 11, 2026-05-19). Each gauge head
+    gets its own log_kappa_per_head[h], implementing the manuscript's
+    eq:per_head_temperature τ_h = κ_h · √d_head verbatim."""
+
+    def _make_cfg(self, **overrides):
+        base = dict(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],   # 2 heads, d_head=8
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+            use_rope=False,
+            norm_type='layernorm',
+            mask_self_attention=False,
+            use_prior_bank=False,
+            E_learnable_alpha=False,
+            learnable_kappa=True,
+            per_head_softmax=True,
+            kappa_per_head=True,
+        )
+        base.update(overrides)
+        return VFEConfig(**base)
+
+    def test_creates_per_head_parameter(self):
+        """kappa_per_head=True creates log_kappa_per_head of shape (H,)."""
+        from transformer.vfe.e_step import VFEEStep
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        es = m.stack.blocks[0].e_step
+        assert hasattr(es, 'log_kappa_per_head')
+        assert isinstance(es.log_kappa_per_head, torch.nn.Parameter)
+        assert es.log_kappa_per_head.shape == (len(cfg.irrep_dims),)
+        # The scalar log_kappa parameter must NOT exist when per-head is on
+        # (mutually exclusive parameter creation in __init__).
+        assert not hasattr(es, 'log_kappa')
+
+    def test_effective_kappa_returns_per_head_tensor(self):
+        """effective_kappa is a (H,) tensor under kappa_per_head=True."""
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        es = m.stack.blocks[0].e_step
+        k = es.effective_kappa
+        assert isinstance(k, torch.Tensor)
+        assert k.shape == (len(cfg.irrep_dims),)
+        # Default init: all heads at log(cfg.kappa) → all exp(...) == cfg.kappa
+        assert torch.allclose(k, torch.full_like(k, cfg.kappa), atol=1e-6)
+
+    def test_gradient_flows_per_head(self):
+        """loss.backward() produces a (H,) gradient on log_kappa_per_head
+        with at least two heads receiving distinct nonzero gradients."""
+        torch.manual_seed(0)
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (4, 8))
+        targets = torch.randint(0, cfg.vocab_size, (4, 8))
+        _, loss, _ = m(token_ids, targets=targets)
+        loss.backward()
+        es = m.stack.blocks[0].e_step
+        g = es.log_kappa_per_head.grad
+        assert g is not None and g.shape == (len(cfg.irrep_dims),)
+        assert g.abs().min().item() > 1e-12, (
+            "At least one head's log_kappa_per_head received zero gradient — "
+            "per-head aux loss is not routing per-head signal."
+        )
+        # The two heads must not be carbon-copies under random init —
+        # would mean the gradients aren't actually per-head.
+        assert not torch.allclose(g[0], g[1], atol=0.0), (
+            "Both heads received identical gradients — the per-head "
+            "dispatch is not distinguishing them."
+        )
+
+    def test_post_init_rejects_without_learnable_kappa(self):
+        with pytest.raises(ValueError, match='kappa_per_head=True requires learnable_kappa=True'):
+            self._make_cfg(learnable_kappa=False)
+
+    def test_post_init_rejects_without_per_head_softmax(self):
+        with pytest.raises(ValueError, match='kappa_per_head=True requires per_head_softmax=True'):
+            self._make_cfg(per_head_softmax=False)
+
+    def test_post_init_rejects_single_head(self):
+        with pytest.raises(ValueError, match='requires more than one gauge'):
+            self._make_cfg(irrep_spec=[('l0', 1, 16)])  # 1 head, d=16
+
+
 class TestMHyperLrActuallyMovesParams:
     """Tripwire for the m_hyper_lr no-op regression (2026-05-18).
 
@@ -802,8 +890,15 @@ class TestKeysideTotalDerivative:
             e_step_mod.compute_vfe_gradients_gpu = orig_unfused
 
         total = captured['fused'] + captured['unfused']
-        assert total == cfg.n_e_steps, (
-            f"Expected {cfg.n_e_steps} analytic (non-autograd) gradient calls "
+        # Per-head softmax (cfg.per_head_softmax default True, 2026-05-19)
+        # calls the fused kernel once per head per iteration; the call
+        # count expectation must therefore include the H factor. For the
+        # legacy single-softmax path set per_head_softmax=False.
+        n_heads = len(cfg.irrep_dims) if cfg.per_head_softmax and len(cfg.irrep_dims) > 1 else 1
+        expected = cfg.n_e_steps * n_heads
+        assert total == expected, (
+            f"Expected {expected} analytic (non-autograd) gradient calls "
+            f"(n_e_steps={cfg.n_e_steps} × n_heads={n_heads}) "
             f"with default flag, got fused={captured['fused']} + "
             f"unfused={captured['unfused']} = {total}"
         )
@@ -1050,8 +1145,18 @@ class TestAlphaC0CorrectionWired:
             'alpha_c0 was None despite E_learnable_alpha=True — '
             'product-rule correction will not fire and gradients will be biased.'
         )
-        assert captured['alpha_c0'].shape == (K,), (
-            f'alpha_c0 must be shape (K,) = ({K},); got {captured["alpha_c0"].shape}'
+        # Per-head softmax (default 2026-05-19) slices alpha_c0 to (d_h,)
+        # before each fused-kernel call; the single-softmax legacy path
+        # passes the full (K,) vector.
+        if cfg_lk.per_head_softmax and len(cfg_lk.irrep_dims) > 1:
+            d_h = cfg_lk.irrep_dims[-1]  # last call captured wins
+            expected_shape = (d_h,)
+        else:
+            expected_shape = (K,)
+        assert captured['alpha_c0'].shape == expected_shape, (
+            f'alpha_c0 must be shape {expected_shape} '
+            f'(per_head_softmax={cfg_lk.per_head_softmax}, irrep_dims={cfg_lk.irrep_dims}); '
+            f'got {captured["alpha_c0"].shape}'
         )
 
     def test_alpha_c0_is_none_when_fixed_alpha(self, monkeypatch):
@@ -1125,6 +1230,14 @@ class TestFusedUnfusedEquivalence:
             n_e_steps=2,
             diagonal_covariance=True,
             gauge_group='GLK',
+            # This test compares the fused-kernel single-softmax dispatch
+            # against the unfused single-softmax fallback. With per_head_softmax
+            # default True (2026-05-19) the fused path runs per-head, which is
+            # a mathematically different algorithm than the unfused fallback.
+            # Pin per_head_softmax=False so both paths run the same algorithm
+            # and the test verifies what it's meant to verify (fused/unfused
+            # numerical equivalence on the SAME algorithm).
+            per_head_softmax=False,
         )
         m = VFEModel(cfg)
         m.eval()

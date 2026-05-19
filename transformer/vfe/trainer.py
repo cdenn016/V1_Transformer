@@ -521,18 +521,27 @@ class VFETrainer:
         if not self.cfg.learnable_kappa:
             return {}
         with torch.no_grad():
-            tensors: List[torch.Tensor] = []
+            # Accumulate scalar κ values across blocks AND heads (when
+            # kappa_per_head=True, effective_kappa is (H,)). Flattening so
+            # the mean/min/max are taken over the joined (n_blocks × n_heads)
+            # population gives a single summary number per metric that
+            # interprets the same whether per-head is on or off.
+            scalars: List[float] = []
             for block in self.model.stack.blocks:
                 k = block.e_step.effective_kappa
                 if isinstance(k, torch.Tensor):
-                    tensors.append(k.detach().reshape(()))
+                    if k.dim() == 0:
+                        scalars.append(float(k.detach().item()))
+                    else:
+                        scalars.extend(k.detach().flatten().cpu().tolist())
                 else:
-                    tensors.append(torch.tensor(float(k)))
-            kappas = torch.stack(tensors).detach().cpu().tolist()
+                    scalars.append(float(k))
+        if not scalars:
+            return {}
         return {
-            'kappa_mean': sum(kappas) / len(kappas),
-            'kappa_min': min(kappas),
-            'kappa_max': max(kappas),
+            'kappa_mean': sum(scalars) / len(scalars),
+            'kappa_min': min(scalars),
+            'kappa_max': max(scalars),
         }
 
     def _decode_first_sample_tokens(self) -> Optional[List[str]]:
@@ -571,12 +580,18 @@ class VFETrainer:
         Math: for each block h with cached forward/inverse exp pairs
         ``(g_i^h, g_j^{-h})`` and post-iteration (μ_q^h, σ_q^h):
 
+            μ_q_rope         = _apply_rope(μ_q, base=rope_base)                       if use_rope else μ_q
+            μ_q^h            = μ_q_rope[..., block_h]                                 slice per head
             Ω_ij^h           = g_i^h @ g_j^{-h}                                       (N_i, N_j, d_h, d_h)
             μ_t[i,j,k]       = Σ_l Ω_ij^h[k,l] · μ_q^h[j,l]                           transport μ_q_j to i's frame
             σ_t[i,j,k]       = Σ_l Ω_ij^h[k,l]² · σ_q^h[j,l]    (diagonal approx)     transport σ_q_j to i's frame
             KL_h(i,j)        = ½ Σ_k [σ_q^h[i,k]/σ_t + (μ_q^h[i,k]-μ_t)²/σ_t
                                      - 1 - log(σ_q^h[i,k]/σ_t)]
             β_h(i,j)         = softmax_j(-KL_h(i,j) / (κ · √d_h))
+
+        Σ is left un-rotated to match the training kernel's behaviour under
+        ``rope_full_gauge='off'`` (CLAUDE.md "KNOWN GAP" clause); the diag-σ
+        path forbids σ rotation at the config level.
 
         The training-time β at this position remains the collapsed (B,N,N)
         tensor stored in ``_last_attention`` -- this helper is diagnostic only.
@@ -587,8 +602,20 @@ class VFETrainer:
             return None
         import torch as _t
         import numpy as _np
+        from transformer.core.transport_ops import _apply_rope
         mu_q = state['mu_q'][0:1]            # (1, N, K)
         sigma_q = state['sigma_q'][0:1]       # (1, N, K)
+        # Apply RoPE before slicing per head — the training kernel
+        # (vfe_gradients.py:1074) rotates the full mu_q in one shot, and
+        # because each head's d_h is a contiguous slice on K (the user's
+        # block-diagonal generators guarantee this), slicing-then-rotating
+        # the per-head pairs (2k, 2k+1) is bit-equivalent to
+        # rotating-then-slicing. _apply_rope clones internally so the
+        # cached state tensor is not mutated. Falls back to identity when
+        # use_rope/rope_base are missing (snapshots written before the
+        # 2026-05-19 RoPE-state extension).
+        if state.get('use_rope', False):
+            mu_q = _apply_rope(mu_q, base=float(state.get('rope_base', 10000.0)))
         bep = state['block_exp_pairs']
         _k = state['kappa']
         # Convert kappa to a Python float ONLY here (plot path), not in the
@@ -678,6 +705,19 @@ class VFETrainer:
             # Each panel: (layer_idx, head_idx_or_None, (N, N) array).
             panels: List[Tuple[int, Optional[int], Any]] = []
             for layer_idx, block in enumerate(blocks):
+                # Prefer the actual training-time per-head βs when the
+                # per-head softmax dispatch populated them (cfg.per_head_softmax
+                # True AND fused path AND H > 1). This shows the same β tensor
+                # the E-step gradients descended on, including RoPE. Falls
+                # back to the state-snapshot reconstruction
+                # (_compute_per_head_beta) when per-head βs are absent — e.g.,
+                # single-softmax dispatch or single-head config.
+                ph_tensor = getattr(block.e_step, '_last_attention_per_head', None)
+                if ph_tensor is not None:
+                    ph_np = ph_tensor[0].detach().cpu().numpy()  # (H, N, N)
+                    for h in range(ph_np.shape[0]):
+                        panels.append((layer_idx, h, ph_np[h]))
+                    continue
                 beta_per_head = self._compute_per_head_beta(block.e_step)
                 if beta_per_head is not None:
                     for h in range(beta_per_head.shape[0]):
