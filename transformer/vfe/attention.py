@@ -55,7 +55,28 @@ _SKEW_CACHE_MAX = 16
 
 
 def _skew_cache_key(g: torch.Tensor) -> tuple:
-    return (g.data_ptr(), tuple(g.shape), g.dtype, str(g.device))
+    # Content-stable: a small fingerprint of tensor data + shape + dtype/device.
+    # Pure data_ptr keying is unsafe across generator-buffer lifetimes — the
+    # allocator can recycle a freed ptr for an unrelated (non-skew) tensor of
+    # the same shape, silently inheriting the cached skew verdict. Including
+    # a cheap content fingerprint (sum + a few sampled entries) makes the key
+    # invalidate when the underlying data changes even if the ptr does not.
+    with torch.no_grad():
+        _flat = g.reshape(-1)
+        _n = _flat.numel()
+        if _n == 0:
+            fp = (0.0,)
+        else:
+            # Sum + first/middle/last entries — cheap (~O(n) sum, O(1) reads)
+            # and well-distributed for collision avoidance across distinct
+            # generator banks of the same shape.
+            fp = (
+                float(_flat.sum().detach().cpu().item()),
+                float(_flat[0].detach().cpu().item()),
+                float(_flat[_n // 2].detach().cpu().item()),
+                float(_flat[-1].detach().cpu().item()),
+            )
+    return (fp, tuple(g.shape), g.dtype, str(g.device))
 
 
 def compute_gauge_transport(

@@ -17,6 +17,19 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Set
 
 
+# Shared mapping of vfe trainer param-group names to legacy CSV column keys.
+# Producer: transformer/vfe/trainer.py (`_log_to_pub_tracker`).
+# Consumer: PublicationMetricsTracker.log_step (this file).
+# Changing one without the other silently maps every LR column to 0.
+VFE_LR_GROUP_MAP: Dict[str, str] = {
+    'm_mu':    'mu_embed',
+    'm_sigma': 'sigma_embed',
+    'm_phi':   'phi_embed',
+    'm_hyper': 'ffn',
+    'm_other': 'other',
+}
+
+
 class PublicationMetricsTracker:
     """Track ALL metrics needed for publication."""
 

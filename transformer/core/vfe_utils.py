@@ -26,7 +26,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, runtime_checkable
 from math_utils.numerical_monitor import record as _nr
 
 logger = logging.getLogger(__name__)
@@ -887,6 +887,7 @@ class IterationSnapshot:
     grad_sigma_norm: float = 0.0
 
 
+@runtime_checkable
 class RecorderProtocol(Protocol):
     """Structural type for a trajectory recorder.
 

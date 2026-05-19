@@ -24,6 +24,17 @@ class VFEConfig:
 
     The ``use_obs_in_vfe`` flag does not exist because the E-step has no
     observation term — Law 1 is architecturally enforced.
+
+    .. warning::
+       ``__post_init__`` mutates ``use_autograd_mu_sigma`` when
+       ``gauge_parameterization == 'omega_direct'`` or
+       ``use_non_flat_transport == True`` (promotion path that the analytic
+       gradient kernel cannot handle). ``dataclasses.replace(cfg, ...)`` does
+       NOT re-run ``__post_init__``, so a replace that toggles either of
+       those two flags will leave ``use_autograd_mu_sigma`` at the parent's
+       value and the new config will silently use the wrong kernel. Construct
+       a fresh ``VFEConfig`` via the normal constructor instead of using
+       ``replace`` when toggling those two flags.
     """
 
     # === Structure ===

@@ -12,7 +12,7 @@ mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding direc
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple, Literal
+from typing import Any, Dict, Optional, List, Tuple, Literal
 
 
 # Allowed values for rope_full_gauge:
@@ -237,11 +237,14 @@ class BlockConfig:
     phi_natural_gradient: str =           'killing'  # 'clip'|'cartan'|'killing'|'pullback' 
     killing_center_reg: Optional[float] = None  # Killing form center regularization (None=2K)
     
-   
+
     # NOTE: learnable_reflection is an embedding-level feature, handled by
     # model.py → GaugeTokenEmbedding, not by blocks. Not stored here.
 
-    def __post_init__(self):
+    # Derived in __post_init__ from _EM_MODE_TABLE[em_mode]; not user-settable.
+    _em_phi_mode: str = field(default='', init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
         """Enforce mode invariants that must hold regardless of how BlockConfig is constructed."""
         # EM mode validation and flag resolution
         if self.em_mode not in _EM_MODE_TABLE:
@@ -529,7 +532,7 @@ class BlockConfig:
     ffn_use_prior_bank: bool = False   # If True, FFN uses PriorBank for token-dependent priors
 
     @classmethod
-    def from_config(cls, config: dict, generators: Optional[torch.Tensor] = None,
+    def from_config(cls, config: Dict[str, Any], generators: Optional[torch.Tensor] = None,
                     prior_bank: Optional[nn.Module] = None,
                     ffn_irrep_dims: Optional[List[int]] = None) -> 'BlockConfig':
         """Build BlockConfig from the flat config dict used by train_publication.py.

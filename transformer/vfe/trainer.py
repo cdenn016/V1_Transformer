@@ -653,8 +653,8 @@ class VFETrainer:
             logger.info(
                 f"  attention plots saved: {len(saved)} file(s) under {out_dir}"
             )
-        except Exception as exc:
-            logger.warning(f"  attention plot failed: {exc}")
+        except (OSError, ValueError, RuntimeError, IndexError, KeyError) as exc:
+            logger.exception("  attention plot failed: %s", exc)
 
     def train_step(
         self,
@@ -691,8 +691,19 @@ class VFETrainer:
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
 
-        # Collect gradient norms BEFORE clipping
-        grad_norms = self._compute_gradient_norms()
+        # Collect gradient norms BEFORE clipping — only on log steps. The
+        # per-group cat+norm+tolist costs a CUDA sync and ~80MB of concat on
+        # the phi group at default V; the result is only consumed at log
+        # boundaries (lines 727-732 and `_log_to_csv`), so on non-log steps
+        # the work is wasted. The zero-fallback dict preserves downstream
+        # dict reads.
+        if self._aggregate_diagnostics_this_step:
+            grad_norms = self._compute_gradient_norms()
+        else:
+            grad_norms = {
+                'mu': 0.0, 'sigma': 0.0, 'phi': 0.0,
+                'ffn': 0.0, 'other': 0.0, 'total': 0.0,
+            }
 
         # Gradient clipping
         if self.cfg.grad_clip > 0:
@@ -759,6 +770,7 @@ class VFETrainer:
         if loader is None:
             return {}
 
+        was_training = self.model.training
         self.model.eval()
         # Accumulate on-device. One .item() sync per loop instead of 2/batch.
         total_ce_gpu: Optional[torch.Tensor] = None
@@ -797,6 +809,8 @@ class VFETrainer:
         total_tokens = int(total_tokens_gpu.item()) if total_tokens_gpu is not None else 0
         total_ce = float(total_ce_gpu.item()) if total_ce_gpu is not None else 0.0
         avg_ce = total_ce / max(total_tokens, 1)
+        if was_training:
+            self.model.train()
         # `val_loss` semantically means avg unscaled CE (matches val_ppl/val_bpc).
         # Default configs (mass_phi=0, normalize_ce_by_dim=False) are unaffected.
         return {
@@ -908,7 +922,7 @@ class VFETrainer:
         if self.output_dir is not None:
             import json
             out_path = self.output_dir / 'test_results.json'
-            with open(out_path, 'w') as f:
+            with open(out_path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2)
             logger.info(f"  Test results saved: {out_path}")
 
@@ -1061,17 +1075,12 @@ class VFETrainer:
         # Map current param-group names → legacy CSV column names so downstream
         # analysis tooling that expects {mu_embed, sigma_embed, phi_embed, ffn,
         # other} keeps working after the m_*_lr rename. Groups not in the map
-        # (none today) pass through under their own name.
-        lr_map = {
-            'm_mu':    'mu_embed',
-            'm_sigma': 'sigma_embed',
-            'm_phi':   'phi_embed',
-            'm_hyper': 'ffn',
-            'm_other': 'other',
-        }
+        # (none today) pass through under their own name. Map is shared with
+        # PublicationMetricsTracker.log_step so both ends stay in lock-step.
+        from transformer.training.metrics_tracking import VFE_LR_GROUP_MAP
         for group in self.optimizer.param_groups:
             name = group.get('name', 'default')
-            lrs[lr_map.get(name, name)] = group['lr']
+            lrs[VFE_LR_GROUP_MAP.get(name, name)] = group['lr']
 
         self._metrics_tracker.log_step(
             step, csv_metrics, lrs, grad_norms,
@@ -1281,7 +1290,8 @@ class VFETrainer:
             # on steps that have no train row to update.
             is_log_step = (step + 1) % log_interval == 0
             if is_log_step:
-                _ids = batch[0] if isinstance(batch, (list, tuple)) else batch['input_ids']
+                # batch was normalised to a dict at line 1260; index by key.
+                _ids = batch['input_ids']
                 B, N = _ids.shape[0], _ids.shape[1]
                 self._log_to_csv(step + 1, metrics, B, N)
                 self._log_to_pub_tracker(step + 1, metrics)

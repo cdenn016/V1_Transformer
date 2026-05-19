@@ -664,7 +664,7 @@ def run_sweep(
             run_dir = sweep_dir / _sanitize_label(label)
             result_file = run_dir / 'ablation_result.json'
             if result_file.exists():
-                with open(result_file) as f:
+                with open(result_file, encoding='utf-8') as f:
                     results.append(json.load(f))
 
     for i, (label, cfg) in enumerate(runs):
@@ -698,7 +698,7 @@ def run_sweep(
             result['seed'] = seed
             results.append(result)
 
-            with open(run_dir / 'ablation_result.json', 'w') as f:
+            with open(run_dir / 'ablation_result.json', 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2)
 
             run_df = pd.DataFrame([result])
@@ -746,7 +746,7 @@ def run_sweep(
         'seed':          seed,
         'timestamp':     time.strftime('%Y-%m-%d %H:%M:%S'),
     }
-    with open(sweep_dir / 'sweep_meta.json', 'w') as f:
+    with open(sweep_dir / 'sweep_meta.json', 'w', encoding='utf-8') as f:
         json.dump(meta, f, indent=2)
 
     print(f"\n{'=' * 70}")

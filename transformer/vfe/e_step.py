@@ -437,7 +437,7 @@ class VFEEStep(nn.Module):
         return c0 / (b0 + kl_k)  # (B, N, K)
 
     @property
-    def effective_kappa(self) -> 'torch.Tensor | float':
+    def effective_kappa(self) -> torch.Tensor | float:
         r"""Resolve kappa: learned (clamped) ``torch.Tensor`` or fixed ``float``."""
         if self._learnable_kappa:
             k = torch.exp(self.log_kappa)
@@ -551,6 +551,15 @@ class VFEEStep(nn.Module):
                 n_valid = mask.sum(dim=-1).clamp(min=1).to(beta.dtype)
                 log_N_const = n_valid.log().mean()
             else:
+                if mask is not None and mask.dim() < 2:
+                    warnings.warn(
+                        f"_auxiliary_hyperparam_loss received a 1D mask "
+                        f"(shape={tuple(mask.shape)}); falling back to "
+                        f"full beta.shape[-1] for log_N. Per-row N_valid "
+                        f"correction is bypassed.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
                 log_N_const = math.log(max(beta.shape[-1], 1))
             tau = kappa_attached * self._dim_scale
             entropy_term = (
@@ -890,10 +899,17 @@ class VFEEStep(nn.Module):
             # consume them). The expensive `.item()`-heavy diagnostics dict is
             # gated behind `track_layer_diagnostics` because each `.item()`
             # call is a CUDA sync that stalls the stream on every forward.
-            # The per-head `_last_attention_state` is stored AFTER the phi
-            # update at the bottom of the loop so the cached block_exp_pairs
-            # reflects the post-update φ — the value the next forward would
-            # use as its starting frame.
+            #
+            # TIMING NOTE: `_last_attention` here reflects the β that drove
+            # THIS iteration's μ/σ update — the actual training signal. The
+            # `_last_attention_state` snapshot at the bottom of the loop
+            # (after `_update_phi`) reflects the post-update φ — the frame
+            # the NEXT forward would start from. The two snapshots therefore
+            # describe different φ checkpoints by design; the trainer's
+            # `_attention_summary` reads `_last_attention` (this-iter realized
+            # β) while `_compute_per_head_beta` reads `_last_attention_state`
+            # (next-iter starting frame). Plots compared across the two views
+            # are NOT comparing the same φ.
             if t == self.n_e_steps - 1:
                 self._last_attention = beta.detach()
                 self._last_kl_matrix = (
@@ -963,6 +979,22 @@ class VFEEStep(nn.Module):
 
             if t == self.n_e_steps - 1 and self.track_layer_diagnostics:
                 with torch.no_grad():
+                    # Match the cheap-diagnostics path: when sigma is full
+                    # covariance (B, N, K, K) the bare .mean/.min/.max would
+                    # include off-diagonal entries that can be arbitrarily
+                    # negative; extract the diagonal first so the diagnostic
+                    # describes per-dim variances on both paths.
+                    if is_diagonal:
+                        _sigma_for_stats = sigma
+                    else:
+                        _sigma_for_stats = sigma.diagonal(dim1=-2, dim2=-1)
+                    # attention_entropy_loss matches the runtime aux-loss form
+                    # at line ~555: tau * sum(beta * log beta) + tau * log(N) *
+                    # sum(beta). Omitting the +tau*log(N)*sum(beta) constant
+                    # makes the diagnostic disagree with the actual loss term
+                    # the kappa-equilibrium uses by exactly tau*log(N)*sum(beta).
+                    _N_eff = max(beta.shape[-1], 1)
+                    _log_N = math.log(_N_eff)
                     self._last_diagnostics = {
                         # Gradient norms (E-step)
                         'nat_grad_mu_norm': nat_grad_mu.norm().item(),
@@ -983,18 +1015,21 @@ class VFEEStep(nn.Module):
                         **(lambda _bsafe, _blog: {
                             'attention_entropy': float((-(_bsafe * _blog).sum(-1).mean()).item()),
                             'attention_entropy_loss': (
-                                float((_kappa * self._dim_scale * (_bsafe * _blog).sum()).item())
+                                float((
+                                    _kappa * self._dim_scale * (_bsafe * _blog).sum()
+                                    + _kappa * self._dim_scale * _log_N * beta.sum()
+                                ).item())
                                 if self.include_attention_entropy else 0.0
                             ),
                         })(beta.clamp(min=_BETA_LOG_FLOOR), beta.clamp(min=_BETA_LOG_FLOOR).log()),
                         'attention_concentration': beta.max(dim=-1)[0].mean().item(),
-                        # Covariance health
-                        'sigma_q_mean': sigma.mean().item(),
-                        'sigma_q_min': sigma.min().item(),
-                        'sigma_q_max': sigma.max().item(),
+                        # Covariance health (per-dim variances; diagonal of sigma when full-cov)
+                        'sigma_q_mean': _sigma_for_stats.mean().item(),
+                        'sigma_q_min': _sigma_for_stats.min().item(),
+                        'sigma_q_max': _sigma_for_stats.max().item(),
                         # unbiased=False (population std) — matches adjacent stats
                         # and avoids NaN on numel=1 (B=N=1 single-token generate).
-                        'sigma_q_std': sigma.std(unbiased=False).item(),
+                        'sigma_q_std': _sigma_for_stats.std(unbiased=False).item(),
                         'sigma_p_mean': sigma_p.mean().item(),
                         # Phi norms — share one norm() reduction across all three stats.
                         # unbiased=False on .std() — population std, well-defined for

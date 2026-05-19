@@ -23,9 +23,13 @@ def get_cuda_ext():
     try:
         from torch.utils.cpp_extension import load
 
-        # Find ninja: Anaconda on Windows often has it installed but not on PATH
+        # Find ninja: Anaconda on Windows often has it installed but not on PATH.
+        # PATH is scoped via try/finally so a successful compile cannot leak
+        # the ninja directory into the rest of the process.
         import shutil
         ninja_path = shutil.which("ninja")
+        _saved_path = os.environ.get("PATH")
+        _path_mutated = False
         if ninja_path is None:
             # Try to find ninja via the Python package's bundled binary
             try:
@@ -40,25 +44,33 @@ def get_cuda_ext():
                 ]:
                     if os.path.isfile(candidate):
                         # Add its directory to PATH so cpp_extension can find it
-                        os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep + os.environ.get("PATH", "")
+                        os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep + (_saved_path or "")
+                        _path_mutated = True
                         break
             except ImportError:
                 pass
 
-        csrc_dir = os.path.join(os.path.dirname(__file__), "csrc")
-        _cuda_module = load(
-            name="pure_vfe_cuda",
-            sources=[
-                os.path.join(csrc_dir, "binding.cpp"),
-                os.path.join(csrc_dir, "pairwise_kl.cu"),
-            ],
-            extra_cuda_cflags=[
-                "-O3",
-                "--use_fast_math",
-                "-lineinfo",
-            ],
-            verbose=False,
-        )
+        try:
+            csrc_dir = os.path.join(os.path.dirname(__file__), "csrc")
+            _cuda_module = load(
+                name="pure_vfe_cuda",
+                sources=[
+                    os.path.join(csrc_dir, "binding.cpp"),
+                    os.path.join(csrc_dir, "pairwise_kl.cu"),
+                ],
+                extra_cuda_cflags=[
+                    "-O3",
+                    "--use_fast_math",
+                    "-lineinfo",
+                ],
+                verbose=False,
+            )
+        finally:
+            if _path_mutated:
+                if _saved_path is None:
+                    os.environ.pop("PATH", None)
+                else:
+                    os.environ["PATH"] = _saved_path
         logger.info("CUDA kernels compiled and loaded successfully.")
     except Exception as e:
         # Use logger.exception to preserve the traceback rather than the

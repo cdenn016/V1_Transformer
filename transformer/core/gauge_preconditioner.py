@@ -262,6 +262,18 @@ def build_killing_form_preconditioner(
     trace_outer = torch.outer(traces, traces)  # (n_gen, n_gen)
 
     # Modified Killing form metric: g̃_ab = 2K · gram_ab - 2 · trace_outer_ab
+    #
+    # CAVEAT (audit-2026-05-18-v4, F6.1): when the generator bank is
+    # block-diagonal `gl(d_h)^H` (i.e. the ``irrep_spec`` declares multiple
+    # blocks of fixed dim `d_h`), this formula uses the AMBIENT ``K`` instead
+    # of per-block ``d_h``, AND the `−2·tr⊗tr` term introduces non-zero
+    # off-block coupling that the direct-sum Killing form on `g1 ⊕ g2`
+    # does not have. The current behavior corresponds to the `gl(K_full)`
+    # Killing form restricted to the block-diagonal subalgebra — a defensible
+    # but non-standard metric. The strict direct-sum Killing form would
+    # build per-block `metric_h = 2·d_h·gram_h − 2·tr_h⊗tr_h` and assemble
+    # block-diagonally. Decision deferred to user — both interpretations
+    # change training behavior under `phi_preconditioner='killing'`.
     metric = 2.0 * K * gram - 2.0 * trace_outer
 
     # Regularize the center direction (kernel of Killing form on gl(K)).
