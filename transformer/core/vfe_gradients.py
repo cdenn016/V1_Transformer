@@ -977,6 +977,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     rope_base: float = 10000.0,
     return_kl: bool = False,
     alpha_div: float = 1.0,
+    causal_lower_triangle: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
     Fused attention + VFE gradient computation for block-diagonal diagonal mode.
@@ -1014,6 +1015,20 @@ def _fused_attention_and_vfe_gradients_block_diag(
         return_kl: If True, also return pairwise KL matrix.
         alpha_div: Rényi divergence order (default 1.0 = KL). When != 1.0,
             self-coupling and alignment use D_{alpha_div} instead of KL.
+        causal_lower_triangle: F4.10 perf opt-in. When True, the per-block
+            loop computes Omega, mu_j_transported, sigma_j_transported, KL,
+            and gradient tensors only for the lower-triangle pairs (j <= i),
+            packing them to shape (B, M, ...) with M = N(N+1)/2 and
+            scattering the results into the dense (B,N,N,K) accumulators
+            via torch.tril_indices. Upper-triangle entries stay at their
+            zero initialization; the existing masked_fill(-inf) at the
+            softmax step still forces beta=0 at j>i, so all downstream
+            beta-weighted reductions are algebraically annihilated.
+            Bit-identical to the dense path for beta, grad_mu, grad_sigma
+            under a strict lower-triangular causal mask. The returned
+            kl_matrix differs in its upper triangle only (real KL vs
+            zero). REQUIRES caller passes a strict lower-triangular mask;
+            no per-call validation to avoid host syncs.
 
     Returns:
         beta: (B, N, N) attention weights.
@@ -1139,6 +1154,13 @@ def _fused_attention_and_vfe_gradients_block_diag(
     grad_sigma_align = torch.zeros_like(sigma_q)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
         compute_sigma_align_grad) else None
+    # F4.10: precompute lower-triangle index pairs once (constant across blocks).
+    # Used by the causal_lower_triangle=True fast path to pack per-pair tensors
+    # from (B, N, N, ...) to (B, M, ...) where M = N(N+1)/2.
+    if causal_lower_triangle:
+        _tril_i, _tril_j = torch.tril_indices(N, N, offset=0, device=device)
+        # Static for the lifetime of this call; both are (M,) int64.
+
     # Single pass over blocks: compute Omega, KL, and gradients together
     block_start = 0
     for block_idx, d in enumerate(irrep_dims):
@@ -1149,6 +1171,157 @@ def _fused_attention_and_vfe_gradients_block_diag(
         mu_block_rope = mu_q_rope[:, :, block_start:block_end]
         mu_block = mu_q[:, :, block_start:block_end]
         sigma_block = sigma_q_safe[:, :, block_start:block_end]
+
+        if causal_lower_triangle:
+            # F4.10 packed lower-triangle path. Computes the same per-pair
+            # quantities as the dense path below but only for (i, j) with
+            # j <= i, then scatters into the dense (B, N, N, K) accumulators
+            # via _tril_i / _tril_j. Upper-triangle entries of the
+            # accumulators stay at zero-init (kl_values, kl_values_raw,
+            # grad_kl_per_pair_full, grad_kl_rope_per_pair,
+            # grad_sigma_per_pair_full), which is correct because the
+            # softmax mask at the end of this function forces beta=0 there.
+
+            # Gather rotated and raw mu/sigma at the (i, j) pair positions.
+            mu_i_pairs_rope = mu_block_rope[:, _tril_i, :]   # (B, M, d)
+            mu_j_pairs_rope = mu_block_rope[:, _tril_j, :]   # (B, M, d)
+            mu_i_pairs = mu_block[:, _tril_i, :]              # (B, M, d)
+            mu_j_pairs = mu_block[:, _tril_j, :]              # (B, M, d)
+            sigma_i_pairs = sigma_block[:, _tril_i, :]        # (B, M, d)
+            sigma_j_pairs = sigma_block[:, _tril_j, :]        # (B, M, d)
+
+            # Gather block_exp pairs and build per-pair Omega.
+            # block_exp_phi[block_idx] has shape (B, N, d, d); gather along
+            # the N axis yields (B, M, d, d).
+            exp_i = block_exp_phi[block_idx][:, _tril_i, :, :]      # (B, M, d, d)
+            exp_j = block_exp_neg_phi[block_idx][:, _tril_j, :, :]  # (B, M, d, d)
+            Omega_pairs = torch.einsum('bmkl,bmlp->bmkp', exp_i, exp_j)  # (B, M, d, d)
+
+            # NaN guard on Omega (mirrors dense lines 1170-1177).
+            _eye_d = _cached_eye(d, Omega_pairs.device, Omega_pairs.dtype)
+            _nan_mask_pairs = torch.isnan(Omega_pairs).any(dim=-1).any(dim=-1)  # (B, M)
+            if _kl_diagnostics_enabled() and _nan_mask_pairs.any():
+                _nr("fused_vfe_omega_nan", count=int(_nan_mask_pairs.sum().item()))
+            Omega_pairs = torch.where(
+                _nan_mask_pairs.unsqueeze(-1).unsqueeze(-1),
+                _eye_d.expand_as(Omega_pairs),
+                Omega_pairs,
+            )
+
+            # Transport: mu_j -> i's frame, sigma_j diagonal -> i's frame.
+            mu_j_t = torch.einsum('bmkl,bml->bmk', Omega_pairs, mu_j_pairs_rope)  # (B, M, d)
+            _sigma_floor = max(float(eps), 1e-7)
+            sigma_j_t = torch.einsum(
+                'bmkl,bmkl,bml->bmk', Omega_pairs, Omega_pairs, sigma_j_pairs
+            ).clamp(min=_sigma_floor)
+
+            # NaN guards on transported sigma/mu (mirrors dense lines 1199-1214).
+            _sigma_t_nan = torch.isnan(sigma_j_t)
+            if _kl_diagnostics_enabled() and _sigma_t_nan.any():
+                _nr("fused_vfe_sigma_t_nan", count=int(_sigma_t_nan.sum().item()))
+            sigma_j_t = torch.where(_sigma_t_nan, torch.full_like(sigma_j_t, 1.0), sigma_j_t)
+            _mu_t_nan = torch.isnan(mu_j_t)
+            if _kl_diagnostics_enabled() and _mu_t_nan.any():
+                _nr("fused_vfe_mu_t_nan", count=int(_mu_t_nan.sum().item()))
+            mu_j_t = torch.where(_mu_t_nan, torch.zeros_like(mu_j_t), mu_j_t)
+
+            # KL block, rope-mu (used to drive beta softmax).
+            delta_mu_kl = mu_i_pairs_rope - mu_j_t                # (B, M, d)
+            sigma_i_pairs_safe = sigma_i_pairs.clamp(min=_sigma_floor)
+
+            if alpha_div == 1.0:
+                trace_pairs = (sigma_i_pairs_safe / sigma_j_t).sum(dim=-1)
+                mahal_pairs = (delta_mu_kl ** 2 / sigma_j_t).sum(dim=-1)
+                logdet_pairs = (torch.log(sigma_j_t) - torch.log(sigma_i_pairs_safe)).sum(dim=-1)
+                kl_pairs = 0.5 * (trace_pairs + mahal_pairs - d + logdet_pairs)
+                kl_pairs = kl_pairs.clamp(min=0.0, max=max(KL_CEIL_BASE, KL_CEIL_SCALE * K))
+                sigma_blend_kl_pairs = None  # not used in KL branch
+            else:
+                sigma_blend_kl_pairs = (
+                    (1.0 - alpha_div) * sigma_i_pairs_safe + alpha_div * sigma_j_t
+                ).clamp(min=eps)
+                mahal_kl = (alpha_div * delta_mu_kl ** 2 / sigma_blend_kl_pairs).sum(dim=-1)
+                logdet_kl = (
+                    (1.0 - alpha_div) * torch.log(sigma_i_pairs_safe.clamp(min=eps))
+                    + alpha_div * torch.log(sigma_j_t.clamp(min=eps))
+                    - torch.log(sigma_blend_kl_pairs)
+                ).sum(dim=-1) / (alpha_div - 1.0)
+                kl_pairs = 0.5 * (mahal_kl + logdet_kl)
+                kl_pairs = kl_pairs.clamp(min=0.0, max=max(KL_CEIL_BASE, KL_CEIL_SCALE * K))
+
+            # Scatter the (B, M) KL into the (B, N, N) accumulator at (i, j).
+            kl_values[:, _tril_i, _tril_j] = kl_values[:, _tril_i, _tril_j] + kl_pairs
+
+            # Gradient (raw-mu KL for the direct alignment objective).
+            if use_rope:
+                mu_j_t_raw = torch.einsum('bmkl,bml->bmk', Omega_pairs, mu_j_pairs)  # (B, M, d)
+                delta_mu_grad = mu_i_pairs - mu_j_t_raw
+            else:
+                delta_mu_grad = mu_i_pairs - mu_j_t
+
+            if alpha_div == 1.0:
+                grad_kl_pairs = delta_mu_grad / sigma_j_t
+            else:
+                sigma_blend_grad_pairs = (
+                    (1.0 - alpha_div) * sigma_i_pairs_safe + alpha_div * sigma_j_t
+                ).clamp(min=eps)
+                grad_kl_pairs = alpha_div * delta_mu_grad / sigma_blend_grad_pairs
+
+            grad_kl_per_pair_full[:, _tril_i, _tril_j, block_start:block_end] = grad_kl_pairs
+
+            # Raw-mu KL accumulator (RoPE path only).
+            if kl_values_raw is not None:
+                if alpha_div == 1.0:
+                    mahal_raw = (delta_mu_grad ** 2 / sigma_j_t).sum(dim=-1)
+                    kl_pairs_raw = 0.5 * (trace_pairs + mahal_raw - d + logdet_pairs)
+                else:
+                    sigma_blend_raw = (
+                        (1.0 - alpha_div) * sigma_i_pairs_safe + alpha_div * sigma_j_t
+                    ).clamp(min=eps)
+                    mahal_raw = (alpha_div * delta_mu_grad ** 2 / sigma_blend_raw).sum(dim=-1)
+                    logdet_raw = (
+                        (1.0 - alpha_div) * torch.log(sigma_i_pairs_safe.clamp(min=eps))
+                        + alpha_div * torch.log(sigma_j_t.clamp(min=eps))
+                        - torch.log(sigma_blend_raw)
+                    ).sum(dim=-1) / (alpha_div - 1.0)
+                    kl_pairs_raw = 0.5 * (mahal_raw + logdet_raw)
+                kl_pairs_raw = kl_pairs_raw.clamp(
+                    min=0.0, max=max(KL_CEIL_BASE, KL_CEIL_SCALE * K)
+                )
+                kl_values_raw[:, _tril_i, _tril_j] = (
+                    kl_values_raw[:, _tril_i, _tril_j] + kl_pairs_raw
+                )
+
+            # Rope-space gradient (for softmax-coupling chain rule).
+            if grad_kl_rope_per_pair is not None:
+                if alpha_div == 1.0:
+                    grad_kl_rope_pairs = delta_mu_kl / sigma_j_t
+                else:
+                    grad_kl_rope_pairs = alpha_div * delta_mu_kl / sigma_blend_kl_pairs
+                grad_kl_rope_per_pair[:, _tril_i, _tril_j, block_start:block_end] = grad_kl_rope_pairs
+
+            # Sigma alignment gradient (direct term).
+            if compute_sigma_align_grad:
+                if alpha_div == 1.0:
+                    sigma_j_inv = 1.0 / sigma_j_t
+                    sigma_i_inv = 1.0 / sigma_i_pairs_safe
+                    grad_sigma_pairs = 0.5 * (sigma_j_inv - sigma_i_inv)
+                else:
+                    sigma_blend_s_pairs = (
+                        (1.0 - alpha_div) * sigma_i_pairs_safe + alpha_div * sigma_j_t
+                    ).clamp(min=eps)
+                    grad_sigma_pairs = (
+                        -alpha_div * (sigma_j_t - sigma_i_pairs_safe)
+                        / (2.0 * sigma_i_pairs_safe * sigma_blend_s_pairs)
+                        - alpha_div * (1.0 - alpha_div) * delta_mu_grad ** 2
+                        / (2.0 * sigma_blend_s_pairs ** 2)
+                    )
+                if grad_sigma_per_pair_full is not None:
+                    grad_sigma_per_pair_full[:, _tril_i, _tril_j, block_start:block_end] = grad_sigma_pairs
+
+            del Omega_pairs, sigma_j_t, mu_j_t
+            block_start = block_end
+            continue
 
         # Build Omega ONCE for this block
         Omega_block = torch.einsum(
@@ -1401,13 +1574,27 @@ def _fused_attention_and_vfe_gradients_block_diag(
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
-        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        # F4.10: under causal_lower_triangle, kl_values is zero-initialized at
+        # j > i (we never wrote those positions). Reducing over the full
+        # (B,N,N) tensor would halve the mean and bias the quantile downward.
+        # Restrict the reduction to the lower triangle so the diagnostic
+        # reflects the actual pair statistics, not the structural zeros.
+        if causal_lower_triangle:
+            _kl_tril = kl_values[:, _tril_i, _tril_j]  # (B, M)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = _kl_tril.mean().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = _kl_tril.max().item()
+        else:
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
         _kl_ceil = max(KL_CEIL_BASE, KL_CEIL_SCALE * K)
-        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
+        if causal_lower_triangle:
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (_kl_tril > 0.9 * _kl_ceil).float().mean().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = _kl_tril.quantile(0.95).item()
+        else:
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
         _ps = _per_pos_stats(grad_sigma)
@@ -2205,6 +2392,16 @@ def _compute_rope_full_gauge_gradient_per_head(
             kappa_val = kappa
         else:
             kappa_val = float(kappa)
+        # CAVEAT (audit-2026-05-18-v4 F6.5): this per-head path uses
+        # ``√d_h`` for the attention temperature, matching the standard
+        # scaled dot-product attention convention. The fused flat path
+        # (``_fused_attention_and_vfe_gradients_block_diag``) uses ``√K``
+        # (the ambient embed dim) per the user's CLAUDE.md ``τ = κ·√K``
+        # specification, treating the K-dim space as a single combined
+        # head. The two paths therefore yield β at different effective
+        # temperatures when ``rope_full_gauge != 'off'`` activates this
+        # per-head branch — by a factor of ``√(K/d_h)``. Dormant under the
+        # active ``rope_full_gauge='off'`` default.
         dim_scale = math.sqrt(max(d_h, 1))
         logits = -kl / (kappa_val * dim_scale)
         if mask is not None:

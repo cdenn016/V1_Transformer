@@ -124,7 +124,7 @@ class VFEConfig:
     rope_full_gauge: RopeFullGaugeMode = 'off'  # 'off' | 'vfe_only' | 'both'. vfe/ currently
                                                 # treats any non-'off' value identically; tri-state
                                                 # differentiation is reserved for a future change.
-    bch_order: int = 3                   # BCH truncation order (1=additive)
+    bch_order: int = 4                   # BCH truncation order (1=additive)
 
     # === Embedding init ===
     mu_init_std: float = 1.0             # Std for base_mu / mu_embed initialization
@@ -267,6 +267,24 @@ class VFEConfig:
     # Required for strict monotone descent of the manuscript F monitor.
     # See docs/audits/audit-2026-05-17.md §"Layer 2 Deep-Audit".
     use_autograd_mu_sigma: bool = False
+
+    # When True, _fused_attention_and_vfe_gradients_block_diag computes only
+    # the lower triangle (j <= i) of per-pair tensors (Omega, mu_j_transported,
+    # sigma_j_transported, KL, gradients) inside the block loop and scatters
+    # them into the dense (B,N,N,K) accumulators via tril_indices. Upper-
+    # triangle (j > i) entries of those accumulators stay at their zero
+    # initialization; the existing causal mask at vfe_gradients.py line 1319
+    # still produces beta=0 there via softmax(-inf), so all downstream
+    # consumer einsums (beta * grad_kl_per_pair) are algebraically
+    # annihilated. Bit-identical to the dense path for beta, grad_mu,
+    # grad_sigma under a strict causal mask. The kl_matrix return value
+    # differs only in its upper triangle (real KL vs zero).
+    #
+    # REQUIRES: caller passes a strict lower-triangular causal mask
+    # (mask[..., i, j] = 0 for j > i). The flag is validated once per
+    # forward at the VFEEStep call site to avoid per-iteration host syncs.
+    # Default False: dense path, no behavioral change.
+    causal_lower_triangle: bool = False
 
     # === Runtime (set after construction, not serialized) ===
     generators: Optional[torch.Tensor] = field(default=None, repr=False)

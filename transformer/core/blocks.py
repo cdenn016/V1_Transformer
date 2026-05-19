@@ -551,6 +551,7 @@ class GaugeTransformerBlock(nn.Module):
             use_prior_bank=cfg.ffn_use_prior_bank,
             irrep_dims=cfg.ffn_irrep_dims,
             mask_self_attention=cfg.mask_self_attention,
+            causal_lower_triangle=getattr(cfg, 'causal_lower_triangle', False),
             learnable_alpha=cfg.E_learnable_alpha,
             phi_natural_gradient=cfg.phi_natural_gradient,
             killing_center_reg=cfg.killing_center_reg,

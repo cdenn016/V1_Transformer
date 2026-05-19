@@ -209,6 +209,15 @@ def _f_monotone_step(
         mu_q, sigma_q, mu_p, sigma_p,
         kl_max=float('inf'), eps=eps, alpha_div=alpha_div,
     ).sum()
+    # CAVEAT (audit-2026-05-18-v4 F6.3): when `E_learnable_alpha=True`,
+    # `alpha_eff` is per-(B,N,K) and the true self-coupling term is
+    # `Σ_{B,N,k} α_k · kl_k`. This monitor proxies it with
+    # `mean(α) · Σ kl` which only equals the true value when α and kl are
+    # uncorrelated. The Bayesian-alpha rule α_k = c₀/(b₀ + kl_k) makes them
+    # ANTI-correlated by construction, so this monitor over-estimates F.
+    # Dormant under the active config (monitor_monotonicity=False,
+    # track_layer_diagnostics=False); only affects diagnostic plots when
+    # explicitly enabled.
     _alpha_scalar = (
         float(alpha_eff.detach().mean().item())
         if isinstance(alpha_eff, torch.Tensor)
@@ -322,6 +331,13 @@ class VFEEStep(nn.Module):
         # diagnostic expressions; static value, no need to recompute per iter.
         self._dim_scale = math.sqrt(max(cfg.embed_dim, 1))
         self.use_autograd_mu_sigma = getattr(cfg, 'use_autograd_mu_sigma', False)
+        # F4.10: opt-in causal-lower-triangle fast path for the fused kernel.
+        # When True, _fused_attention_and_vfe_gradients_block_diag computes
+        # only the lower triangle (j<=i) of per-pair tensors and scatters
+        # into dense accumulators. Bit-identical to dense for beta/grad_mu/
+        # grad_sigma under a strict lower-triangular mask. Validated once
+        # per forward() at the kernel call site below.
+        self.causal_lower_triangle = getattr(cfg, 'causal_lower_triangle', False)
         self.gauge_group = cfg.gauge_group
         self.phi_preconditioner_mode = cfg.phi_preconditioner
         self.phi_project_slk = cfg.phi_project_slk
@@ -612,6 +628,26 @@ class VFEEStep(nn.Module):
         # scalar built from the current batch's beliefs.
         self._aux_hyperparam_loss = None
 
+        # F4.10: when the causal-lower-triangle fast path is enabled, validate
+        # ONCE per forward() that the mask really is lower-triangular. The
+        # fused kernel performs no per-call validation (would sync per E-step
+        # iteration); we sync once here at forward() entry.
+        if self.causal_lower_triangle:
+            if mask is None:
+                raise ValueError(
+                    "VFEConfig.causal_lower_triangle=True requires a non-None "
+                    "causal mask. Either pass a strict lower-triangular mask "
+                    "or set causal_lower_triangle=False (the dense path)."
+                )
+            _m2d = mask if mask.dim() == 2 else mask[0]
+            if _m2d.triu(diagonal=1).any().item():
+                raise ValueError(
+                    "VFEConfig.causal_lower_triangle=True requires a strict "
+                    "lower-triangular mask (mask[..., i, j] == 0 for j > i). "
+                    "Mask contains non-zero entries in the upper triangle; "
+                    "the fast path would silently skip those pairs."
+                )
+
         # Dispatch to the omega-direct iteration when the gauge state is
         # group-level. Keeps the φ-mode loop below unchanged.
         if self.gauge_parameterization == 'omega_direct':
@@ -809,6 +845,7 @@ class VFEEStep(nn.Module):
                         rope_base=self.rope_base,
                         return_kl=True,
                         alpha_div=self.alpha_divergence,
+                        causal_lower_triangle=self.causal_lower_triangle,
                     )
                 else:
                     # Fallback: separate β + gradient passes (rebuilds Omega

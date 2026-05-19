@@ -218,7 +218,10 @@ class VariationalFFNDynamic(nn.Module):
         
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool =       False,  # If True, mask out diagonal (no self-attention)
-        
+        # F4.10: opt-in causal-lower-triangle fast path in the fused E-step
+        # kernel. See BlockConfig.causal_lower_triangle for full semantics.
+        causal_lower_triangle: bool =     False,
+
         # Bayesian precision (learned prior self-coupling)
         learnable_alpha: bool =           False,  # If True, use Gamma-Normal conjugate precision
         # Phi gradient preconditioning mode
@@ -341,6 +344,8 @@ class VariationalFFNDynamic(nn.Module):
         self.n_iterations = n_iterations
         self.gauge_param = gauge_param
         self.mask_self_attention = mask_self_attention
+        # F4.10: opt-in fast path; default False preserves the dense behaviour.
+        self.causal_lower_triangle = causal_lower_triangle
         self.update_sigma = update_sigma
         self.diagonal_covariance = diagonal_covariance
         self.exact_diagonal_transport = exact_diagonal_transport
@@ -2005,6 +2010,7 @@ class VariationalFFNDynamic(nn.Module):
                     use_rope=self._use_rope_vfe,
                     rope_base=self._rope_base_vfe,
                     alpha_div=self.alpha_divergence,
+                    causal_lower_triangle=self.causal_lower_triangle,
                 )
             else:
                 # Fallback: separate attention + gradient (full covariance)
@@ -2456,6 +2462,27 @@ class VariationalFFNDynamic(nn.Module):
         device = mu.device
         dtype = mu.dtype
         eps = 1e-6
+
+        # F4.10: when the causal-lower-triangle fast path is enabled, validate
+        # ONCE per forward() that the mask is strict lower-triangular. The
+        # fused kernel performs no per-call validation (would sync per E-step
+        # iteration). One host sync per block forward is acceptable; the
+        # error is helpful when a caller forgets to pass a causal mask.
+        if self.causal_lower_triangle:
+            if mask is None:
+                raise ValueError(
+                    "BlockConfig.causal_lower_triangle=True requires a non-None "
+                    "causal mask. Either pass a strict lower-triangular mask "
+                    "or set causal_lower_triangle=False (the dense path)."
+                )
+            _m2d = mask if mask.dim() == 2 else mask[0]
+            if _m2d.triu(diagonal=1).any().item():
+                raise ValueError(
+                    "BlockConfig.causal_lower_triangle=True requires a strict "
+                    "lower-triangular mask (mask[..., i, j] == 0 for j > i). "
+                    "Mask contains non-zero entries in the upper triangle; "
+                    "the fast path would silently skip those pairs."
+                )
 
         # =================================================================
         # SAFETY: Disable autocast if active. The VFE inner loop uses

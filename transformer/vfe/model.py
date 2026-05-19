@@ -240,7 +240,14 @@ class VFEModel(nn.Module):
             # Gauge prior: (mass_φ/2) mean(||φ_i||²) over all positions
             if self.cfg.mass_phi > 0:
                 # Normalize by (B * N) so penalty is per-position, independent of
-                # batch size, sequence length, and generator count
+                # batch size, sequence length, and generator count.
+                # CAVEAT (audit-2026-05-18-v4 F6.2): when the generator bank is
+                # block-diagonal `gl(d_h)^H`, `.sum()` collapses across all
+                # n_gen coordinates, giving a SINGLE joint norm budget rather
+                # than the per-block budget `Σ_h ||φ^{(h)}||²/H` that matches
+                # the direct-sum gauge group structure. Dormant by default
+                # (mass_phi=0); if you enable it on a block-diagonal config,
+                # the regulariser couples blocks through the shared L2 budget.
                 phi_norm_sq = (beliefs.phi ** 2).sum() / (beliefs.phi.shape[0] * beliefs.phi.shape[1])
                 loss = loss + loss_scale * (0.5 * self.cfg.mass_phi * phi_norm_sq)
 
