@@ -824,6 +824,35 @@ class VFEEStep(nn.Module):
             if t == self.n_e_steps - 1:
                 self._last_attention = beta.detach()
                 self._last_kl_matrix = kl_matrix.detach()
+                # Cache the post-iteration (μ, σ, block_exp_pairs) snapshot so
+                # `VFETrainer._plot_attention_patterns` can render per-head β
+                # at eval time. The collapsed `_last_attention` cannot recover
+                # head structure because both the fused and non-fused KL paths
+                # sum per-block KL before softmax. Storing detached tensor
+                # references costs nothing extra in memory (they already exist
+                # in the autograd graph for this step); the per-head softmax
+                # is computed on-demand in the plot path.
+                if is_diagonal:
+                    _last_sigma = sigma.detach()
+                else:
+                    _last_sigma = sigma.detach().diagonal(dim1=-2, dim2=-1)
+                _kappa_val = (
+                    float(_kappa.detach().cpu().item())
+                    if isinstance(_kappa, torch.Tensor) else float(_kappa)
+                )
+                self._last_attention_state = {
+                    'mu_q': mu.detach(),
+                    'sigma_q': _last_sigma,
+                    'block_exp_pairs': [
+                        (
+                            p[0].detach() if p[0] is not None else None,
+                            p[1].detach() if p[1] is not None else None,
+                        )
+                        for p in block_exp_pairs
+                    ],
+                    'kappa': _kappa_val,
+                    'irrep_dims': list(self.irrep_dims) if self.irrep_dims else None,
+                }
             if t == self.n_e_steps - 1 and self.track_layer_diagnostics:
                 with torch.no_grad():
                     self._last_diagnostics = {

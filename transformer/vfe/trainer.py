@@ -12,7 +12,7 @@ import math
 import time
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -24,7 +24,13 @@ from transformer.vfe.model import VFEModel
 logger = logging.getLogger(__name__)
 
 try:
-    from tqdm.auto import tqdm as _tqdm
+    # Use plain `tqdm` (not `tqdm.auto`). tqdm.auto dispatches to
+    # `tqdm.notebook` when an IPython kernel is detected (VS Code
+    # Jupyter, Interactive Python, PyCharm cells), which renders an
+    # HTML widget that some Run-button consumers swallow entirely.
+    # The plain entry point always uses the stderr console renderer,
+    # matching `experiment_runner.py:1253` exactly.
+    from tqdm import tqdm as _tqdm
     _HAS_TQDM = True
 except ImportError:  # tqdm optional — falls back to a plain range + print
     _tqdm = None
@@ -397,17 +403,96 @@ class VFETrainer:
         except Exception:  # noqa: BLE001
             return None
 
+    def _compute_per_head_beta(self, e_step) -> Optional[Any]:
+        r"""Compute per-head softmax β for sample 0 from the post-iteration state.
+
+        Returns ``None`` when the cached ``_last_attention_state`` is absent
+        (track_layer_diagnostics not active, fused path not used, or n_e_steps=0).
+        Otherwise returns a numpy array of shape ``(H, N, N)`` with row-stochastic
+        β_h matrices per gauge head.
+
+        Math: for each block h with cached forward/inverse exp pairs
+        ``(g_i^h, g_j^{-h})`` and post-iteration (μ_q^h, σ_q^h):
+
+            Ω_ij^h           = g_i^h @ g_j^{-h}                                       (N_i, N_j, d_h, d_h)
+            μ_t[i,j,k]       = Σ_l Ω_ij^h[k,l] · μ_q^h[j,l]                           transport μ_q_j to i's frame
+            σ_t[i,j,k]       = Σ_l Ω_ij^h[k,l]² · σ_q^h[j,l]    (diagonal approx)     transport σ_q_j to i's frame
+            KL_h(i,j)        = ½ Σ_k [σ_q^h[i,k]/σ_t + (μ_q^h[i,k]-μ_t)²/σ_t
+                                     - 1 - log(σ_q^h[i,k]/σ_t)]
+            β_h(i,j)         = softmax_j(-KL_h(i,j) / (κ · √d_h))
+
+        The training-time β at this position remains the collapsed (B,N,N)
+        tensor stored in ``_last_attention`` -- this helper is diagnostic only.
+        Computes only on sample 0 to keep memory bounded.
+        """
+        state = getattr(e_step, '_last_attention_state', None)
+        if state is None:
+            return None
+        import torch as _t
+        import numpy as _np
+        mu_q = state['mu_q'][0:1]            # (1, N, K)
+        sigma_q = state['sigma_q'][0:1]       # (1, N, K)
+        bep = state['block_exp_pairs']
+        kappa = state['kappa']
+        irrep_dims = state['irrep_dims']
+        if not irrep_dims:
+            return None
+
+        beta_per_head = []
+        eps = 1e-6
+        block_start = 0
+        with _t.no_grad():
+            for h, d_h in enumerate(irrep_dims):
+                block_end = block_start + d_h
+                mu_h = mu_q[..., block_start:block_end]                    # (1, N, d_h)
+                sig_h = sigma_q[..., block_start:block_end].clamp(min=eps)  # (1, N, d_h)
+                exp_h, exp_h_inv = bep[h]
+                if exp_h is None or exp_h_inv is None:
+                    block_start = block_end
+                    continue
+                exp_h = exp_h[0:1]            # (1, N, d_h, d_h)
+                exp_h_inv = exp_h_inv[0:1]    # (1, N, d_h, d_h)
+                # Ω_ij^h: (1, N, N, d_h, d_h) -- materialize at sample-0 scale
+                Omega = _t.einsum('bikm,bjml->bijkl', exp_h, exp_h_inv)
+                mu_t = _t.einsum('bijkl,bjl->bijk', Omega, mu_h)            # (1, N, N, d_h)
+                sig_t = _t.einsum('bijkl,bjl->bijk', Omega ** 2, sig_h).clamp(min=eps)
+                mu_i = mu_h.unsqueeze(2)                                    # (1, N, 1, d_h)
+                sig_i = sig_h.unsqueeze(2).clamp(min=eps)                   # (1, N, 1, d_h)
+                kl = 0.5 * (
+                    (sig_i / sig_t).sum(dim=-1)
+                    + ((mu_i - mu_t) ** 2 / sig_t).sum(dim=-1)
+                    - d_h
+                    + _t.log(sig_t / sig_i).sum(dim=-1)
+                )                                                            # (1, N, N)
+                # Per-head softmax with per-head dim scaling τ_h = κ · √d_h.
+                # Causal mask matches the kernel: queries can attend to keys at
+                # equal or earlier positions only.
+                tau_h = float(kappa) * (float(d_h) ** 0.5)
+                logits = -kl / tau_h                                         # (1, N, N)
+                N = logits.shape[-1]
+                causal = _t.triu(_t.ones(N, N, device=logits.device, dtype=_t.bool), diagonal=1)
+                logits = logits.masked_fill(causal, float('-inf'))
+                beta_h = _t.softmax(logits, dim=-1)                          # (1, N, N)
+                beta_per_head.append(beta_h[0].cpu().numpy())
+                block_start = block_end
+
+        if not beta_per_head:
+            return None
+        return _np.stack(beta_per_head, axis=0)  # (H, N, N)
+
     def _plot_attention_patterns(self, step: int) -> None:
         r"""Save a publication-quality β heatmap PNG into
         ``output_dir/attention/attention_step_{step:08d}.png``.
 
-        One panel per layer, sample 0 of the most recent val batch.
-        Causal upper triangle is NaN-masked and rendered light grey.
-        Color scale is shared across panels. Failure to plot is logged
-        and swallowed so a matplotlib glitch never aborts training.
+        Per-head panels (one column per gauge head, one row per layer) when
+        ``block.e_step._last_attention_state`` is populated (the default).
+        Falls back to a single collapsed-β panel per layer when the per-head
+        state cache is missing.
 
-        Reads from ``block.e_step._last_attention`` (populated in
-        ``vfe/e_step.py`` at the end of the final E-step iteration).
+        Sample 0 of the most recent val batch. Causal upper triangle is
+        NaN-masked and rendered light grey. Color scale is shared across all
+        panels. Failure to plot is logged and swallowed so a matplotlib
+        glitch never aborts training.
         """
         if self.output_dir is None or not self.generate_figures:
             return
@@ -421,12 +506,19 @@ class VFETrainer:
 
         try:
             blocks = list(self.model.stack.blocks)
-            panels = []
+            # Each panel: (layer_idx, head_idx_or_None, (N, N) array).
+            panels: List[Tuple[int, Optional[int], Any]] = []
             for layer_idx, block in enumerate(blocks):
-                beta_t = getattr(block.e_step, '_last_attention', None)
-                if beta_t is None:
-                    continue
-                panels.append((layer_idx, beta_t[0].detach().cpu().numpy()))
+                beta_per_head = self._compute_per_head_beta(block.e_step)
+                if beta_per_head is not None:
+                    for h in range(beta_per_head.shape[0]):
+                        panels.append((layer_idx, h, beta_per_head[h]))
+                else:
+                    # Fallback: collapsed β (no per-head reconstruction available)
+                    beta_t = getattr(block.e_step, '_last_attention', None)
+                    if beta_t is None:
+                        continue
+                    panels.append((layer_idx, None, beta_t[0].detach().cpu().numpy()))
             if not panels:
                 return
 
@@ -445,12 +537,15 @@ class VFETrainer:
             cmap.set_bad('#dddddd')
 
             im = None
-            for ax, (layer_idx, b) in zip(axes, panels):
+            for ax, (layer_idx, head_idx, b) in zip(axes, panels):
                 log_b = np.log10(np.clip(b, 10.0 ** log_floor, 1.0))
                 iu = np.triu_indices_from(log_b, k=1)
                 log_b[iu] = np.nan
                 im = ax.imshow(log_b, cmap=cmap, vmin=log_floor, vmax=0.0, aspect='equal')
-                ax.set_title(f'layer {layer_idx}')
+                if head_idx is None:
+                    ax.set_title(f'layer {layer_idx}')
+                else:
+                    ax.set_title(f'layer {layer_idx} | head {head_idx}')
                 ax.set_xlabel('key pos')
                 if ax is axes[0]:
                     ax.set_ylabel('query pos')
@@ -1022,17 +1117,22 @@ class VFETrainer:
                 except (AttributeError, ValueError, UnicodeError):
                     pass
 
-        # tqdm bar (with timed bar updates so tqdm.write interleaves above
-        # the bar; the bar itself shows progress, rate, ETA).
+        # tqdm bar. Matches `experiment_runner.py:1252-1263` exactly: plain
+        # `tqdm(range(...), desc="Training", initial=0, total=num_steps)` with
+        # no `dynamic_ncols` (which queries terminal size every refresh and
+        # misbehaves in some non-TTY consumers) and no `mininterval`/`leave`
+        # overrides (tqdm's defaults render correctly in PowerShell and bash).
+        # The description stays STATIC; tqdm's built-in postfix supplies live
+        # `it/s`. The formatted Step|Loss|... line emits via `tqdm.write` only
+        # at log_interval boundaries (above the bar in scrollback).
         if _HAS_TQDM:
             pbar = _tqdm(
                 range(num_steps),
-                desc="Step",
-                dynamic_ncols=True,
-                mininterval=0.1,
-                leave=True,
+                desc="Training",
+                initial=0,
+                total=num_steps,
             )
-            _write = pbar.write
+            _write = _tqdm.write
             _iter = pbar
         else:
             pbar = None
@@ -1069,36 +1169,32 @@ class VFETrainer:
                 self._log_to_csv(step + 1, metrics, B, N)
                 self._log_to_pub_tracker(step + 1, metrics)
 
-            step_time = metrics.get('step_time', 0.0)
-            it_per_sec = (1.0 / step_time) if step_time > 0 else 0.0
-
-            # Per-step live status. The full "Step | Loss | CE | β | PPL | it/s"
-            # line is rebuilt every iteration and pushed onto the tqdm bar's
-            # description so the bar tracks live metrics (same visual pattern
-            # as experiment_runner.py's set_description path). β requires one
-            # .tolist() sync on the most recent attention matrices per step;
-            # the rest are already host-side floats.
-            attn = self._attention_summary()
-            beta_kl = attn.get('beta_kl', float('nan'))
-            msg = (
-                f"Step {step+1}/{num_steps} | "
-                f"Loss: {metrics['loss']:.4f} | "
-                f"CE: {metrics['ce']:.4f} | "
-                f"β: {beta_kl:.4f} | "
-                f"PPL: {metrics['ppl']:.1f} | "
-                f"it/s: {it_per_sec:.2f}"
-            )
-            if pbar is not None:
-                # set_description_str (not set_description): drops the trailing
-                # ": " that tqdm would otherwise append before the bar glyph.
-                # refresh=False: defer redraw to tqdm's mininterval=0.1 timer
-                # so we don't force a screen refresh every iteration.
-                pbar.set_description_str(msg, refresh=False)
-
-            # At log_interval boundaries, also emit the line above the bar so
-            # scrollback retains a permanent record. Without tqdm this is the
-            # only place metrics surface to console.
+            # Formatted per-log-interval emit. Live per-step it/s is shown by
+            # tqdm's own postfix; we never overwrite the bar's description.
+            # `_attention_summary()` requires a `.tolist()` sync, so it only
+            # runs at log boundaries (not every step). The `set_description`
+            # call before `_write` mirrors `experiment_runner.py:1383-1384` --
+            # tqdm's `set_description` defaults to `refresh=True`, which forces
+            # a bar redraw and flushes any pending bar state to the console
+            # (important in IPython / Spyder consoles that buffer stderr).
             if (step + 1) % log_interval == 0:
+                if pbar is not None:
+                    rate = pbar.format_dict.get('rate') or 0.0
+                else:
+                    step_time = metrics.get('step_time', 0.0)
+                    rate = (1.0 / step_time) if step_time > 0 else 0.0
+                attn = self._attention_summary()
+                beta_kl = attn.get('beta_kl', float('nan'))
+                msg = (
+                    f"Step {step+1}/{num_steps} | "
+                    f"Loss: {metrics['loss']:.4f} | "
+                    f"CE: {metrics['ce']:.4f} | "
+                    f"β: {beta_kl:.4f} | "
+                    f"PPL: {metrics['ppl']:.1f} | "
+                    f"it/s: {rate:.2f}"
+                )
+                if pbar is not None:
+                    pbar.set_description("Training")  # refresh=True (default) flushes bar
                 _write(msg)
 
             # Periodic evaluation
