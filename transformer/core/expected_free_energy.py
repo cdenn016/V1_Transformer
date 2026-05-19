@@ -143,6 +143,7 @@ def compute_epistemic_value(
     model: 'GaugeTransformerLM',
     n_samples: int = 4,
     eps: float = 1e-12,
+    return_mean_H: bool = False,
 ) -> torch.Tensor:
     r"""Compute epistemic value (BALD mutual information) for each candidate.
 
@@ -166,9 +167,15 @@ def compute_epistemic_value(
         model: GaugeTransformerLM for ``_compute_logits`` access.
         n_samples: Number of MC samples S.
         eps: Numerical floor.
+        return_mean_H: If True, also return ``mean_H_s = (1/S) Σ_s H[p_s]``,
+            the canonical EFE-ambiguity term :math:`\mathbb{E}_{q(z)}[H[p(o|z)]]`.
+            When False (default) only the MI is returned for backward
+            compatibility.
 
     Returns:
-        epistemic: ``(K,)`` mutual information per candidate.
+        If ``return_mean_H=False``: ``epistemic`` (K,) mutual information per
+        candidate. If ``return_mean_H=True``: tuple ``(epistemic, mean_H_s)``
+        where ``mean_H_s`` is the canonical ambiguity (K,).
     """
     K, K_dim = mu_rollout.shape
     device = mu_rollout.device
@@ -208,6 +215,8 @@ def compute_epistemic_value(
     mean_H_s = torch.stack(sample_entropies).mean(dim=0)  # (K,)
     epistemic = (H_bar - mean_H_s).clamp(min=0.0)  # (K,) — MI is non-negative
 
+    if return_mean_H:
+        return epistemic, mean_H_s
     return epistemic
 
 
@@ -358,17 +367,25 @@ def compute_efe(
         preferences=preferences, targets=targets, eps=eps,
     )
 
-    # ----- Ambiguity -----
-    ambiguity = compute_ambiguity(pred_probs, eps=eps)
-
-    # ----- Epistemic value (optional) -----
+    # ----- Ambiguity + Epistemic value -----
+    # Canonical EFE uses ambiguity = E_q(z)[H[p(o|z)]] (mean predictive entropy
+    # under the belief), NOT H[q_marginal]. Pre-fix (audit-2026-05-18-v3 F1)
+    # `compute_ambiguity(pred_probs)` returned H[q_marginal], which exactly
+    # cancels `risk` to `log V` under uniform preferences. The BALD pass in
+    # `compute_epistemic_value` already computes both the MI and the canonical
+    # mean predictive entropy, so we route them out together via
+    # `return_mean_H=True`. When epistemic is disabled we fall back to the
+    # marginal-entropy form (which is structurally weaker but the only quantity
+    # available without a rollout MC pass).
     if include_epistemic and rollout['sigma'] is not None:
-        epistemic = compute_epistemic_value(
+        epistemic, ambiguity = compute_epistemic_value(
             rollout['mu'], rollout['sigma'], model,
             n_samples=epistemic_samples, eps=eps,
+            return_mean_H=True,
         )
     else:
         epistemic = torch.zeros_like(risk)
+        ambiguity = compute_ambiguity(pred_probs, eps=eps)
 
     # ----- G = Risk + Ambiguity - Epistemic -----
     G = risk + ambiguity - epistemic
