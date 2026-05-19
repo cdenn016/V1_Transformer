@@ -209,6 +209,15 @@ def _f_monotone_step(
         mu_q, sigma_q, mu_p, sigma_p,
         kl_max=float('inf'), eps=eps, alpha_div=alpha_div,
     ).sum()
+    # CAVEAT (audit-2026-05-18-v4 F6.3): when `E_learnable_alpha=True`,
+    # `alpha_eff` is per-(B,N,K) and the true self-coupling term is
+    # `Σ_{B,N,k} α_k · kl_k`. This monitor proxies it with
+    # `mean(α) · Σ kl` which only equals the true value when α and kl are
+    # uncorrelated. The Bayesian-alpha rule α_k = c₀/(b₀ + kl_k) makes them
+    # ANTI-correlated by construction, so this monitor over-estimates F.
+    # Dormant under the active config (monitor_monotonicity=False,
+    # track_layer_diagnostics=False); only affects diagnostic plots when
+    # explicitly enabled.
     _alpha_scalar = (
         float(alpha_eff.detach().mean().item())
         if isinstance(alpha_eff, torch.Tensor)

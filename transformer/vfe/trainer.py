@@ -716,6 +716,13 @@ class VFETrainer:
         self.global_step += 1
 
         step_time = time.time() - t0
+        # NOTE: a previous draft deferred `loss.item()` / `ce_for_log.item()`
+        # to log boundaries to save 2 CUDA syncs per non-log step. Reverted
+        # because deferral masks NaN/Inf losses on non-log steps — early-
+        # training divergence would go undetected for up to log_interval
+        # steps. The smoke test in `tests/smoke_test_entropy.py` relies on
+        # per-step `metrics['loss']` for its non-finite assertion. The 1-5 ms
+        # per-step sync cost is not worth losing that diagnostic.
         loss_val = loss.item()        # combined optimizer loss (CE_scaled + mass_phi reg)
         ce_val = ce_for_log.item()    # unscaled, regularizer-free CE
         ppl = math.exp(min(ce_val, 20.0))

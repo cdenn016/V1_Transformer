@@ -2205,6 +2205,16 @@ def _compute_rope_full_gauge_gradient_per_head(
             kappa_val = kappa
         else:
             kappa_val = float(kappa)
+        # CAVEAT (audit-2026-05-18-v4 F6.5): this per-head path uses
+        # ``√d_h`` for the attention temperature, matching the standard
+        # scaled dot-product attention convention. The fused flat path
+        # (``_fused_attention_and_vfe_gradients_block_diag``) uses ``√K``
+        # (the ambient embed dim) per the user's CLAUDE.md ``τ = κ·√K``
+        # specification, treating the K-dim space as a single combined
+        # head. The two paths therefore yield β at different effective
+        # temperatures when ``rope_full_gauge != 'off'`` activates this
+        # per-head branch — by a factor of ``√(K/d_h)``. Dormant under the
+        # active ``rope_full_gauge='off'`` default.
         dim_scale = math.sqrt(max(d_h, 1))
         logits = -kl / (kappa_val * dim_scale)
         if mask is not None:
