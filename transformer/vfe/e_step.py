@@ -94,6 +94,7 @@ from transformer.core.vfe_utils import (
 from transformer.core.gauge_preconditioner import (
     build_cartan_projector,
     build_killing_form_preconditioner,
+    build_killing_form_preconditioner_per_block,
 )
 from transformer.core.phi_evolution import precondition_phi_gradient
 from transformer.vfe.attention import (
@@ -362,12 +363,22 @@ class VFEEStep(nn.Module):
         else:
             self._omega_killing_cache = None
 
-        # Build phi preconditioner (Killing metric or Cartan projector)
+        # Build phi preconditioner (Killing metric or Cartan projector).
+        # 'killing'           — ambient gl(K_full) Killing form on the
+        #                       restricted block-diagonal subalgebra (cross-
+        #                       block coupling via -2·tr⊗tr).
+        # 'killing_per_block' — direct-sum Killing form
+        #                       gl(d_1) ⊕ ... ⊕ gl(d_H); block-diagonal in
+        #                       generator index, no cross-block coupling.
         _phi_prec = None
         if cfg.phi_preconditioner == 'cartan':
             _phi_prec = build_cartan_projector(generators)
         elif cfg.phi_preconditioner == 'killing':
             _phi_prec = build_killing_form_preconditioner(generators)
+        elif cfg.phi_preconditioner == 'killing_per_block':
+            _phi_prec = build_killing_form_preconditioner_per_block(
+                generators, cfg.irrep_dims,
+            )
         if _phi_prec is not None:
             self.register_buffer('_phi_preconditioner', _phi_prec)
         else:

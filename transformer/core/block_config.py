@@ -234,7 +234,7 @@ class BlockConfig:
     gauge_param: str =         'phi'            # 'phi' (Lie algebra) | 'omega' (direct GL(K) matrices)
     enforce_orthogonal: bool = False    # Enforce Ω ∈ SO(K) via Newton-Schulz iteration
    
-    phi_natural_gradient: str =           'killing'  # 'clip'|'cartan'|'killing'|'pullback' 
+    phi_natural_gradient: str =           'killing'  # 'clip'|'cartan'|'killing'|'killing_per_block'|'pullback'
     killing_center_reg: Optional[float] = None  # Killing form center regularization (None=2K)
     
 

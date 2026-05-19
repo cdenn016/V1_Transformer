@@ -454,11 +454,17 @@ class VariationalFFNDynamic(nn.Module):
         self.register_buffer('_phi_preconditioner', None)
         self.register_buffer('_structure_constants', None)
         self.register_buffer('_gram', None)
-        if phi_natural_gradient not in ('clip', 'cartan', 'killing', 'pullback'):
-            raise ValueError(f"phi_natural_gradient must be 'clip'|'cartan'|'killing'|'pullback', got '{phi_natural_gradient}'")
-        if phi_natural_gradient in ('cartan', 'killing', 'pullback'):
+        _VALID_PHI_NG = ('clip', 'cartan', 'killing', 'killing_per_block', 'pullback')
+        if phi_natural_gradient not in _VALID_PHI_NG:
+            raise ValueError(
+                f"phi_natural_gradient must be one of {_VALID_PHI_NG}, "
+                f"got {phi_natural_gradient!r}"
+            )
+        if phi_natural_gradient in ('cartan', 'killing', 'killing_per_block', 'pullback'):
             from transformer.core.gauge_preconditioner import (
-                build_cartan_projector, build_killing_form_preconditioner,
+                build_cartan_projector,
+                build_killing_form_preconditioner,
+                build_killing_form_preconditioner_per_block,
                 build_structure_constants,
             )
             if phi_natural_gradient == 'cartan':
@@ -470,6 +476,25 @@ class VariationalFFNDynamic(nn.Module):
                 )
                 _cr = killing_center_reg if killing_center_reg is not None else 2.0 * generators.shape[-1]
                 logger.info(f"[VariationalFFNDynamic] φ preconditioning: Killing form natural gradient (center_reg={_cr:.1f})")
+            elif phi_natural_gradient == 'killing_per_block':
+                if not irrep_dims:
+                    raise ValueError(
+                        "phi_natural_gradient='killing_per_block' requires "
+                        "irrep_dims to be supplied (the direct-sum Killing "
+                        "form is defined per block). Pass irrep_dims=[d_1, "
+                        "..., d_H] or use phi_natural_gradient='killing'."
+                    )
+                self._phi_preconditioner = build_killing_form_preconditioner_per_block(
+                    generators, irrep_dims, center_reg=killing_center_reg,
+                )
+                _cr = (
+                    killing_center_reg if killing_center_reg is not None
+                    else 2.0 * (sum(irrep_dims) / len(irrep_dims))
+                )
+                logger.info(
+                    f"[VariationalFFNDynamic] φ preconditioning: per-block "
+                    f"Killing form (irrep_dims={irrep_dims}, center_reg={_cr:.1f})"
+                )
             elif phi_natural_gradient == 'pullback':
                 self._structure_constants = build_structure_constants(generators)
                 # Frobenius inner product: <T_a, T_b> = tr(T_a^T T_b)

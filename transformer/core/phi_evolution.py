@@ -32,7 +32,13 @@ def precondition_phi_gradient(
     Modes:
         'clip': Simple norm clipping to 10.0 (no geometric awareness)
         'cartan': Cartan decomposition with fixed sym_dampening=0.1
-        'killing': Killing form natural gradient (position-independent, no free params)
+        'killing': Killing form natural gradient (position-independent, no free params).
+            Uses the ambient gl(K_full) Killing form restricted to the block-
+            diagonal subalgebra (cross-block coupling via -2·tr⊗tr).
+        'killing_per_block': Direct-sum Killing form gl(d_1) ⊕ ... ⊕ gl(d_H)
+            (block-diagonal in generator index, no cross-block coupling).
+            Caller is responsible for having built ``preconditioner`` via
+            :func:`build_killing_form_preconditioner_per_block`.
         'pullback': Full pullback metric through exp (position-dependent, exact)
 
     Args:
@@ -40,7 +46,8 @@ def precondition_phi_gradient(
         phi: Current gauge frame coordinates, shape ``(..., n_gen)``.
             Needed only for 'pullback' mode.
         mode: Preconditioning mode string.
-        preconditioner: Precomputed preconditioner matrix for 'cartan' or 'killing' modes.
+        preconditioner: Precomputed preconditioner matrix for 'cartan',
+            'killing', or 'killing_per_block' modes.
         generators: Lie algebra generators ``(n_gen, K, K)``. Needed for 'pullback'.
         structure_constants: Structure constants. Needed for 'pullback'.
         gram: Gram matrix. Needed for 'pullback'.
@@ -51,7 +58,10 @@ def precondition_phi_gradient(
     if mode == 'cartan':
         return apply_cartan_preconditioning(grad_phi, preconditioner)
 
-    elif mode == 'killing':
+    elif mode in ('killing', 'killing_per_block'):
+        # Both modes share the same application kernel: grad_phi @ inv_metric.T.
+        # The semantic difference is encoded entirely in how `preconditioner`
+        # was built upstream (ambient vs per-block).
         return apply_killing_form_natural_gradient(grad_phi, preconditioner)
 
     elif mode == 'pullback':
