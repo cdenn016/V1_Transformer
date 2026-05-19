@@ -41,6 +41,28 @@ def _make_so_generators(K):
     return G
 
 
+def _make_block_diagonal_glk_generators(irrep_dims):
+    """Block-diagonal `gl(d_1) ⊕ ... ⊕ gl(d_H)` generators.
+
+    For each block ``h`` of dim ``d_h``, emits ``d_h ** 2`` ``E_{ij}``
+    generators with all mass on block ``h``'s spatial support. Total
+    generator count is ``sum(d_h ** 2)``; ambient dimension is
+    ``K_full = sum(d_h)``.
+    """
+    K_full = sum(irrep_dims)
+    n_gen = sum(d * d for d in irrep_dims)
+    G = torch.zeros(n_gen, K_full, K_full)
+    block_start = 0
+    gen_idx = 0
+    for d_h in irrep_dims:
+        for i in range(d_h):
+            for j in range(d_h):
+                G[gen_idx, block_start + i, block_start + j] = 1.0
+                gen_idx += 1
+        block_start += d_h
+    return G
+
+
 # ===========================================================================
 # TestBuildCartanProjector
 # ===========================================================================
@@ -148,6 +170,191 @@ class TestKillingFormPreconditioner:
         grad = torch.randn(9)
         nat_grad = apply_killing_form_natural_gradient(grad, inv_metric)
         assert not torch.allclose(grad, nat_grad, atol=1e-3)
+
+
+# ===========================================================================
+# TestKillingFormPreconditionerPerBlock — direct-sum gl(d_1) ⊕ ... ⊕ gl(d_H)
+# Added 2026-05-19 (audit-2026-05-18-v4, F6.1).
+# ===========================================================================
+
+class TestKillingFormPreconditionerPerBlock:
+    """Tests for build_killing_form_preconditioner_per_block().
+
+    Validates the direct-sum Killing form on a block-diagonal generator bank:
+    block-diagonal metric in the generator index, no cross-block coupling,
+    per-block scale ``2·d_h`` (not the ambient ``2·K_full``).
+    """
+
+    def test_metric_shape_matches_n_gen(self):
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        n_gen = sum(d * d for d in irrep_dims)
+        inv_metric, metric = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True,
+        )
+        assert inv_metric.shape == (n_gen, n_gen)
+        assert metric.shape == (n_gen, n_gen)
+
+    def test_metric_symmetric(self):
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        inv_metric, metric = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True,
+        )
+        assert torch.allclose(metric, metric.T, atol=1e-5)
+        assert torch.allclose(inv_metric, inv_metric.T, atol=1e-5)
+
+    def test_metric_block_diagonal_in_generator_index(self):
+        """Cross-block entries are zero. This is the headline property the
+        ambient `build_killing_form_preconditioner` violates via -2·tr⊗tr."""
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        _, metric = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True, center_only=True,
+        )
+        # Generator indices 0..d_1^2-1 are block 0; d_1^2 .. d_1^2+d_2^2-1 are block 1
+        n0 = irrep_dims[0] ** 2  # 9
+        # Cross-block submatrix metric[0:n0, n0:] must be all zero
+        cross_block = metric[:n0, n0:]
+        assert torch.allclose(
+            cross_block, torch.zeros_like(cross_block), atol=1e-7
+        ), (
+            f"Per-block Killing metric leaked cross-block coupling: "
+            f"max(|cross|)={cross_block.abs().max().item():.3e}"
+        )
+
+    def test_within_block_scale_matches_2_dh(self):
+        """For a single ``gl(d_h)`` block, the metric reduces to
+        ``2·d_h·gram − 2·tr⊗tr + center_reg·(center proj)``. For non-trace
+        generators the diagonal entry should be ``2·d_h`` (not ``2·K_full``)
+        when ``gram`` is the identity (which it is for the orthonormal
+        ``E_{ij}`` basis).
+        """
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        # Two blocks, dim 3 and dim 4. K_full = 7. The ambient builder would
+        # give 2·K_full = 14 along non-trace diagonal; per-block builder gives
+        # 2·d_h = 6 for block-0 generators and 2·d_h = 8 for block-1 generators.
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        _, metric = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True, center_only=True,
+        )
+        # Pick a non-trace generator from block 0: E_{0,1} is at index
+        # 0*3 + 1 = 1 in the (3x3) basis.
+        # For E_{i,j} with i!=j, tr(E_{i,j}) = 0, so the trace term vanishes
+        # and metric[a,a] = 2·d_h·<E_{i,j}, E_{i,j}>_F = 2·d_h·1 = 2·d_h.
+        assert math.isclose(metric[1, 1].item(), 2.0 * irrep_dims[0], abs_tol=1e-5)
+        # Pick a non-trace generator from block 1: E_{0,1} in (4x4) basis is at
+        # offset irrep_dims[0]**2 + 0*4 + 1 = 9 + 1 = 10.
+        offset = irrep_dims[0] ** 2 + 1
+        assert math.isclose(metric[offset, offset].item(), 2.0 * irrep_dims[1], abs_tol=1e-5)
+
+    def test_metric_positive_definite(self):
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        _, metric = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True,
+        )
+        eigvals = torch.linalg.eigvalsh(metric)
+        assert (eigvals > 0).all(), (
+            f"Non-positive eigenvalues in per-block Killing metric: "
+            f"{eigvals[eigvals <= 0]}"
+        )
+
+    def test_natural_gradient_finite(self):
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+            apply_killing_form_natural_gradient,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        inv_metric = build_killing_form_preconditioner_per_block(G, irrep_dims)
+        n_gen = sum(d * d for d in irrep_dims)
+        grad = torch.randn(5, n_gen)
+        nat_grad = apply_killing_form_natural_gradient(grad, inv_metric)
+        assert torch.isfinite(nat_grad).all()
+        assert nat_grad.shape == grad.shape
+
+    def test_natural_gradient_does_not_couple_blocks(self):
+        """A gradient that is non-zero only on block-0 generators should
+        produce a natural gradient that is also non-zero only on block-0
+        generators — direct-sum structure preserves block independence."""
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+            apply_killing_form_natural_gradient,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        inv_metric = build_killing_form_preconditioner_per_block(G, irrep_dims)
+        n_gen = sum(d * d for d in irrep_dims)
+        n0 = irrep_dims[0] ** 2
+        grad = torch.zeros(n_gen)
+        grad[:n0] = torch.randn(n0)  # only block 0 has gradient
+        nat_grad = apply_killing_form_natural_gradient(grad, inv_metric)
+        # Block-1 components of the natural gradient must be zero.
+        assert torch.allclose(
+            nat_grad[n0:], torch.zeros(n_gen - n0), atol=1e-6
+        ), (
+            f"Direct-sum Killing-form natural gradient leaked into block 1: "
+            f"max(|nat_grad[block1]|)={nat_grad[n0:].abs().max().item():.3e}"
+        )
+
+    def test_raises_on_straddling_generator(self):
+        """A generator whose Frobenius mass spans multiple blocks must
+        cause the builder to refuse — direct-sum Killing form is undefined."""
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        # Start with a clean block-diagonal bank, then add a straddling generator
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        K_full = sum(irrep_dims)
+        straddler = torch.zeros(1, K_full, K_full)
+        straddler[0, 0, irrep_dims[0]] = 1.0  # entry (0, d_1) — block 0 row, block 1 col
+        G_bad = torch.cat([G, straddler], dim=0)
+        with pytest.raises(ValueError, match="straddle blocks|do not have"):
+            build_killing_form_preconditioner_per_block(G_bad, irrep_dims)
+
+    def test_raises_on_irrep_dims_sum_mismatch(self):
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner_per_block,
+        )
+        G = _make_block_diagonal_glk_generators([3, 4])
+        with pytest.raises(ValueError, match="sum\\(irrep_dims\\)"):
+            build_killing_form_preconditioner_per_block(G, [3, 5])  # 8 != 7
+
+    def test_differs_from_ambient_killing_form(self):
+        """Per-block metric must differ from the ambient `build_killing_form_
+        preconditioner` on the same generator bank — the whole point of the
+        toggle is that the two metrics are inequivalent."""
+        from transformer.core.gauge_preconditioner import (
+            build_killing_form_preconditioner,
+            build_killing_form_preconditioner_per_block,
+        )
+        irrep_dims = [3, 4]
+        G = _make_block_diagonal_glk_generators(irrep_dims)
+        _, m_ambient = build_killing_form_preconditioner(G, return_both=True)
+        _, m_perblock = build_killing_form_preconditioner_per_block(
+            G, irrep_dims, return_both=True,
+        )
+        assert not torch.allclose(m_ambient, m_perblock, atol=1e-4), (
+            "Per-block and ambient Killing metrics agreed numerically — the "
+            "toggle is meaningless on this generator bank."
+        )
 
 
 # ===========================================================================

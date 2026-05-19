@@ -577,15 +577,17 @@ P_{\mathrm{sym}} = \tfrac{1}{2}G^{-1}(G + S),
 
 and the preconditioner is $M = I - (1 - \lambda_{\mathrm{sym}}) P_{\mathrm{sym}}$ with dampening factor $\lambda_{\mathrm{sym}} \in (0, 1)$ (typically $0.1$, corresponding to $10\times$ dampening of symmetric directions). The preconditioned gradient is $\tilde{\nabla}_\phi \mathcal{F} = M \cdot \nabla_\phi \mathcal{F}$.
 
-\paragraph{3. Killing form natural gradient.}
-The Killing form of $\mathfrak{gl}(K)$ is $\kappa(X, Y) = 2K \operatorname{tr}(XY) - 2\operatorname{tr}(X)\operatorname{tr}(Y)$. In the generator basis, this yields the metric:
+\paragraph{3. Cartan-involution-modified bilinear form (compact-form metric).}
+The Killing form of $\mathfrak{gl}(K)$ is $B(X, Y) = 2K \operatorname{tr}(XY) - 2\operatorname{tr}(X)\operatorname{tr}(Y)$. On the trace-free subalgebra $\mathfrak{sl}(K) = \ker(\operatorname{tr})$ it reduces to $B|_{\mathfrak{sl}(K)}(X,Y) = 2K\operatorname{tr}(XY)$, and on the center $\mathbb{R}\cdot I$ it vanishes identically. The Killing form is \emph{indefinite} on real $\mathfrak{sl}(K)$ for $K\geq 2$: under the Cartan decomposition $\mathfrak{sl}(K) = \mathfrak{so}(K) \oplus \mathrm{Sym}_0(K)$ (skew $\oplus$ traceless-symmetric), $B$ is \emph{negative} on $\mathfrak{so}(K)$ and \emph{positive} on $\mathrm{Sym}_0(K)$~\citep{Hall2015,Gallier2020}.
+
+The metric used in this paper is therefore not the Killing form itself but the Cartan-involution-modified bilinear form $g(X, Y) = -\tfrac{1}{2}B(X, \theta(Y))$ with $\theta(X) = -X^\top$. Equivalently, in the generator basis:
 
 \begin{equation}
 \tilde{g}_{ab} = 2K \operatorname{tr}(T_a^\top T_b) - 2\operatorname{tr}(T_a)\operatorname{tr}(T_b),
 \label{eq:killing_metric}
 \end{equation}
 
-which is positive definite on $\mathfrak{sl}(K) = \ker(\operatorname{tr})$ and degenerate on the center $\mathbb{R} \cdot I$ (regularized by $\tilde{g} \to \tilde{g} + \epsilon I$ in practice). The natural gradient $\tilde{g}^{-1} \nabla_\phi \mathcal{F}$ has no free parameters: the metric is determined entirely by the algebra structure. This automatically handles the compact/non-compact asymmetry since the Killing form assigns different ``lengths'' to rotations versus shears.
+which is positive definite on $\mathfrak{sl}(K)$ (the transpose flips the sign on $\mathfrak{so}(K)$, since $\operatorname{tr}(T_a^\top T_a) = -\operatorname{tr}(T_a^2) = \|T_a\|_F^2 > 0$ for skew $T_a$) and degenerate on the center $\mathbb{R} \cdot I$ (regularized by $\tilde{g} \to \tilde{g} + \epsilon I$ in practice). This is the compact-form metric familiar from Riemannian geometry on compact Lie groups; on the compact subgroup $\mathrm{SO}(K)$ it agrees with $-B$ up to scale. The natural gradient $\tilde{g}^{-1} \nabla_\phi \mathcal{F}$ has no free parameters: the metric is determined entirely by the algebra structure. This treatment of the compact/non-compact asymmetry assigns positive ``lengths'' to both rotations and shears, in contrast to the genuine Killing form which assigns opposite signs.
 
 \paragraph{4. Pullback natural gradient (position-dependent).}
 The most geometrically principled approach uses the pullback of the Gram metric through the exponential map. The differential of $\exp$ at $\phi \in \mathfrak{g}$ in direction $T_a$ is:
@@ -594,7 +596,7 @@ The most geometrically principled approach uses the pullback of the Gram metric 
 d\exp_\phi(T_a) = \exp(\phi) \cdot \Psi(\mathrm{ad}_\phi)(T_a), \qquad \Psi(z) = \frac{e^z - 1}{z} = \sum_{k=0}^{\infty} \frac{z^k}{(k+1)!},
 \end{equation}
 
-where $\mathrm{ad}_\phi(X) = [\phi, X]$ is the adjoint action and $\Psi$ is the inverse Bernoulli function. The pullback metric on $\mathfrak{g}$ is:
+where $\mathrm{ad}_\phi(X) = [\phi, X]$ is the adjoint action and $\Psi(z) = (e^z - 1)/z$ is the generating series for $d\exp$; its multiplicative inverse $z/(e^z-1)$ is the Bernoulli generating function whose Taylor coefficients are the Bernoulli numbers and which appears in $d\exp^{-1}$ and the Magnus expansion~\citep{Hall2015}. The pullback metric on $\mathfrak{g}$ is:
 
 \begin{equation}
 \mathcal{G}_{ab}(\phi) = \left\langle \Psi(\mathrm{ad}_\phi)(T_a), \Psi(\mathrm{ad}_\phi)(T_b) \right\rangle_G,
@@ -643,17 +645,17 @@ becomes very flat.
 \subsection{Gauge Frame Dynamics on $\mathrm{GL}(K)$}
 For the gauge frame fields $\phi_i$, which live in the Lie algebra $\mathfrak{gl}(K)$ (or its subalgebra $\mathfrak{so}(3)$ in the fundamental representation), a different geometric structure must be respected. These fields parameterize the local gauge frames as $U_i = \exp(\sum_a \phi_i^a T_a)$, where $\{T_a\}$ are the Lie algebra generators, and the transport operators take the form $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Gradients of the alignment energy $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j])$ with respect to $\phi_i$ are obtained via the chain rule through the transport operator: the KL gradient with respect to $\Omega$ is contracted against the differential $\partial\Omega_{ij}/\partial\phi_i^a$.
 
-The differential of the matrix exponential relates infinitesimal variations $\delta \phi$ to variations in the group element via
+The differential of the matrix exponential relates infinitesimal variations $\delta \phi$ to variations in the group element via the \emph{left-trivialised} form
 \begin{equation}
-\frac{\partial}{\partial \phi^a}\exp \Bigl(\textstyle\sum_b \phi^b T_b\Bigr) = \exp(X)\cdot Q_a,
+\frac{\partial}{\partial \phi^a}\exp \Bigl(\textstyle\sum_b \phi^b T_b\Bigr) = \exp(X)\cdot Q_a^{L},
 \end{equation}
-where $X = \sum_b \phi^b T_b$ and $Q_a = d\exp_X(T_a)$ is the derivative of the exponential map applied to the generator $T_a$. For the $K = 3$ fundamental representation of $\mathfrak{so}(3)$, we use the exact closed-form expression
+where $X = \sum_b \phi^b T_b$ and $Q_a^{L} = d\exp^{L}_X(T_a)$ denotes the left-trivialised derivative of the exponential map applied to the generator $T_a$. This convention differs from the right-trivialised form $D_{\phi_i}(\exp)[T_a] = Q_a^{R,(i)} \exp(\phi_i)$ used in Eq.~\eqref{eq:dtilde_mu} of Appendix~C by an adjoint action: the two are related by $Q_a^{R} \exp(\phi) = \exp(\phi) \cdot Q_a^{L}$, equivalently $Q_a^{L} = \mathrm{Ad}_{\exp(-\phi)}(Q_a^{R})$~\citep{Hall2015}. The sign of the first-order ad-coefficient flips accordingly. For the $K = 3$ fundamental representation of $\mathfrak{so}(3)$, we use the exact closed-form expression
 \begin{equation}
-Q_a = T_a - c_1(\theta) \mathrm{ad}_X(T_a) + c_2(\theta) \mathrm{ad}_X^2(T_a),
+Q_a^{L} = T_a - c_1(\theta) \mathrm{ad}_X(T_a) + c_2(\theta) \mathrm{ad}_X^2(T_a),
 \end{equation}
-where $\theta = \|\phi\|$, $c_1(\theta) = (1-\cos\theta)/\theta^2$, and $c_2(\theta) = (\theta - \sin\theta)/\theta^3$, with Taylor-expanded small-angle limits for $\theta < 10^{-4}$. For higher-dimensional representations ($K > 3$), where the Cayley--Hamilton truncation requires $K$ terms, we instead compute $Q_a$ via the Fr\'{e}chet derivative of the matrix exponential using symmetric quadrature.
+where $\theta = \|\phi\|$, $c_1(\theta) = (1-\cos\theta)/\theta^2$, and $c_2(\theta) = (\theta - \sin\theta)/\theta^3$, with Taylor-expanded small-angle limits for $\theta < 10^{-4}$. (The right-trivialised form used in Appendix~C carries $+c_1(\theta) \mathrm{ad}_X$ in place of $-c_1(\theta)\mathrm{ad}_X$; both formulas reproduce the numerical Fr\'{e}chet derivative to machine precision under their own conventions.) For higher-dimensional representations ($K > 3$), where the Cayley--Hamilton truncation requires $K$ terms, we instead compute $Q_a^{L}$ via the Fr\'{e}chet derivative of the matrix exponential using symmetric quadrature.
 
-The resulting Euclidean gradient $\partial\mathcal{F}/\partial\phi^a$ can optionally be preconditioned using one of several Lie-algebraic metrics. In the transformer implementation, these include: (i)~the \emph{Killing form} natural gradient, which uses the Cartan-involution-modified Killing form $\tilde{g}_{ab} = 2K \mathrm{tr}(T_a^\top T_b) - 2 \mathrm{tr}(T_a)\mathrm{tr}(T_b)$ as a position-independent metric with no free parameters; (ii)~a \emph{Cartan decomposition} preconditioner that dampens the non-compact (symmetric) directions of $\mathfrak{gl}(K)$ relative to the compact $\mathfrak{so}(K)$ directions; and (iii)~the full \emph{pullback} natural gradient $G_{ab}(\phi) = \langle \Psi(\mathrm{ad}_X)(T_a), \Psi(\mathrm{ad}_X)(T_b) \rangle$, where $\Psi(z) = (e^z - 1)/z$, which captures the position-dependent curvature of the exponential map.
+The resulting Euclidean gradient $\partial\mathcal{F}/\partial\phi^a$ can optionally be preconditioned using one of several Lie-algebraic metrics. In the transformer implementation, these include: (i)~the \emph{Cartan-involution-modified} natural gradient, which uses the bilinear form $\tilde{g}_{ab} = 2K \mathrm{tr}(T_a^\top T_b) - 2 \mathrm{tr}(T_a)\mathrm{tr}(T_b)$ (positive-definite on $\mathfrak{sl}(K)$ as derived in App.~C.3) as a position-independent metric with no free parameters; (ii)~a \emph{Cartan decomposition} preconditioner that dampens the non-compact (symmetric) directions of $\mathfrak{gl}(K)$ relative to the compact $\mathfrak{so}(K)$ directions; and (iii)~the full \emph{pullback} natural gradient $G_{ab}(\phi) = \langle \Psi(\mathrm{ad}_X)(T_a), \Psi(\mathrm{ad}_X)(T_b) \rangle$, where $\Psi(z) = (e^z - 1)/z$, which captures the position-dependent curvature of the exponential map.
 
 Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$), forming a candidate update $\phi_{\text{cand}} = \phi + \eta_\phi \delta \phi$. However, the Lie algebra has a natural periodic boundary (rotation angles wrap at $\pm \pi$) and numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_to\_principal\_ball}, which wraps angles modulo $2\pi$, applies an antipodal flip for angles exceeding $\pi$, and clamps the result to $\|\phi\| < \pi - \varepsilon_{\mathrm{margin}}$ with $\varepsilon_{\mathrm{margin}} = 10^{-2}$ to avoid numerical instability near the critical points where the exponential map degenerates.
 

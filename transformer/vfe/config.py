@@ -83,7 +83,15 @@ class VFEConfig:
 
     # === Gauge geometry ===
     gauge_group: Literal['SO3', 'SON', 'GLK'] = 'GLK'
-    phi_preconditioner: Literal['clip', 'cartan', 'killing'] = 'killing'
+    phi_preconditioner: Literal[
+        'clip', 'cartan', 'killing', 'killing_per_block'
+    ] = 'killing'
+    # 'killing'           — ambient gl(K_full) Killing form on the restricted
+    #                       subalgebra (cross-block coupling via -2·tr⊗tr).
+    # 'killing_per_block' — direct-sum Killing form on
+    #                       gl(d_1) ⊕ ... ⊕ gl(d_H); block-diagonal in the
+    #                       generator index, no cross-block coupling. Added
+    #                       2026-05-19 to address audit-2026-05-18-v4 F6.1.
     # 'pullback' is intentionally absent: the upstream call chain in
     # `_update_phi` does not thread the `structure_constants` tensor that
     # `apply_pullback_natural_gradient` requires, so selecting it raised
@@ -342,13 +350,15 @@ class VFEConfig:
         # The Literal enum already excludes 'pullback', so a static type
         # checker rejects it. Re-check at runtime in case the user constructs
         # the dataclass with a string that bypasses the Literal narrowing.
-        if self.phi_preconditioner not in ('clip', 'cartan', 'killing'):
+        if self.phi_preconditioner not in (
+            'clip', 'cartan', 'killing', 'killing_per_block'
+        ):
             raise ValueError(
                 f"phi_preconditioner={self.phi_preconditioner!r} is not supported. "
-                f"Valid options: 'clip', 'cartan', 'killing'. 'pullback' was "
-                f"removed because the call chain in `VFEEStep._update_phi` does "
-                f"not thread the structure_constants tensor that "
-                f"apply_pullback_natural_gradient requires."
+                f"Valid options: 'clip', 'cartan', 'killing', 'killing_per_block'. "
+                f"'pullback' was removed because the call chain in "
+                f"`VFEEStep._update_phi` does not thread the structure_constants "
+                f"tensor that apply_pullback_natural_gradient requires."
             )
 
         # --- non_flat_tile_size reserved future field ----------------------

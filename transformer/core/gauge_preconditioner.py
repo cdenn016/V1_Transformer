@@ -50,7 +50,7 @@ Date: March 2026
 
 import math
 import torch
-from typing import Optional
+from typing import List, Optional
 
 from transformer.core.vfe_utils import _safe_spd_inv
 
@@ -326,6 +326,156 @@ def apply_killing_form_natural_gradient(
         Natural gradient, same shape as grad_phi
     """
     return grad_phi @ inv_metric.T
+
+
+# =============================================================================
+# Per-block (direct-sum) Killing Form Natural Gradient
+# =============================================================================
+# Addresses audit-2026-05-18-v4 finding F6.1: the ambient `build_killing_form_
+# preconditioner` above uses `2·K_full` and admits cross-block coupling via
+# `−2·tr⊗tr`. For a block-diagonal generator bank `gl(d_1) ⊕ ... ⊕ gl(d_H)`
+# the direct-sum Killing form is the canonical natural-gradient metric: zero
+# off-block coupling, per-block scale `2·d_h` instead of `2·K_full`.
+#
+# Reference: Hall, "Lie Groups, Lie Algebras, and Representations", Killing
+# form on direct sums decomposes as the block-diagonal sum of per-summand
+# Killing forms.
+
+def build_killing_form_preconditioner_per_block(
+    generators: torch.Tensor,                  # (n_gen, K_full, K_full)
+    irrep_dims: List[int],
+    center_reg: Optional[float] = None,
+    center_only: bool = True,
+    return_both: bool = False,
+    block_mass_threshold: float = 0.9,
+) -> torch.Tensor:
+    r"""Direct-sum Killing form preconditioner on
+    :math:`\mathfrak{gl}(d_1) \oplus \cdots \oplus \mathfrak{gl}(d_H)`.
+
+    For each block :math:`h` (dim :math:`d_h`), takes the subset of generators
+    whose Frobenius mass lives on block :math:`h` (>``block_mass_threshold``
+    fraction) and builds the standard :math:`\mathfrak{gl}(d_h)` Killing form
+
+    .. math::
+        \tilde g^{(h)}_{ab} = 2 d_h \cdot \mathrm{tr}(T_a^\top T_b)
+                              - 2 \cdot \mathrm{tr}(T_a) \cdot \mathrm{tr}(T_b)
+
+    on the per-block subset, then assembles the full :math:`(n_{gen}, n_{gen})`
+    metric **block-diagonally in the generator index**. There is no
+    cross-block coupling, in contrast to the ambient :func:`build_killing_form_preconditioner`
+    which couples blocks via the global :math:`\mathrm{tr} \otimes \mathrm{tr}`
+    term.
+
+    The center direction of each :math:`\mathfrak{gl}(d_h)` summand is
+    regularised independently per block when ``center_only=True``, so the
+    center kernel on each block is lifted without affecting the others.
+
+    Args:
+        generators: Lie algebra generators, ``(n_gen, K_full, K_full)``.
+        irrep_dims: Block dimensions ``[d_1, d_2, ..., d_H]``;
+            ``sum(irrep_dims) == K_full``.
+        center_reg: Regularisation for each block's degenerate center.
+            Default ``None`` → ``2 * mean(irrep_dims)`` (per-block isotropic).
+        center_only: If ``True``, lift only the per-block center direction;
+            ``False`` adds ``center_reg * I`` to the full metric.
+        return_both: If ``True``, return ``(inv_metric, metric)``.
+        block_mass_threshold: Fraction of Frobenius mass a generator must
+            place on a single block to be considered a member of that block.
+            Default 0.9; generators that straddle multiple blocks (mass split
+            >10/90) are excluded — the function raises if any such generators
+            exist because the direct-sum Killing form is only defined for
+            generators that live in exactly one summand.
+
+    Returns:
+        ``inv_metric`` of shape ``(n_gen, n_gen)``, block-diagonal in
+        generator index. If ``return_both=True`` returns ``(inv_metric, metric)``.
+
+    Raises:
+        ValueError: If a generator's Frobenius mass straddles two blocks
+            (i.e., no block exceeds ``block_mass_threshold``).
+    """
+    n_gen, K_full, _ = generators.shape
+    device = generators.device
+    dtype = generators.dtype
+
+    if sum(irrep_dims) != K_full:
+        raise ValueError(
+            f"build_killing_form_preconditioner_per_block: "
+            f"sum(irrep_dims)={sum(irrep_dims)} != generators.shape[-1]={K_full}. "
+            f"irrep_dims={irrep_dims}"
+        )
+
+    if center_reg is None:
+        # 2·mean(d_h) is the canonical non-center eigenvalue scale per block.
+        center_reg = 2.0 * (sum(irrep_dims) / len(irrep_dims))
+
+    # Per-block generator-index assignment via Frobenius-mass dominance.
+    mass_full = (generators ** 2).sum(dim=(-2, -1)).clamp(min=1e-12)  # (n_gen,)
+    block_assign = torch.full((n_gen,), -1, dtype=torch.long, device=device)
+    block_start = 0
+    for h, d_h in enumerate(irrep_dims):
+        block_end = block_start + d_h
+        gens_block = generators[:, block_start:block_end, block_start:block_end]
+        mass_in = (gens_block ** 2).sum(dim=(-2, -1))                   # (n_gen,)
+        in_block = (mass_in / mass_full) > block_mass_threshold
+        block_assign[in_block] = h
+        block_start = block_end
+
+    # Every generator must live in exactly one block for the direct-sum
+    # Killing form to be defined.
+    unassigned = (block_assign < 0).nonzero(as_tuple=True)[0]
+    if unassigned.numel() > 0:
+        raise ValueError(
+            f"build_killing_form_preconditioner_per_block: "
+            f"{unassigned.numel()} of {n_gen} generators do not have "
+            f">{block_mass_threshold:.0%} Frobenius mass on any single "
+            f"irrep block. The direct-sum Killing form is undefined for "
+            f"generators that straddle blocks. Use the ambient "
+            f"build_killing_form_preconditioner instead, or pass a "
+            f"strictly block-diagonal generator bank."
+        )
+
+    # Assemble the full (n_gen, n_gen) metric block-diagonally in generator
+    # index. metric[idx_h, idx_h] = per-block Killing form; all cross-block
+    # entries are zero by construction.
+    metric = torch.zeros(n_gen, n_gen, device=device, dtype=dtype)
+    block_start = 0
+    for h, d_h in enumerate(irrep_dims):
+        block_end = block_start + d_h
+        idx_h = (block_assign == h).nonzero(as_tuple=True)[0]
+        if idx_h.numel() == 0:
+            block_start = block_end
+            continue
+        # Generators restricted to (a) the subset that lives on block h and
+        # (b) block h's spatial support — this is the gl(d_h) basis.
+        G_h = generators[idx_h][:, block_start:block_end, block_start:block_end]  # (n_h, d_h, d_h)
+        gram_h = torch.einsum('aij,bij->ab', G_h, G_h)
+        traces_h = G_h.diagonal(dim1=-2, dim2=-1).sum(dim=-1)             # (n_h,)
+        trace_outer_h = torch.outer(traces_h, traces_h)                   # (n_h, n_h)
+        metric_h = 2.0 * d_h * gram_h - 2.0 * trace_outer_h
+
+        # Per-block center regularisation: lift only the trace direction
+        # within block h, leaving other blocks' centers untouched.
+        if center_only:
+            trace_norm_h = traces_h.norm()
+            if trace_norm_h > 1e-12:
+                center_dir = traces_h / trace_norm_h
+                metric_h = metric_h + center_reg * torch.outer(center_dir, center_dir)
+        # When center_only=False the global eye is added after the assembly
+        # loop (matching the ambient builder's semantics).
+
+        metric[idx_h.unsqueeze(1), idx_h.unsqueeze(0)] = metric_h
+        block_start = block_end
+
+    if not center_only:
+        metric = metric + center_reg * torch.eye(n_gen, device=device, dtype=dtype)
+
+    inv_metric = _safe_spd_inv(metric, eps=1e-8)
+
+    if return_both:
+        return inv_metric, metric
+
+    return inv_metric
 
 
 # =============================================================================
