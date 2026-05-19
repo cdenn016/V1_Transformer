@@ -243,11 +243,17 @@ def _f_monotone_step(
     )
     f_align_sum = (beta_det * kl_det).sum()
     if include_attention_entropy:
-        _kappa_scalar = (
-            float(kappa.detach().item())
-            if isinstance(kappa, torch.Tensor)
-            else float(kappa)
-        )
+        # Per-head κ_h (shape (H,)) collapses to a single monitor scalar
+        # via mean — the F-monitor is a diagnostic, not a tight identity;
+        # using mean keeps it interpretable as a "typical" temperature
+        # without crashing on .item() of a 1-D tensor.
+        if isinstance(kappa, torch.Tensor):
+            if kappa.dim() == 0:
+                _kappa_scalar = float(kappa.detach().item())
+            else:
+                _kappa_scalar = float(kappa.detach().mean().item())
+        else:
+            _kappa_scalar = float(kappa)
         _beta_safe = beta_det.clamp(min=_BETA_LOG_FLOOR)
         f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
         f_align_total = (
@@ -316,9 +322,22 @@ class VFEEStep(nn.Module):
         self.include_attention_entropy = cfg.include_attention_entropy
         self.embed_dim = cfg.embed_dim
         self._learnable_kappa = cfg.learnable_kappa
+        self._kappa_per_head = getattr(cfg, 'kappa_per_head', False)
         if cfg.learnable_kappa:
-            self.log_kappa = nn.Parameter(torch.tensor(math.log(cfg.kappa)))
-            self._kappa_init = cfg.kappa
+            if self._kappa_per_head:
+                # Per-head learnable κ_h vector. Each head learns its own
+                # log-space scalar; init all heads at log(cfg.kappa) so the
+                # initial behavior matches the scalar-κ run. Config-level
+                # __post_init__ guarantees len(irrep_dims) > 1 and
+                # per_head_softmax=True when this branch is taken.
+                n_heads = len(cfg.irrep_dims)
+                self.log_kappa_per_head = nn.Parameter(
+                    torch.full((n_heads,), math.log(cfg.kappa))
+                )
+                self._kappa_init = cfg.kappa
+            else:
+                self.log_kappa = nn.Parameter(torch.tensor(math.log(cfg.kappa)))
+                self._kappa_init = cfg.kappa
         else:
             self.kappa = cfg.kappa
         self.e_mu_lr = cfg.e_mu_lr
@@ -491,9 +510,22 @@ class VFEEStep(nn.Module):
 
     @property
     def effective_kappa(self) -> torch.Tensor | float:
-        r"""Resolve kappa: learned (clamped) ``torch.Tensor`` or fixed ``float``."""
+        r"""Resolve kappa.
+
+        Returns:
+            - ``float`` ``self.kappa`` when ``learnable_kappa=False``.
+            - 0-dim ``torch.Tensor`` ``exp(log_kappa).clamp(0.5·κ₀, 2·κ₀)``
+              when ``learnable_kappa=True`` AND ``kappa_per_head=False``.
+            - 1-D ``torch.Tensor`` of shape ``(H,)`` with element-wise
+              clamp when ``learnable_kappa=True`` AND ``kappa_per_head=True``.
+              Downstream per-head dispatch indexes this with ``_kappa[h]``;
+              scalar consumers (F-monitor diagnostics) take ``.mean()``.
+        """
         if self._learnable_kappa:
-            k = torch.exp(self.log_kappa)
+            if self._kappa_per_head:
+                k = torch.exp(self.log_kappa_per_head)  # (H,)
+            else:
+                k = torch.exp(self.log_kappa)            # ()
             k0 = self._kappa_init
             return k.clamp(min=0.5 * k0, max=2.0 * k0)
         return self.kappa
@@ -580,47 +612,79 @@ class VFEEStep(nn.Module):
         # Skipped when learnable_kappa is False (raw_c0/raw_b0 path above is
         # the only signal needed in that mode).
         if self._learnable_kappa:
-            kappa_attached = self.effective_kappa  # fresh exp(log_kappa).clamp(...)
-            beta, kl_attn = compute_kl_attention(
-                mu_d, sigma_d, phi_d, self.generators,
-                self.irrep_dims, kappa_attached, mask,
-                use_rope=self.use_rope,
-                rope_base=self.rope_base,
-                enforce_orthogonal=self.enforce_orthogonal,
-                mask_self_attention=self.mask_self_attention,
-                exact_diagonal_transport=self.exact_diagonal_transport,
-            )
-            beta_safe = beta.clamp(min=_BETA_LOG_FLOOR)
-            sum_beta_kl = (beta * kl_attn).sum()
-            # Entropy with uniform prior pi = 1/N: tau * sum beta * log(beta * N)
-            #   = tau * sum beta * log beta + tau * log N * sum beta
-            # The +tau*log(N)*sum(beta) constant is essential: without it the
-            # kappa-equilibrium of dF/dkappa is shifted by exactly sqrt(K)*B*N*log N.
-            # See manuscript eq:free_energy_functional_final.
+            kappa_attached = self.effective_kappa  # scalar or (H,) tensor
+            # Pre-compute log(N) constant once (independent of head).
             if mask is not None and mask.dim() >= 2:
-                # mask is (B, N) or (B, N, N) with 1 = valid, 0 = masked.
-                # Per-row N_valid (count of valid keys); use mean log so the
-                # constant is a single scalar that scales correctly with batch.
-                n_valid = mask.sum(dim=-1).clamp(min=1).to(beta.dtype)
-                log_N_const = n_valid.log().mean()
+                n_valid = mask.sum(dim=-1).clamp(min=1)
+                log_N_const = n_valid.to(mu_d.dtype).log().mean()
             else:
                 if mask is not None and mask.dim() < 2:
                     warnings.warn(
                         f"_auxiliary_hyperparam_loss received a 1D mask "
                         f"(shape={tuple(mask.shape)}); falling back to "
-                        f"full beta.shape[-1] for log_N. Per-row N_valid "
-                        f"correction is bypassed.",
+                        f"full N for log_N. Per-row N_valid correction "
+                        f"is bypassed.",
                         UserWarning,
                         stacklevel=2,
                     )
-                log_N_const = math.log(max(beta.shape[-1], 1))
-            tau = kappa_attached * self._dim_scale
-            entropy_term = (
-                tau * (beta_safe * beta_safe.log()).sum()
-                + tau * log_N_const * beta.sum()
-            )
-            attn_term = self.lambda_align * (sum_beta_kl + entropy_term) / token_count
-            aux = attn_term if aux is None else aux + attn_term
+                log_N_const = math.log(max(mu_d.shape[1], 1))
+
+            if self._kappa_per_head and self.irrep_dims and len(self.irrep_dims) > 1:
+                # Per-head aux: build the F_attn term per head and sum.
+                # Each head's term carries gradient to its own
+                # log_kappa_per_head[h] via the kappa_attached[h] slice
+                # passed into compute_kl_attention. Mirrors the forward
+                # per-head dispatch so the gradient direction is consistent.
+                attn_term = mu_d.new_zeros(())
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    mu_h = mu_d[..., block_start:block_end]
+                    sigma_h = sigma_d[..., block_start:block_end]
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h_attached = kappa_attached[h]  # 0-dim tensor
+                    beta_h, kl_attn_h = compute_kl_attention(
+                        mu_h, sigma_h, phi_d, gen_h,
+                        [d_h], kappa_h_attached, mask,
+                        use_rope=self.use_rope,
+                        rope_base=self.rope_base,
+                        enforce_orthogonal=self.enforce_orthogonal,
+                        mask_self_attention=self.mask_self_attention,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    beta_h_safe = beta_h.clamp(min=_BETA_LOG_FLOOR)
+                    sum_beta_kl_h = (beta_h * kl_attn_h).sum()
+                    tau_h = kappa_h_attached * math.sqrt(d_h)
+                    entropy_term_h = (
+                        tau_h * (beta_h_safe * beta_h_safe.log()).sum()
+                        + tau_h * log_N_const * beta_h.sum()
+                    )
+                    attn_term = attn_term + (
+                        self.lambda_align * (sum_beta_kl_h + entropy_term_h) / token_count
+                    )
+                    block_start = block_end
+                aux = attn_term if aux is None else aux + attn_term
+            else:
+                # Scalar-κ path (legacy single-softmax over full-K, or
+                # per_head_softmax=True with single head H=1).
+                beta, kl_attn = compute_kl_attention(
+                    mu_d, sigma_d, phi_d, self.generators,
+                    self.irrep_dims, kappa_attached, mask,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
+                    enforce_orthogonal=self.enforce_orthogonal,
+                    mask_self_attention=self.mask_self_attention,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+                beta_safe = beta.clamp(min=_BETA_LOG_FLOOR)
+                sum_beta_kl = (beta * kl_attn).sum()
+                tau = kappa_attached * self._dim_scale
+                entropy_term = (
+                    tau * (beta_safe * beta_safe.log()).sum()
+                    + tau * log_N_const * beta.sum()
+                )
+                attn_term = self.lambda_align * (sum_beta_kl + entropy_term) / token_count
+                aux = attn_term if aux is None else aux + attn_term
 
         return aux
 
@@ -890,6 +954,13 @@ class VFEEStep(nn.Module):
                             if alpha_c0_full is not None
                             else None
                         )
+                        # Per-head κ_h slice when kappa_per_head=True
+                        # (_kappa is a (H,) tensor); otherwise the same
+                        # scalar κ is shared across all heads.
+                        if isinstance(_kappa, torch.Tensor) and _kappa.dim() == 1:
+                            kappa_h_eff = _kappa[h]
+                        else:
+                            kappa_h_eff = _kappa
                         beta_h, grad_mu_h, grad_sigma_h, kl_h = (
                             _fused_attention_and_vfe_gradients_block_diag(
                                 mu_q=mu_h, sigma_q=sigma_h,
@@ -898,7 +969,7 @@ class VFEEStep(nn.Module):
                                 alpha=alpha_h,
                                 lambda_belief=self.lambda_align,
                                 lambda_softmax=_lambda_softmax_eff,
-                                kappa=_kappa,
+                                kappa=kappa_h_eff,
                                 eps=eps,
                                 irrep_dims=[d_h],
                                 compute_sigma_align_grad=True,
@@ -1374,45 +1445,98 @@ class VFEEStep(nn.Module):
             # phi_for_grad — the caller's block_exp_pairs cache cannot be
             # reused here because it was built from a phi leaf that is not in
             # this subgraph.
-            beta_phi, kl_h = compute_kl_attention(
-                mu.detach(), sigma.detach() if sigma is not None else None,
-                phi_for_grad, self.generators,
-                self.irrep_dims, _kappa, mask,
-                use_rope=self.use_rope,
-                rope_base=self.rope_base,
-                enforce_orthogonal=self.enforce_orthogonal,
-                mask_self_attention=self.mask_self_attention,
-                exact_diagonal_transport=self.exact_diagonal_transport,
+            _per_head_kappa_path = (
+                isinstance(_kappa, torch.Tensor)
+                and _kappa.dim() == 1
+                and self.irrep_dims
+                and len(self.irrep_dims) > 1
             )
-
-            if self.include_attention_entropy:
-                # Manuscript Eq. eq:free_energy_functional_final F functional, direct form:
-                #   F = (β · KL).sum() + τ_eff · (β · log(β/π)).sum(),  τ_eff = κ · √K
-                # All attached so autograd produces the envelope-correct gradient at
-                # the softmax β stationary point: ∂F/∂θ = Σ β·∂KL/∂θ for θ ∈ (μ,Σ,φ),
-                # and ∂F/∂κ = √K · (β·log β).sum(). lambda_align scales the entire F
-                # uniformly; lambda_soft is IGNORED in this branch because the manuscript
-                # F has no separate "softmax-coupling" knob — the product-rule split is
-                # an autograd convenience for the entropy-suppressed surrogate path only.
-                # Uniform prior π = 1/N; constant log N dropped (additive const in F).
-                # The α·KL(q||p) self-coupling term is intentionally OMITTED from _F:
-                # it depends only on (q, p), neither of which depends on φ, so its
-                # partial derivative w.r.t. φ is identically zero (and including it
-                # would only add an attached-but-zero-grad scalar). The φ-loss therefore
-                # collapses to the (β·KL + τ·β·log(β/π)) terms that actually couple to φ
-                # through Ω_ij = exp(φ_i)·exp(-φ_j).
-                # Verified by tests/test_entropy_envelope.py: production config matches
-                # the envelope prediction to ~1e-18 for any λ_soft.
-                beta_safe = beta_phi.clamp(min=_BETA_LOG_FLOOR)
-                _F = (beta_phi * kl_h).sum() + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()
-                alignment_loss = self.lambda_align * _F
+            if _per_head_kappa_path:
+                # Per-head φ gradient under kappa_per_head=True. Loop over
+                # heads to keep each κ_h scoped to its own block — passing
+                # a (H,) tensor to compute_kl_attention's single-softmax
+                # logits divisor would broadcast incorrectly. The full
+                # phi_for_grad is reused across heads (phi is shared); each
+                # head's alignment_loss accumulates into the same leaf so
+                # autograd.grad produces the summed phi-gradient at the
+                # bottom of this block.
+                alignment_loss = phi_for_grad.new_zeros(())
+                block_start = 0
+                mu_d = mu.detach()
+                sigma_d = sigma.detach() if sigma is not None else None
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    mu_h = mu_d[..., block_start:block_end]
+                    sigma_h = (
+                        sigma_d[..., block_start:block_end]
+                        if sigma_d is not None
+                        else None
+                    )
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h = _kappa[h]
+                    beta_phi_h, kl_h = compute_kl_attention(
+                        mu_h, sigma_h, phi_for_grad, gen_h,
+                        [d_h], kappa_h, mask,
+                        use_rope=self.use_rope,
+                        rope_base=self.rope_base,
+                        enforce_orthogonal=self.enforce_orthogonal,
+                        mask_self_attention=self.mask_self_attention,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    if self.include_attention_entropy:
+                        beta_safe_h = beta_phi_h.clamp(min=_BETA_LOG_FLOOR)
+                        _F_h = (
+                            (beta_phi_h * kl_h).sum()
+                            + kappa_h * math.sqrt(d_h)
+                            * (beta_safe_h * beta_safe_h.log()).sum()
+                        )
+                        alignment_loss = alignment_loss + self.lambda_align * _F_h
+                    else:
+                        alignment_loss = alignment_loss + (
+                            self.lambda_align * (beta_phi_h.detach() * kl_h).sum()
+                            + self.lambda_soft * (beta_phi_h * kl_h.detach()).sum()
+                        )
+                    block_start = block_end
             else:
-                # Legacy product-rule decomposition — entropy-suppressed surrogate path.
-                # d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
-                alignment_loss = (
-                    self.lambda_align * (beta_phi.detach() * kl_h).sum()
-                    + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
+                beta_phi, kl_h = compute_kl_attention(
+                    mu.detach(), sigma.detach() if sigma is not None else None,
+                    phi_for_grad, self.generators,
+                    self.irrep_dims, _kappa, mask,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
+                    enforce_orthogonal=self.enforce_orthogonal,
+                    mask_self_attention=self.mask_self_attention,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )
+
+                if self.include_attention_entropy:
+                    # Manuscript Eq. eq:free_energy_functional_final F functional, direct form:
+                    #   F = (β · KL).sum() + τ_eff · (β · log(β/π)).sum(),  τ_eff = κ · √K
+                    # All attached so autograd produces the envelope-correct gradient at
+                    # the softmax β stationary point: ∂F/∂θ = Σ β·∂KL/∂θ for θ ∈ (μ,Σ,φ),
+                    # and ∂F/∂κ = √K · (β·log β).sum(). lambda_align scales the entire F
+                    # uniformly; lambda_soft is IGNORED in this branch because the manuscript
+                    # F has no separate "softmax-coupling" knob — the product-rule split is
+                    # an autograd convenience for the entropy-suppressed surrogate path only.
+                    # Uniform prior π = 1/N; constant log N dropped (additive const in F).
+                    # The α·KL(q||p) self-coupling term is intentionally OMITTED from _F:
+                    # it depends only on (q, p), neither of which depends on φ, so its
+                    # partial derivative w.r.t. φ is identically zero (and including it
+                    # would only add an attached-but-zero-grad scalar). The φ-loss therefore
+                    # collapses to the (β·KL + τ·β·log(β/π)) terms that actually couple to φ
+                    # through Ω_ij = exp(φ_i)·exp(-φ_j).
+                    # Verified by tests/test_entropy_envelope.py: production config matches
+                    # the envelope prediction to ~1e-18 for any λ_soft.
+                    beta_safe = beta_phi.clamp(min=_BETA_LOG_FLOOR)
+                    _F = (beta_phi * kl_h).sum() + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()
+                    alignment_loss = self.lambda_align * _F
+                else:
+                    # Legacy product-rule decomposition — entropy-suppressed surrogate path.
+                    # d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
+                    alignment_loss = (
+                        self.lambda_align * (beta_phi.detach() * kl_h).sum()
+                        + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
+                    )
 
             if alignment_loss.grad_fn is not None:
                 grad_phi = torch.autograd.grad(

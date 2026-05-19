@@ -521,18 +521,27 @@ class VFETrainer:
         if not self.cfg.learnable_kappa:
             return {}
         with torch.no_grad():
-            tensors: List[torch.Tensor] = []
+            # Accumulate scalar κ values across blocks AND heads (when
+            # kappa_per_head=True, effective_kappa is (H,)). Flattening so
+            # the mean/min/max are taken over the joined (n_blocks × n_heads)
+            # population gives a single summary number per metric that
+            # interprets the same whether per-head is on or off.
+            scalars: List[float] = []
             for block in self.model.stack.blocks:
                 k = block.e_step.effective_kappa
                 if isinstance(k, torch.Tensor):
-                    tensors.append(k.detach().reshape(()))
+                    if k.dim() == 0:
+                        scalars.append(float(k.detach().item()))
+                    else:
+                        scalars.extend(k.detach().flatten().cpu().tolist())
                 else:
-                    tensors.append(torch.tensor(float(k)))
-            kappas = torch.stack(tensors).detach().cpu().tolist()
+                    scalars.append(float(k))
+        if not scalars:
+            return {}
         return {
-            'kappa_mean': sum(kappas) / len(kappas),
-            'kappa_min': min(kappas),
-            'kappa_max': max(kappas),
+            'kappa_mean': sum(scalars) / len(scalars),
+            'kappa_min': min(scalars),
+            'kappa_max': max(scalars),
         }
 
     def _decode_first_sample_tokens(self) -> Optional[List[str]]:

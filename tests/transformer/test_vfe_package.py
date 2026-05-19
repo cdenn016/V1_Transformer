@@ -414,6 +414,94 @@ class TestLearnableKappa:
             assert block.e_step.log_kappa.grad is not None
 
 
+class TestKappaPerHead:
+    """Per-head learnable kappa (Wave 11, 2026-05-19). Each gauge head
+    gets its own log_kappa_per_head[h], implementing the manuscript's
+    eq:per_head_temperature τ_h = κ_h · √d_head verbatim."""
+
+    def _make_cfg(self, **overrides):
+        base = dict(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],   # 2 heads, d_head=8
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+            use_rope=False,
+            norm_type='layernorm',
+            mask_self_attention=False,
+            use_prior_bank=False,
+            E_learnable_alpha=False,
+            learnable_kappa=True,
+            per_head_softmax=True,
+            kappa_per_head=True,
+        )
+        base.update(overrides)
+        return VFEConfig(**base)
+
+    def test_creates_per_head_parameter(self):
+        """kappa_per_head=True creates log_kappa_per_head of shape (H,)."""
+        from transformer.vfe.e_step import VFEEStep
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        es = m.stack.blocks[0].e_step
+        assert hasattr(es, 'log_kappa_per_head')
+        assert isinstance(es.log_kappa_per_head, torch.nn.Parameter)
+        assert es.log_kappa_per_head.shape == (len(cfg.irrep_dims),)
+        # The scalar log_kappa parameter must NOT exist when per-head is on
+        # (mutually exclusive parameter creation in __init__).
+        assert not hasattr(es, 'log_kappa')
+
+    def test_effective_kappa_returns_per_head_tensor(self):
+        """effective_kappa is a (H,) tensor under kappa_per_head=True."""
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        es = m.stack.blocks[0].e_step
+        k = es.effective_kappa
+        assert isinstance(k, torch.Tensor)
+        assert k.shape == (len(cfg.irrep_dims),)
+        # Default init: all heads at log(cfg.kappa) → all exp(...) == cfg.kappa
+        assert torch.allclose(k, torch.full_like(k, cfg.kappa), atol=1e-6)
+
+    def test_gradient_flows_per_head(self):
+        """loss.backward() produces a (H,) gradient on log_kappa_per_head
+        with at least two heads receiving distinct nonzero gradients."""
+        torch.manual_seed(0)
+        cfg = self._make_cfg()
+        m = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (4, 8))
+        targets = torch.randint(0, cfg.vocab_size, (4, 8))
+        _, loss, _ = m(token_ids, targets=targets)
+        loss.backward()
+        es = m.stack.blocks[0].e_step
+        g = es.log_kappa_per_head.grad
+        assert g is not None and g.shape == (len(cfg.irrep_dims),)
+        assert g.abs().min().item() > 1e-12, (
+            "At least one head's log_kappa_per_head received zero gradient — "
+            "per-head aux loss is not routing per-head signal."
+        )
+        # The two heads must not be carbon-copies under random init —
+        # would mean the gradients aren't actually per-head.
+        assert not torch.allclose(g[0], g[1], atol=0.0), (
+            "Both heads received identical gradients — the per-head "
+            "dispatch is not distinguishing them."
+        )
+
+    def test_post_init_rejects_without_learnable_kappa(self):
+        with pytest.raises(ValueError, match='kappa_per_head=True requires learnable_kappa=True'):
+            self._make_cfg(learnable_kappa=False)
+
+    def test_post_init_rejects_without_per_head_softmax(self):
+        with pytest.raises(ValueError, match='kappa_per_head=True requires per_head_softmax=True'):
+            self._make_cfg(per_head_softmax=False)
+
+    def test_post_init_rejects_single_head(self):
+        with pytest.raises(ValueError, match='requires more than one gauge'):
+            self._make_cfg(irrep_spec=[('l0', 1, 16)])  # 1 head, d=16
+
+
 class TestMHyperLrActuallyMovesParams:
     """Tripwire for the m_hyper_lr no-op regression (2026-05-18).
 
