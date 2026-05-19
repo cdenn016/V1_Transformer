@@ -1,13 +1,23 @@
 """
-VFEPriorBank: gauge-fixed orbit parameterization for encode and decode.
+VFEPriorBank: per-token Gaussian prior bank for encode and decode.
 
-All V token priors are gauge transforms of a single base prior:
-    pi_v = A_v . pi_0,  A_v = exp(psi_v . G)
+Two parameterizations selected by ``cfg.gauge_fixed_priors``:
+
+    gauge_fixed_priors=True (default):
+        pi_v = A_v . pi_0,  A_v = exp(psi_v . G)
+        Single universal Gaussian (base_mu, base_log_sigma); per-token gauge
+        frame phi_v rotates the orbit. Per-token capacity = V * n_gen.
+
+    gauge_fixed_priors=False:
+        mu_v, sigma_v looked up directly per token. The gauge frame phi_v is
+        retained per token for cross-token transport (Omega_ij used in
+        attention and stack transport), not for prior construction.
+        Per-token capacity = V * (2K + n_gen).
 
 Encode: token_ids -> BeliefState (mu, sigma, phi)
 Decode: BeliefState -> logits = -KL(q* || pi_v) / tau
 
-Law 3 enforced: same Gaussian manifold for encode, infer, and decode.
+Law 3 (same Gaussian manifold for encode, infer, decode) holds in both modes.
 """
 
 from __future__ import annotations
@@ -30,23 +40,38 @@ from transformer.core.gauge_utils import (
 
 
 class VFEPriorBank(nn.Module):
-    r"""Gauge-fixed prior bank: encode tokens to Gaussian beliefs, decode beliefs to logits.
+    r"""Per-token Gaussian prior bank: encode tokens to beliefs, decode beliefs to logits.
 
-    Learnable parameters:
-        - ``base_mu`` :math:`(K,)` — shared base prior mean
-        - ``base_log_sigma`` :math:`(K,)` — shared base prior log-variance
-        - ``phi_embed`` :math:`(V, n_{\text{gen}})` — per-token Lie algebra coordinates
+    Selected at construction by ``cfg.gauge_fixed_priors``.
 
-    The prior for token :math:`v` is:
+    Gauge-fixed mode (``gauge_fixed_priors=True``):
+        Learnable parameters:
+            - ``base_mu`` :math:`(K,)` — shared base prior mean
+            - ``base_log_sigma`` :math:`(K,)` — shared base prior log-variance
+            - ``phi_embed`` :math:`(V, n_{\text{gen}})` — per-token Lie algebra coordinates
 
-    .. math::
-        \pi_v = A_v \triangleright \pi_0, \quad
-        A_v = \exp(\psi_v \cdot G), \quad
-        \mu_v = A_v \mu_0, \quad
-        \Sigma_v = A_v \,\text{diag}(\sigma_0)\, A_v^\top
+        The prior for token :math:`v` is:
+
+        .. math::
+            \pi_v = A_v \triangleright \pi_0, \quad
+            A_v = \exp(\psi_v \cdot G), \quad
+            \mu_v = A_v \mu_0, \quad
+            \Sigma_v = A_v \,\text{diag}(\sigma_0)\, A_v^\top
+
+    Direct mode (``gauge_fixed_priors=False``):
+        Learnable parameters:
+            - ``mu_embed`` :math:`(V, K)` — per-token prior mean
+            - ``sigma_log_embed`` :math:`(V, K)` — per-token log-variance (diagonal)
+            - ``phi_embed`` :math:`(V, n_{\text{gen}})` — per-token Lie algebra coordinates
+
+        The prior for token :math:`v` is :math:`\mu_v = \mu_{\text{embed}}[v]`,
+        :math:`\Sigma_v = \text{diag}(\exp(\sigma_{\log}[v]))`. The gauge frame
+        :math:`\phi_v` is retained for cross-token transport but does NOT enter
+        prior construction. Full-covariance mode embeds the diagonal into a
+        block-diagonal :math:`(K, K)` matrix.
 
     Args:
-        cfg: VFEConfig with vocab_size, embed_dim, irrep_spec, etc.
+        cfg: VFEConfig with vocab_size, embed_dim, irrep_spec, gauge_fixed_priors.
         generators: ``(n_gen, K, K)`` Lie algebra generators.
     """
 
@@ -105,15 +130,32 @@ class VFEPriorBank(nn.Module):
             self._phi_trace_vec = None
             self._phi_trace_vec_norm_sq = None
 
-        # Base prior: shared across all tokens (gauge-orbit parameterization).
+        # Prior parameterization: gauge-fixed (shared base + per-token gauge
+        # orbit) vs direct (per-token (mu_v, sigma_v) lookup). Both modes keep
+        # phi_embed as the per-token gauge frame used for cross-token transport
+        # (Omega_ij in attention and stack handoff). Only the prior *value*
+        # construction differs.
         # mu_init_std=0 is honored literally (degenerate prior at zero) — the
         # previous silent rescale to sqrt(log(V)/K) corrupted sweep results
         # because mu_init_std=0 in the ablation suite then mapped to ~0.74.
-        self.base_mu = nn.Parameter(torch.randn(K) * cfg.mu_init_std)
+        self.gauge_fixed_priors = getattr(cfg, 'gauge_fixed_priors', True)
         sigma_init_log = math.log(cfg.sigma_init) if cfg.sigma_init > 0 else 0.0
-        self.base_log_sigma = nn.Parameter(torch.full((K,), sigma_init_log))
+        if self.gauge_fixed_priors:
+            # Shared base prior (mu_0, sigma_0) lifted to per-token (mu_v, sigma_v)
+            # via A_v = exp(phi_v . G).
+            self.base_mu = nn.Parameter(torch.randn(K) * cfg.mu_init_std)
+            self.base_log_sigma = nn.Parameter(torch.full((K,), sigma_init_log))
+        else:
+            # Per-token Gaussian prior directly. ~V*K + V*K = 2VK learnable
+            # scalars on top of phi_embed's V*n_gen.
+            self.mu_embed = nn.Embedding(V, K)
+            nn.init.normal_(self.mu_embed.weight, mean=0.0, std=cfg.mu_init_std)
+            self.sigma_log_embed = nn.Embedding(V, K)
+            with torch.no_grad():
+                self.sigma_log_embed.weight.fill_(sigma_init_log)
 
-        # Per-token gauge frames in Lie algebra
+        # Per-token gauge frames in Lie algebra (used in both modes — drives
+        # prior in gauge-fixed mode, drives transport-only in direct mode).
         self.phi_embed = nn.Embedding(V, n_gen)
         nn.init.normal_(self.phi_embed.weight, mean=0.0, std=cfg.phi_scale)
 
@@ -136,9 +178,41 @@ class VFEPriorBank(nn.Module):
 
     @property
     def base_sigma(self) -> torch.Tensor:
-        """Base prior variance (always positive), shape ``(K,)``."""
+        """Base prior variance (always positive), shape ``(K,)``.
+
+        Only meaningful when ``gauge_fixed_priors=True``. Raises ``AttributeError``
+        under direct-mode parameterization (use ``sigma_log_embed`` instead).
+        """
         p = self.base_log_sigma
         return torch.exp(p.float() if p.dtype != torch.float32 else p).clamp(0.01, self.sigma_max)
+
+    def _per_token_priors(
+        self, token_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        r"""Direct-mode prior lookup. Returns (mu_v, sigma_v_diag).
+
+        Used when ``gauge_fixed_priors=False``. mu_v is shape ``(..., K)``,
+        sigma_v is diagonal shape ``(..., K)``. Caller is responsible for
+        lifting sigma_v to full ``(..., K, K)`` if ``diagonal_covariance=False``.
+        """
+        mu = self.mu_embed(token_ids)                               # (..., K)
+        log_sigma = self.sigma_log_embed(token_ids)                 # (..., K)
+        sigma_diag = torch.exp(log_sigma.float()).clamp(self.eps, self.sigma_max)
+        return mu, sigma_diag
+
+    def _diag_to_full_block(self, sigma_diag: torch.Tensor) -> torch.Tensor:
+        r"""Embed a diagonal sigma ``(..., K)`` into full block-diagonal ``(..., K, K)``.
+
+        Used in direct mode when ``diagonal_covariance=False`` to match the
+        full-cov tensor shape downstream consumers expect. Because the prior
+        is diagonal in direct mode, the off-diagonal blocks are zero.
+        """
+        K = self.embed_dim
+        batch_shape = sigma_diag.shape[:-1]
+        sigma_full = torch.zeros(*batch_shape, K, K, device=sigma_diag.device, dtype=sigma_diag.dtype)
+        diag_idx = torch.arange(K, device=sigma_diag.device)
+        sigma_full[..., diag_idx, diag_idx] = sigma_diag
+        return sigma_full
 
     def invalidate_cache(self) -> None:
         """Call at the start of each forward pass to clear decode cache."""
@@ -283,8 +357,9 @@ class VFEPriorBank(nn.Module):
     def encode(self, token_ids: torch.Tensor) -> BeliefState:
         r"""Encode tokens to initial Gaussian beliefs.
 
-        Maps token IDs to :math:`(\mu_v, \Sigma_v, \phi_v)` via the gauge-fixed
-        orbit parameterization.
+        Gauge-fixed mode: :math:`(\mu_v, \Sigma_v) = (A_v \mu_0, A_v \text{diag}(\sigma_0) A_v^\top)`.
+        Direct mode: :math:`\mu_v, \sigma_v` looked up from per-token embeddings;
+        :math:`\phi_v` is returned for transport but does not enter the prior.
 
         Args:
             token_ids: ``(B, N)`` input token IDs.
@@ -295,8 +370,15 @@ class VFEPriorBank(nn.Module):
         """
         phi = self.phi_embed(token_ids)  # (B, N, n_gen)
         phi = self._apply_phi_det_control(phi)
-        block_exp_pairs = self._compute_block_exp_pairs(phi)
-        mu_p, sigma_p = self._apply_gauge_transform(block_exp_pairs)
+        if self.gauge_fixed_priors:
+            block_exp_pairs = self._compute_block_exp_pairs(phi)
+            mu_p, sigma_p = self._apply_gauge_transform(block_exp_pairs)
+        else:
+            mu_p, sigma_diag = self._per_token_priors(token_ids)
+            if self.diagonal_covariance:
+                sigma_p = sigma_diag
+            else:
+                sigma_p = self._diag_to_full_block(sigma_diag)
         return BeliefState(mu=mu_p, sigma=sigma_p, phi=phi)
 
     def decode(
@@ -334,14 +416,18 @@ class VFEPriorBank(nn.Module):
         is_full_cov = sigma_q.dim() == 4
 
         # Materialize all V priors (uses diagonal even for full-cov model,
-        # since decode is diagonal KL for efficiency)
+        # since decode is diagonal KL for efficiency). In direct mode, the
+        # all-V materialization is just a parameter read; phi is not used.
         if self._decode_cache is not None:
             mu_p, sigma_p = self._decode_cache
-        else:
+        elif self.gauge_fixed_priors:
             phi_all = self.phi_embed(self._all_token_ids)  # (V, n_gen)
             phi_all = self._apply_phi_det_control(phi_all)
             block_exp_pairs = self._compute_block_exp_pairs(phi_all, only_forward=True)
             mu_p, sigma_p = self._apply_gauge_transform(block_exp_pairs)
+            self._decode_cache = (mu_p, sigma_p)
+        else:
+            mu_p, sigma_p = self._per_token_priors(self._all_token_ids)  # (V,K), (V,K)
             self._decode_cache = (mu_p, sigma_p)
 
         # Extract diagonal for KL computation (decode always uses diagonal KL
