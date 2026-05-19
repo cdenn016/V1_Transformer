@@ -78,6 +78,15 @@ class BlockConfig:
     attention_window: int =       64          # Window size (unused, kept for API compat)
     
     mask_self_attention: bool =   False   # Prevent KL(q_i||q_i)=0 collapse
+    # F4.10: opt-in causal-lower-triangle fast path in the fused E-step kernel
+    # _fused_attention_and_vfe_gradients_block_diag. When True AND the caller
+    # passes a strict lower-triangular causal mask, the kernel computes only
+    # the lower-triangle pairs (j ≤ i, M = N(N+1)/2) inside the per-block loop
+    # and scatters them into the dense (B,N,N,K) accumulators. Bit-identical
+    # to the dense path for β, grad_μ, grad_σ; only kl_matrix's upper triangle
+    # differs (real KL vs zero). Default False. Validated once per
+    # VariationalFFNDynamic.forward() to avoid per-iteration host syncs.
+    causal_lower_triangle: bool = False
     use_output_projection: bool = False  # W_O ∈ R^{K×K} after multi-head concat.
                                          # Default False: the PriorBank decode
                                          # expects a gauge-covariant belief, and
@@ -569,6 +578,9 @@ class BlockConfig:
             # into the residual stream each layer.  Training configs that
             # want the unmasked behavior should set this explicitly.
             mask_self_attention=config.get('mask_self_attention', True),
+            # F4.10: opt-in causal-lower-triangle fast path in the fused
+            # E-step kernel; default False preserves the dense behavior.
+            causal_lower_triangle=config.get('causal_lower_triangle', False),
             use_output_projection=config.get('use_output_projection', False),
             use_equivariant_head_mixer=config.get('use_equivariant_head_mixer', False),
             use_block_equivariant_mixer=config.get('use_block_equivariant_mixer', False),

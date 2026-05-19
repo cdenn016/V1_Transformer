@@ -889,3 +889,113 @@ class TestCausalLowerTriangleParity:
         assert torch.isfinite(gmu).all()
         assert torch.isfinite(gsig).all()
         assert kl is not None and torch.isfinite(kl).all()
+
+
+class TestCausalLowerTriangleLegacyWiring:
+    """F4.10: integration tests for the legacy VariationalFFNDynamic path
+    that calls the fused kernel at variational_ffn.py:1992. Verifies that
+    the toggle propagates from BlockConfig/kwargs through to the kernel,
+    that forward() finishes with finite outputs, and that the
+    once-per-forward mask validation rejects non-causal masks.
+    """
+
+    def _make_legacy_ffn(self, K, n_gen, causal_lower_triangle):
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+        torch.manual_seed(7)
+        generators = torch.zeros(n_gen, K, K)
+        for g in range(min(n_gen, K * K)):
+            i, j = divmod(g, K)
+            if i < K and j < K:
+                generators[g, i, j] = 1.0
+        return VariationalFFNDynamic(
+            embed_dim=K,
+            generators=generators,
+            alpha=0.1,
+            lambda_belief=1.0,
+            kappa=1.0,
+            n_iterations=2,
+            diagonal_covariance=True,
+            irrep_dims=[K],
+            mask_self_attention=False,
+            causal_lower_triangle=causal_lower_triangle,
+        )
+
+    def test_legacy_path_runs_with_toggle_on(self):
+        torch.manual_seed(1)
+        B, N, K, n_gen = 2, 6, 4, 16
+        ffn = self._make_legacy_ffn(K, n_gen, causal_lower_triangle=True)
+        assert ffn.causal_lower_triangle is True
+
+        mu = torch.randn(B, N, K)
+        sigma = torch.rand(B, N, K).clamp(min=0.3) + 0.2
+        phi = torch.randn(B, N, n_gen) * 0.05
+        mu_prior = torch.randn(B, N, K)
+        sigma_prior = torch.rand(B, N, K).clamp(min=0.3) + 0.3
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1).contiguous()
+
+        out = ffn(
+            mu=mu, sigma=sigma, phi=phi,
+            mu_prior=mu_prior, sigma_prior=sigma_prior,
+            mask=mask,
+        )
+        mu_out = out[0] if isinstance(out, tuple) else out
+        assert torch.isfinite(mu_out).all()
+
+    def test_legacy_path_raises_on_none_mask_with_toggle(self):
+        ffn = self._make_legacy_ffn(K=4, n_gen=16, causal_lower_triangle=True)
+        B, N, K, n_gen = 1, 4, 4, 16
+        mu = torch.randn(B, N, K)
+        sigma = torch.rand(B, N, K).clamp(min=0.3) + 0.2
+        phi = torch.randn(B, N, n_gen) * 0.05
+        mu_prior = torch.randn(B, N, K)
+        sigma_prior = torch.rand(B, N, K).clamp(min=0.3) + 0.3
+
+        with pytest.raises(ValueError, match=r"causal_lower_triangle=True requires a non-None"):
+            ffn(
+                mu=mu, sigma=sigma, phi=phi,
+                mu_prior=mu_prior, sigma_prior=sigma_prior,
+                mask=None,
+            )
+
+    def test_legacy_path_raises_on_non_causal_mask_with_toggle(self):
+        ffn = self._make_legacy_ffn(K=4, n_gen=16, causal_lower_triangle=True)
+        B, N, K, n_gen = 1, 4, 4, 16
+        mu = torch.randn(B, N, K)
+        sigma = torch.rand(B, N, K).clamp(min=0.3) + 0.2
+        phi = torch.randn(B, N, n_gen) * 0.05
+        mu_prior = torch.randn(B, N, K)
+        sigma_prior = torch.rand(B, N, K).clamp(min=0.3) + 0.3
+        # All-ones (non-causal) mask should fail the lower-triangular check.
+        mask = torch.ones(B, N, N)
+
+        with pytest.raises(ValueError, match=r"strict lower-triangular mask"):
+            ffn(
+                mu=mu, sigma=sigma, phi=phi,
+                mu_prior=mu_prior, sigma_prior=sigma_prior,
+                mask=mask,
+            )
+
+    def test_legacy_path_default_off_unchanged(self):
+        """Default causal_lower_triangle=False: dense path, no validation,
+        non-causal mask is accepted (regression guard for users not opting
+        into the fast path).
+        """
+        torch.manual_seed(2)
+        B, N, K, n_gen = 1, 4, 4, 16
+        ffn = self._make_legacy_ffn(K, n_gen, causal_lower_triangle=False)
+        assert ffn.causal_lower_triangle is False
+
+        mu = torch.randn(B, N, K)
+        sigma = torch.rand(B, N, K).clamp(min=0.3) + 0.2
+        phi = torch.randn(B, N, n_gen) * 0.05
+        mu_prior = torch.randn(B, N, K)
+        sigma_prior = torch.rand(B, N, K).clamp(min=0.3) + 0.3
+        mask = torch.ones(B, N, N)  # non-causal: must NOT raise under toggle=False
+
+        out = ffn(
+            mu=mu, sigma=sigma, phi=phi,
+            mu_prior=mu_prior, sigma_prior=sigma_prior,
+            mask=mask,
+        )
+        mu_out = out[0] if isinstance(out, tuple) else out
+        assert torch.isfinite(mu_out).all()
