@@ -1404,6 +1404,11 @@ class VFEEStep(nn.Module):
                 self._last_attention_state = {
                     'mu_q': mu.detach(),
                     'sigma_q': _last_sigma,
+                    # Post-E-step phi for cross-coupling phi_energy_partition
+                    # and any holonomy/transport-norm diagnostic that needs the
+                    # gauge coordinates directly. Cheap: phi is already a leaf
+                    # tensor at this point.
+                    'phi': phi.detach(),
                     'block_exp_pairs': [
                         (
                             p[0].detach() if p[0] is not None else None,

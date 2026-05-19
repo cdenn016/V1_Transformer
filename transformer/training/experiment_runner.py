@@ -715,6 +715,190 @@ class PublicationTrainer(FastTrainer):
 
         self.model.train()
 
+    def _build_cross_coupling_adapter(self):
+        r"""Build a thin namespace adapter exposing the VFEConfig-shaped surface
+        that ``transformer.vfe.cross_coupling_metrics`` and
+        ``cross_coupling_viz`` expect, sourced from the legacy
+        ``GaugeTransformerLM``.
+
+        Returns:
+            A ``types.SimpleNamespace`` with the attributes:
+            ``cross_couplings``, ``is_cross_coupled``, ``irrep_spec``,
+            ``effective_block_dims``, ``super_block_dims``,
+            ``super_block_head_groups``, ``_cross_head_perm``, ``embed_dim``.
+            None when cross-coupling is not active (caller short-circuits).
+        """
+        import types
+        model = self.model
+        cross_couplings = list(getattr(model, '_cross_couplings', []) or [])
+        if not cross_couplings:
+            return None
+        irrep_spec = self.config.config.get('irrep_spec', None) \
+            if hasattr(self.config, 'config') else None
+        # ExperimentConfig stores its raw dict on ``self.config`` directly.
+        if irrep_spec is None and hasattr(self.config, 'irrep_spec'):
+            irrep_spec = self.config.irrep_spec
+        if irrep_spec is None:
+            # Last-resort fallback: derive from the model's block dims.
+            n_heads = sum(getattr(model, '_super_block_head_groups', [[]]) or [], [])
+            irrep_spec = [('l0', len(n_heads), model.config['embed_dim'] // max(len(n_heads), 1))]
+        super_block_dims = getattr(model, '_super_block_dims', None)
+        super_block_head_groups = getattr(model, '_super_block_head_groups', None)
+        # irrep_dims flattened from irrep_spec (per-head dims).
+        irrep_dims_flat: List[int] = []
+        for _, mult, dim in irrep_spec:
+            irrep_dims_flat.extend([dim] * mult)
+        return types.SimpleNamespace(
+            cross_couplings=cross_couplings,
+            is_cross_coupled=True,
+            irrep_spec=irrep_spec,
+            embed_dim=self.config.embed_dim
+                if hasattr(self.config, 'embed_dim')
+                else model.config.get('embed_dim'),
+            super_block_dims=super_block_dims,
+            super_block_head_groups=super_block_head_groups,
+            effective_block_dims=super_block_dims or irrep_dims_flat,
+            irrep_dims=irrep_dims_flat,
+            _cross_head_perm=getattr(model, '_cross_head_perm', None),
+        )
+
+    def save_cross_coupling_visualization(
+        self,
+        step: int,
+        batch: Tuple[torch.Tensor, torch.Tensor],
+    ) -> None:
+        r"""Save cross-head coupling diagnostics + figures at ``step``.
+
+        No-op when ``config['cross_couplings']`` is empty or matplotlib /
+        the metrics modules are unavailable. Mirrors the /vfe trainer's
+        ``_save_cross_coupling_diagnostics``: the same set of figures (with
+        per-layer aggregates where possible) plus a JSON of scalar / per-
+        super-block-array metrics.
+
+        Capture surface (legacy):
+        - ``phi``: encode-time gauge frames from
+          ``model.gauge_token_embedding.phi_embed.weight[token_ids]``. The
+          full post-positional-BCH composition is the value the kernels
+          actually use, but encode-time φ is a faithful representative for
+          the diagonal-vs-cross energy partition (positional BCH adds the
+          same positional term to every layer; the partition shifts but the
+          ratio is preserved at init and tracks training).
+        - ``sigma``: belief sigma from ``forward_with_attention``'s
+          downstream state when available; falls back to the prior σ from
+          the embedding when state capture is unavailable.
+        - ``omega`` / ``beta_per_block`` / ``kl``: from
+          ``forward_with_attention(input_ids)``'s attn_info.
+        """
+        cfg_adapter = self._build_cross_coupling_adapter()
+        if cfg_adapter is None or not hasattr(self.config, 'checkpoint_dir'):
+            return
+        try:
+            import json as _json
+            import numpy as _np
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as _plt
+            from transformer.vfe import cross_coupling_metrics as _ccm
+            from transformer.vfe import cross_coupling_viz as _ccv
+        except ImportError as exc:
+            logger.warning(
+                f"  cross-coupling diagnostics: import failed ({exc}); skipping."
+            )
+            return
+
+        try:
+            self.model.eval()
+            input_ids, _ = batch
+            input_ids = input_ids[:1].to(self.device)
+
+            # Encode-time phi: pull from the gauge token embedding.
+            try:
+                phi = self.model.gauge_token_embedding.phi_embed(input_ids)
+            except (AttributeError, RuntimeError):
+                phi = None
+
+            # Forward with attention for beta / kl / sigma.
+            omega_full = None
+            beta_per_block = None
+            sigma = None
+            with torch.no_grad():
+                if hasattr(self.model, 'forward_with_attention'):
+                    _, attn_info = self.model.forward_with_attention(
+                        input_ids, targets=None,
+                    )
+                    beta = attn_info.get('beta')
+                    if beta is not None:
+                        # Normalize beta to (B, N, N, H_super).
+                        if beta.dim() == 5:
+                            beta = beta[0]  # use layer 0 representative
+                        if beta.dim() == 4:
+                            # (B, n_heads, N, N) → (B, N, N, n_heads)
+                            beta_per_block = beta.permute(0, 2, 3, 1).contiguous()
+
+            out_dir = self.config.checkpoint_dir / 'cross_coupling'
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generator sparsity heatmap (basis-level, model-state-free).
+            fig = _ccv.plot_generator_sparsity(self.model.generators, cfg_adapter)
+            fig.savefig(
+                out_dir / f'cross_coupling_step_{step:06d}_generator_sparsity.png',
+                bbox_inches='tight', dpi=200,
+            )
+            _plt.close(fig)
+
+            # Super-block adjacency graph (structural).
+            fig = _ccv.plot_super_block_graph(cfg_adapter)
+            fig.savefig(
+                out_dir / f'cross_coupling_step_{step:06d}_super_block_graph.png',
+                bbox_inches='tight', dpi=200,
+            )
+            _plt.close(fig)
+
+            # Phi-energy partition: encode-time φ across the batch.
+            metrics_summary: Dict[str, Any] = {
+                'step': step,
+                'cross_couplings': list(cfg_adapter.cross_couplings),
+                'super_block_dims': cfg_adapter.super_block_dims,
+                'super_block_head_groups': cfg_adapter.super_block_head_groups,
+            }
+            if phi is not None:
+                if phi.dim() == 2:
+                    phi = phi.unsqueeze(0)
+                phi_energy = _ccm.phi_energy_partition(phi.detach(), cfg_adapter)
+                metrics_summary['phi_energy_partition'] = phi_energy
+                fig = _ccv.plot_phi_energy_partition([phi_energy], cfg_adapter)
+                fig.savefig(
+                    out_dir / f'cross_coupling_step_{step:06d}_phi_energy.png',
+                    bbox_inches='tight', dpi=200,
+                )
+                _plt.close(fig)
+
+            # Per-super-block attention entropy if beta is available.
+            if beta_per_block is not None:
+                attn_ent = _ccm.per_super_block_attention_entropy(
+                    beta_per_block, cfg_adapter,
+                )
+                metrics_summary['per_super_block_attention_entropy'] = attn_ent.tolist()
+                fig = _ccv.plot_super_block_diagnostics(
+                    attention_entropy=attn_ent, cfg=cfg_adapter,
+                )
+                fig.savefig(
+                    out_dir / f'cross_coupling_step_{step:06d}_super_block_diagnostics.png',
+                    bbox_inches='tight', dpi=200,
+                )
+                _plt.close(fig)
+
+            with open(out_dir / f'cross_coupling_step_{step:06d}.json', 'w') as fh:
+                _json.dump(metrics_summary, fh, indent=2, default=str)
+
+            logger.info(
+                f"  cross-coupling diagnostics saved at step {step} under {out_dir}"
+            )
+        except (OSError, ValueError, RuntimeError, IndexError, KeyError) as exc:
+            logger.exception("  cross-coupling diagnostics failed: %s", exc)
+        finally:
+            self.model.train()
+
     def _run_forward_and_backward(
         self,
         input_ids: torch.Tensor,
@@ -1513,6 +1697,9 @@ class PublicationTrainer(FastTrainer):
                 try:
                     sample_batch = next(iter(self.val_loader))
                     self.save_attention_visualization(step + 1, sample_batch)
+                    # Cross-coupling diagnostics + figures (no-op when
+                    # config['cross_couplings'] is empty).
+                    self.save_cross_coupling_visualization(step + 1, sample_batch)
                 except StopIteration:
                     pass
 
