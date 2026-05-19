@@ -72,7 +72,12 @@ class VFEConfig:
 
     # === Gauge geometry ===
     gauge_group: Literal['SO3', 'SON', 'GLK'] = 'GLK'
-    phi_preconditioner: Literal['clip', 'cartan', 'killing', 'pullback'] = 'killing'
+    phi_preconditioner: Literal['clip', 'cartan', 'killing'] = 'killing'
+    # 'pullback' is intentionally absent: the upstream call chain in
+    # `_update_phi` does not thread the `structure_constants` tensor that
+    # `apply_pullback_natural_gradient` requires, so selecting it raised
+    # TypeError at runtime. Re-enable only after wiring structure_constants
+    # through `VFEEStep.__init__` and `precondition_phi_gradient`.
     # GL(K) determinant control (no-op for SO(N), tr(G)=0 already). Pick at most one:
     phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
     phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
@@ -321,6 +326,28 @@ class VFEConfig:
                     stacklevel=2,
                 )
                 self.use_autograd_mu_sigma = True
+
+        # --- phi_preconditioner extra guard --------------------------------
+        # The Literal enum already excludes 'pullback', so a static type
+        # checker rejects it. Re-check at runtime in case the user constructs
+        # the dataclass with a string that bypasses the Literal narrowing.
+        if self.phi_preconditioner not in ('clip', 'cartan', 'killing'):
+            raise ValueError(
+                f"phi_preconditioner={self.phi_preconditioner!r} is not supported. "
+                f"Valid options: 'clip', 'cartan', 'killing'. 'pullback' was "
+                f"removed because the call chain in `VFEEStep._update_phi` does "
+                f"not thread the structure_constants tensor that "
+                f"apply_pullback_natural_gradient requires."
+            )
+
+        # --- non_flat_tile_size reserved future field ----------------------
+        if self.non_flat_tile_size != 0:
+            raise NotImplementedError(
+                f"non_flat_tile_size={self.non_flat_tile_size} is reserved for "
+                "future j-axis chunked aggregation; the tiled path is not yet "
+                "implemented. Set non_flat_tile_size=0 (the default) to use the "
+                "unchunked aggregation, or remove the field from your config."
+            )
 
         # --- Non-flat transport constraints --------------------------------
         if self.use_non_flat_transport:

@@ -7,6 +7,27 @@ Core thesis: attention weights are a Gibbs kernel on the statistical manifold
 with gauge transport, not produced by learned W_Q, W_K projections.
 
     beta_ij = softmax(-KL(q_i || Omega_ij[q_j]) / kappa)
+
+Implementation note — structural self-attractor at i = j.
+==========================================================
+Because ``Omega_ii = exp(phi_i) . exp(-phi_i) = I`` for every token (the
+transport from a token to itself is the identity, independent of phi), the
+self-pair KL is structurally zero:
+
+    KL(q_i || Omega_ii q_i) = KL(q_i || q_i) = 0.
+
+Under softmax(-KL / (kappa * sqrt(K))) the diagonal logit is therefore the
+largest (or tied for largest) entry in every row, so unmasked self-attention
+saturates onto the diagonal. The active ``train_vfe.py`` config sets
+``mask_self_attention: False`` so the diagonal is allowed; the alternative
+``mask_self_attention: True`` zeros the diagonal logit, which avoids the
+self-attractor at the cost of changing the row-Lagrangian normalisation.
+The standard dot-product attention literature does not have this issue
+because ``q_i . k_i`` is not structurally zero.
+
+Treat the unmasked diagonal as a "stay-put" gate (mass that doesn't propagate
+through transport); document that empirical results under
+``mask_self_attention=False`` rely on it.
 """
 
 from typing import Optional, List, Tuple
@@ -17,14 +38,24 @@ from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
 from transformer.core.attention import compute_attention_weights
 
 
-# Cache keyed by generator tensor identity (id) — avoids per-call GPU sync.
-# `generators` is a registered buffer set once at module construction; its
-# skew-symmetry property never changes after init. Bounded to ``_SKEW_CACHE_MAX``
-# entries with FIFO eviction so the cache cannot grow unboundedly across
-# many-model sessions (e.g. ablation suites constructing hundreds of models
-# in one process). With a small live set, ``id()`` reuse after GC is harmless.
+# Cache keyed by a content fingerprint of the generator bank — avoids
+# per-call GPU sync. `generators` is a registered buffer set once at module
+# construction; its skew-symmetry property never changes after init.
+#
+# The fingerprint `(data_ptr, shape, dtype, device)` is hazard-free across
+# GC, in contrast to keying on `id(generators)` which Python may reuse for
+# an unrelated tensor after the original is collected — that reuse would
+# silently inherit a stale skew verdict.
+#
+# Bounded to ``_SKEW_CACHE_MAX`` entries with FIFO eviction so the cache
+# cannot grow unboundedly across many-model sessions (e.g. ablation suites
+# constructing hundreds of models in one process).
 _SKEW_CACHE: dict = {}
 _SKEW_CACHE_MAX = 16
+
+
+def _skew_cache_key(g: torch.Tensor) -> tuple:
+    return (g.data_ptr(), tuple(g.shape), g.dtype, str(g.device))
 
 
 def compute_gauge_transport(
@@ -51,7 +82,7 @@ def compute_gauge_transport(
     # Detect skew-symmetric generators (SO(N)) across ALL generators
     # (previously checked only generators[0], which mis-classifies mixed sets).
     if skew_symmetric is None:
-        _key = id(generators)
+        _key = _skew_cache_key(generators)
         _skew = _SKEW_CACHE.get(_key)
         if _skew is None:
             _skew = bool(torch.allclose(

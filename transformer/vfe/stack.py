@@ -36,7 +36,7 @@ desired) to recover the canonical scheme.
 
 from __future__ import annotations
 
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Callable, Optional, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -46,6 +46,14 @@ if TYPE_CHECKING:
 
 from transformer.core.types import BeliefState
 from transformer.vfe.block import VFEBlock
+
+# Active-inference callback signature: takes the current (μ, Σ) and
+# returns optional (Δμ, ΔΣ) corrections. Concrete implementation is
+# `VFEActiveInference.forward` (transformer/vfe/active_inference.py).
+ActiveInferenceFn = Callable[
+    [torch.Tensor, torch.Tensor],
+    Tuple[Optional[torch.Tensor], Optional[torch.Tensor]],
+]
 
 
 class VFEStack(nn.Module):
@@ -70,7 +78,7 @@ class VFEStack(nn.Module):
         beliefs: BeliefState,
         initial_priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: Optional[Callable] = None,
+        active_inference_fn: Optional[ActiveInferenceFn] = None,
     ) -> BeliefState:
         r"""Forward through all blocks with cross-layer prior handoff.
 
@@ -110,6 +118,14 @@ class VFEStack(nn.Module):
             rho_sigma = self.prior_handoff_sigma
             if rho_sigma == 0.0:
                 new_prior_sigma = initial_priors.sigma  # frozen (legacy default)
+                # Apply the same [1e-4, sigma_max] clamp the rho>0 branch
+                # applies, so the safety envelope doesn't switch silently
+                # when the user moves rho_sigma off 0. Diagonal path only;
+                # full-cov frozen embedding stays as-is (eigh+clamp on
+                # every forward would be expensive and the embedding cannot
+                # drift outside its initialization range under rho=0).
+                if new_prior_sigma.dim() == 3:
+                    new_prior_sigma = new_prior_sigma.clamp(min=1e-4, max=self.sigma_max)
             else:
                 new_prior_sigma = (1 - rho_sigma) * initial_priors.sigma + rho_sigma * beliefs.sigma
                 # Floor: prevent collapse below embedding minimum

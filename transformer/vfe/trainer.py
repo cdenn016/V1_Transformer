@@ -12,7 +12,7 @@ import math
 import time
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 
 import torch
 import torch.nn.functional as F
@@ -66,6 +66,7 @@ class VFETrainer:
     # (Optional types so downstream methods type-check with mypy).
     _metrics_tracker: "Optional[PublicationMetricsTracker]"
     _pub_tracker: "Optional[TrainingTracker]"
+    _last_val_input_ids: Optional[torch.Tensor]
 
     r"""Training loop for VFEModel with full metrics and diagnostics.
 
@@ -119,6 +120,18 @@ class VFETrainer:
         # Attention-plot scratch space — captured in evaluate(), consumed
         # in _plot_attention_patterns(). None means no eval has run yet.
         self._last_val_input_ids = None
+
+        # Per-step diagnostic gates. Default True (preserve current
+        # semantics for callers that don't manage these). The training
+        # loop flips them to False on non-log / non-eval steps so the
+        # per-forward CPU syncs and post-iteration `compute_gauge_transport`
+        # rebuild are skipped on the ~99% of steps that don't consume them.
+        self._aggregate_diagnostics_this_step: bool = True
+
+        # Initialise the per-block attention-state capture flag from the
+        # current default (True). The flag actually lives on each block's
+        # VFEEStep; the trainer toggles it on/off via helper.
+        self._set_capture_attention_state(True)
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         """Build AdamW optimizer with per-group LRs (cfg.m_*_lr)."""
@@ -328,6 +341,17 @@ class VFETrainer:
             logger.warning("sample generation failed: %s: %s", type(e).__name__, e)
             return f"<sample failed: {type(e).__name__}: {e}>"
 
+    def _set_capture_attention_state(self, value: bool) -> None:
+        """Flip every block's VFEEStep._capture_attention_state.
+
+        The post-iteration attention-state rebuild (`compute_gauge_transport`
+        on the converged φ inside `e_step.py`) is only consumed by
+        `_plot_attention_patterns`. Setting False on non-eval steps skips
+        that rebuild — a matrix-exp per token per block per forward.
+        """
+        for block in self.model.stack.blocks:
+            block.e_step._capture_attention_state = value
+
     def _collect_e_step_diagnostics(self) -> Dict[str, float]:
         """Collect E-step diagnostics aggregated across all layers.
 
@@ -357,14 +381,16 @@ class VFETrainer:
         return diag
 
     def _collect_bayesian_alpha_stats(self) -> Dict[str, float]:
-        """Collect Bayesian alpha diagnostics if E_learnable_alpha is enabled.
+        """Collect Bayesian alpha diagnostics aggregated across all layers.
 
-        Stacks all eight scalars into one tensor and pulls them back to host
-        with a single ``.tolist()`` call — previously fired eight ``.item()``
-        syncs per log interval.
+        Per-layer scalars are stacked into a single tensor per layer and
+        pulled to host with one ``.tolist()`` per layer, then averaged
+        across layers. Previously a stale early-return inside the loop
+        body reported only ``blocks[0]`` when ``n_layers>1``.
         """
         if not self.cfg.E_learnable_alpha:
             return {}
+        per_layer: List[List[float]] = []
         with torch.no_grad():
             for block in self.model.stack.blocks:
                 es = block.e_step
@@ -381,28 +407,40 @@ class VFETrainer:
                     alpha_at_zero.min(),
                     alpha_at_zero.max(),
                 ])
-                vals = packed.detach().cpu().tolist()
-                return {
-                    'alpha_c0':     vals[0],
-                    'alpha_b0':     vals[1],
-                    'alpha_c0_std': vals[2],
-                    'alpha_b0_std': vals[3],
-                    'alpha_mean':   vals[4],
-                    'alpha_std':    vals[5],
-                    'alpha_min':    vals[6],
-                    'alpha_max':    vals[7],
-                }
-        return {}
+                per_layer.append(packed.detach().cpu().tolist())
+        if not per_layer:
+            return {}
+        n = len(per_layer)
+        means = [sum(row[i] for row in per_layer) / n for i in range(8)]
+        return {
+            'alpha_c0':     means[0],
+            'alpha_b0':     means[1],
+            'alpha_c0_std': means[2],
+            'alpha_b0_std': means[3],
+            'alpha_mean':   means[4],
+            'alpha_std':    means[5],
+            'alpha_min':    means[6],
+            'alpha_max':    means[7],
+        }
 
     def _collect_kappa_stats(self) -> Dict[str, float]:
-        """Collect learnable kappa diagnostics."""
+        """Collect learnable kappa diagnostics.
+
+        Stacks per-block kappa tensors and pulls them in one
+        ``.cpu().tolist()`` — previously fired one ``.item()`` sync per
+        block per call.
+        """
         if not self.cfg.learnable_kappa:
             return {}
-        kappas = []
         with torch.no_grad():
+            tensors: List[torch.Tensor] = []
             for block in self.model.stack.blocks:
                 k = block.e_step.effective_kappa
-                kappas.append(k.item() if isinstance(k, torch.Tensor) else k)
+                if isinstance(k, torch.Tensor):
+                    tensors.append(k.detach().reshape(()))
+                else:
+                    tensors.append(torch.tensor(float(k)))
+            kappas = torch.stack(tensors).detach().cpu().tolist()
         return {
             'kappa_mean': sum(kappas) / len(kappas),
             'kappa_min': min(kappas),
@@ -618,11 +656,17 @@ class VFETrainer:
         except Exception as exc:
             logger.warning(f"  attention plot failed: {exc}")
 
-    def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    def train_step(
+        self,
+        batch: "Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]",
+    ) -> Dict[str, float]:
         r"""Single training step with full metrics collection.
 
         Args:
-            batch: Dict with 'input_ids' and 'target_ids', each (B, N).
+            batch: Either a dict with ``'input_ids'`` and ``'target_ids'``,
+                or a 2-tuple ``(input_ids, target_ids)`` (the legacy
+                TensorDataset form). Both are accepted by the dataloaders
+                this trainer consumes.
 
         Returns:
             Comprehensive metrics dict for logging and CSV output.
@@ -667,9 +711,6 @@ class VFETrainer:
         bpc = ce_val / math.log(2)
         lr = self.scheduler.get_last_lr()[0]
 
-        # Collect E-step diagnostics from model
-        e_diag = self._collect_e_step_diagnostics()
-
         # Build comprehensive metrics dict
         B, N = input_ids.shape
         metrics = {
@@ -691,14 +732,15 @@ class VFETrainer:
             'grad_norm_other': grad_norms['other'],
         }
 
-        # E-step diagnostics
-        metrics.update({f'{k}': v for k, v in e_diag.items()})
-
-        # Bayesian alpha stats
-        metrics.update(self._collect_bayesian_alpha_stats())
-
-        # Learnable kappa stats
-        metrics.update(self._collect_kappa_stats())
+        # Diagnostic aggregation (per-layer iterate + .item() syncs) only
+        # fires when the training loop has flagged this step for logging.
+        # On non-log steps the result is built but discarded by the caller,
+        # so skipping spares N_layers · (8 + 13 + 1) host syncs per step.
+        if self._aggregate_diagnostics_this_step:
+            e_diag = self._collect_e_step_diagnostics()
+            metrics.update({f'{k}': v for k, v in e_diag.items()})
+            metrics.update(self._collect_bayesian_alpha_stats())
+            metrics.update(self._collect_kappa_stats())
 
         return metrics
 
@@ -1106,8 +1148,11 @@ class VFETrainer:
             figures.plot_training_curves(self._pub_tracker)
             figures.plot_gradient_norms_split(self._pub_tracker)
             logger.info(f"Publication figures saved to {fig_dir}")
-        except Exception as e:
-            logger.warning(f"Figure generation failed: {e}")
+        except (OSError, ImportError, ValueError, RuntimeError) as e:
+            # logger.exception attaches the traceback so a real bug surfaces;
+            # the bare-Exception form previously downgraded AttributeError /
+            # TypeError programming bugs to a single WARN line.
+            logger.exception(f"Figure generation failed: {e}")
 
         # VFE dynamics dashboard from CSV
         if self._metrics_tracker is not None:
@@ -1120,8 +1165,8 @@ class VFETrainer:
                 csv_path = self.output_dir / 'metrics.csv'
                 generate_all_vfe_figures(csv_path, vfe_fig_dir)
                 logger.info(f"VFE dynamics figures saved to {vfe_fig_dir}")
-            except Exception as e:
-                logger.warning(f"VFE dynamics figure generation failed: {e}")
+            except (OSError, ImportError, ValueError, RuntimeError, KeyError) as e:
+                logger.exception(f"VFE dynamics figure generation failed: {e}")
 
         # plot_training_curves / plot_gradient_norms_split return Figure
         # objects that they savefig'd but did not close — close everything
@@ -1215,6 +1260,18 @@ class VFETrainer:
             if isinstance(batch, (list, tuple)):
                 batch = {'input_ids': batch[0], 'target_ids': batch[1]}
 
+            # Tell train_step whether this step's diagnostics will be
+            # consumed by the log/CSV writer. On non-log steps train_step
+            # still computes loss + grads, but skips the per-layer
+            # diagnostic aggregation (which dominates non-GPU CPU sync time
+            # for n_layers > 1).
+            self._aggregate_diagnostics_this_step = (
+                (step + 1) % log_interval == 0
+            )
+            # Attention-state capture is only needed on the forward that
+            # immediately precedes the periodic attention plot, which fires
+            # inside evaluate() — gate the train-step forward off.
+            self._set_capture_attention_state(False)
             metrics = self.train_step(batch)
 
             # CSV + publication-tracker row is written every log_interval
@@ -1259,6 +1316,10 @@ class VFETrainer:
 
             # Periodic evaluation
             if self.val_loader is not None and (step + 1) % eval_interval == 0:
+                # Re-enable per-block attention-state capture so the eval
+                # forward populates `_last_attention_state` for the plot
+                # below. Reset to False after the plot is written.
+                self._set_capture_attention_state(True)
                 val_metrics = self.evaluate()
                 # Attention summary AND heatmap save MUST happen before
                 # _generate_sample(): model.generate() runs the model with
@@ -1364,7 +1425,7 @@ class VFETrainer:
                     self.output_dir.rename(new_path)
                     self.output_dir = new_path
                     logger.info(f"Run directory renamed to: {self.output_dir}")
-            except Exception as exc:
+            except (OSError, FileExistsError, PermissionError) as exc:
                 logger.warning(f"Run directory rename skipped: {exc}")
 
         # Save publication tracker history

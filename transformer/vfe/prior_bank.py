@@ -15,9 +15,23 @@ Two parameterizations selected by ``cfg.gauge_fixed_priors``:
         Per-token capacity = V * (2K + n_gen).
 
 Encode: token_ids -> BeliefState (mu, sigma, phi)
-Decode: BeliefState -> logits = -KL(q* || pi_v) / tau
+Decode: BeliefState -> logits = -c * KL(q* || pi_v) / tau
 
 Law 3 (same Gaussian manifold for encode, infer, decode) holds in both modes.
+
+Implementation note — decode rescales the canonical KL by a learnable scalar.
+=============================================================================
+The manuscript-canonical decode is `logits = -KL(q || pi_v) / tau`. This
+module instead computes `logits = -c * KL(q || pi_v) / tau` with a
+learnable scalar `c = exp(decode_log_scale)`, clamped to
+`[exp(-3), exp(3)] ~ [0.05, 20]` and initialised at 0 so that `c = 1` at
+construction (untrained models match the documented decode bitwise).
+
+This is equivalent to a second softmax temperature stacked multiplicatively
+on `tau`: the entangled product `c / tau` controls the logit scale. The
+parameter is grouped with `m_sigma_lr` in the optimizer (see
+`transformer/training/config.py`), not with the temperature group with
+`kappa`. Document and tune accordingly.
 """
 
 from __future__ import annotations
@@ -118,7 +132,13 @@ class VFEPriorBank(nn.Module):
         # Build V[h, a] = tr(G_a restricted to block h) — H independent
         # constraints, mutually orthogonal because block-diagonal generators
         # have disjoint generator-index supports per block.
-        if self.phi_project_slk or self.phi_trace_clamp is not None:
+        # Register det-control buffers in BOTH branches so state_dict
+        # round-trips have consistent keys and `.to(device)` always
+        # moves them. The else-branch registers zero-numel sentinels;
+        # `_apply_phi_det_control` predicates on numel() == 0.
+        if self.phi_project_slk or (
+            self.phi_trace_clamp is not None and self.phi_trace_clamp > 0
+        ):
             H = len(self.irrep_dims)
             V_blocks = torch.zeros(H, n_gen, dtype=generators.dtype, device=generators.device)
             start = 0
@@ -134,8 +154,14 @@ class VFEPriorBank(nn.Module):
                 (V_blocks * V_blocks).sum(dim=-1).clamp(min=1e-12),  # (H,)
             )
         else:
-            self._phi_trace_vec = None
-            self._phi_trace_vec_norm_sq = None
+            self.register_buffer(
+                '_phi_trace_vec',
+                torch.empty(0, dtype=generators.dtype),
+            )
+            self.register_buffer(
+                '_phi_trace_vec_norm_sq',
+                torch.empty(0, dtype=generators.dtype),
+            )
 
         # Prior parameterization: gauge-fixed (shared base + per-token gauge
         # orbit) vs direct (per-token (mu_v, sigma_v) lookup). Both modes keep
@@ -350,7 +376,7 @@ class VFEPriorBank(nn.Module):
         Returns φ unchanged when neither toggle is enabled or when generators
         are skew-symmetric (SO(N)) so all v_h ≡ 0.
         """
-        if self._phi_trace_vec is None:
+        if self._phi_trace_vec.numel() == 0:
             return phi
         V = self._phi_trace_vec            # (H, n_gen)
         v_norm_sq = self._phi_trace_vec_norm_sq  # (H,)
@@ -452,8 +478,12 @@ class VFEPriorBank(nn.Module):
         # fragile on CPU/MPS where the 'cuda' device_type string is wrong.
         mu_q = mu_q.float()
         mu_p = mu_p.float()
-        sigma_q_d = sigma_q_diag.float().clamp(min=1e-4)
-        sigma_p_d = sigma_p_diag.float().clamp(min=1e-4)
+        # Use the same σ floor as encode (`self.eps`). Previously decode
+        # floored at 1e-4 — 100× below encode/`_per_token_priors` floor —
+        # so when the E-step drove σ_q below 0.01 the decode KL was computed
+        # on (q, p) pairs that the encode path would never have produced.
+        sigma_q_d = sigma_q_diag.float().clamp(min=self.eps)
+        sigma_p_d = sigma_p_diag.float().clamp(min=self.eps)
 
         inv_sigma_p = 1.0 / sigma_p_d                    # (V, K)
         mu_p_inv_sigma_p = mu_p * inv_sigma_p             # (V, K)

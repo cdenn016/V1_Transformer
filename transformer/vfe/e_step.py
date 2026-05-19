@@ -46,6 +46,24 @@ through the unrolled E-step iterations — this is structurally amortised
 inference (the embeddings are tuned so that CE is small after the E-step
 relaxes), not classical variational EM where E and M alternate on the
 same F functional.
+
+Implementation note — Bayesian alpha is per-dimension, not scalar.
+==================================================================
+Manuscript ``\\label{eq:state_dependent_alpha}`` defines a scalar
+adaptive precision per agent: ``alpha_i* = c0 / (b0 + D_KL(q_i || p_i))``
+with a single scalar log-barrier ``R(alpha_i) = b0 * alpha_i - c0 * log alpha_i``.
+This implementation generalises to per-K-dimension:
+``raw_c0``, ``raw_b0`` are ``nn.Parameter`` of shape ``(K,)`` (see
+``__init__``), and ``get_bayesian_alpha`` returns ``c0 / (b0 + kl_k)``
+with per-dimension ``kl_k`` of shape ``(B, N, K)``. Each belief dimension
+therefore carries its own adaptive precision. The product-rule correction
+in ``core/vfe_gradients.py:_apply_alpha_correction`` is similarly per-K
+(``alpha**2 / alpha_c0 * kl_k * delta_mu_sp / sigma_p_safe``).
+
+This is a stronger generalisation than the published scalar form and is
+not currently derived in the manuscript. Treat as research-track until
+the per-dim Gamma-Normal conjugacy + per-dim log-barrier derivation
+lands in ``Attention/GL(K)_attention.tex``.
 """
 
 from __future__ import annotations
@@ -60,6 +78,7 @@ import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
+    from transformer.vfe.stack import ActiveInferenceFn
 
 from transformer.core.types import BeliefState
 from transformer.core.vfe_gradients import (
@@ -108,7 +127,7 @@ def _diag_kl(
     sigma_p: torch.Tensor,
     eps: float = 1e-8,
 ) -> torch.Tensor:
-    r"""Per-dimension :math:`\mathrm{KL}(q\|p)` for diagonal Gaussians.
+    r"""Per-dimension standard :math:`\mathrm{KL}(q\|p)` for diagonal Gaussians.
 
     .. math::
         \mathrm{KL}_k = \tfrac{1}{2}\,\bigl(\sigma_{q,k}/\sigma_{p,k}
@@ -118,6 +137,11 @@ def _diag_kl(
     Both :math:`\sigma_q` and :math:`\sigma_p` are floored at ``eps`` before
     division and ``log``. Returns the per-dim tensor of shape
     ``(..., K)``; callers sum (over K, or over (N, K), or over all axes) as needed.
+
+    Standard KL only; for the Rényi alpha-divergence the F-monotone monitor
+    delegates to ``_kl_kernel_diagonal`` (which supports ``alpha_div``).
+    Other callers (Bayesian-alpha auxiliary, prior-belief diagnostic,
+    autograd / non-flat paths) explicitly use standard KL.
     """
     _sp = sigma_p.clamp(min=eps)
     _sq = sigma_q.clamp(min=eps)
@@ -144,6 +168,7 @@ def _f_monotone_step(
     dim_scale: float,
     include_attention_entropy: bool,
     lambda_align: float,
+    alpha_div: float,
     f_history: List[float],
     f_prev: Optional[float],
     f_abs_tol: float,
@@ -153,17 +178,36 @@ def _f_monotone_step(
 ) -> float:
     r"""Single diagonal-covariance F-monotone scalar check.
 
-    Computes :math:`F_t = \alpha \sum \mathrm{KL}(q\|p)
+    Computes :math:`F_t = \alpha \sum D(q\|p)
         + \lambda_{\text{align}} \sum \beta_{ij} \mathrm{KL}_{ij}
         + (\text{optional}) \,\tau \sum \beta \log \beta` (entropy term),
-    appends to ``f_history``, and emits a ``RuntimeWarning`` when
-    ``f_t > f_prev + tol`` (monotone descent violation). All ``.item()``
-    syncs are concentrated here — callers should already be in
-    ``torch.no_grad()``.
+    where ``D`` is the configured divergence (standard KL when
+    ``alpha_div == 1.0``, Rényi alpha-divergence otherwise; delegates to
+    ``_kl_kernel_diagonal``). Appends to ``f_history`` and emits a
+    ``RuntimeWarning`` when ``f_t > f_prev + tol`` (monotone descent
+    violation). All ``.item()`` syncs are concentrated here — callers should
+    already be in ``torch.no_grad()``.
 
     Returns the new scalar ``f_t`` (caller assigns to ``f_prev``).
+
+    Note on the scalar's relationship to the canonical F functional:
+    the manuscript canonical F has the attention-entropy term `tau * sum
+    beta * log(beta/pi)` as a structural part of the *unreduced* F, NOT
+    scaled by `lambda_align`. The monitor scales the entropy term TOGETHER
+    with the alignment term by `lambda_align`, matching the runtime loss
+    construction in `_update_phi` (which folds `lambda_align` over the
+    full `(beta*KL + tau*beta*log(beta/pi))` block). The monitored
+    quantity is therefore the runtime-realised "scaled F", not the
+    canonical F. For `lambda_align == 1.0` (the manuscript default) the
+    two agree exactly.
     """
-    kl_qp_sum = _diag_kl(mu_q, mu_p, sigma_q, sigma_p, eps=eps).sum()
+    from transformer.core.kl_computation import _kl_kernel_diagonal
+    # Use the canonical kernel so the monitor respects alpha_divergence.
+    # Returns shape (..., ) sum-over-K; .sum() collapses the remaining axes.
+    kl_qp_sum = _kl_kernel_diagonal(
+        mu_q, sigma_q, mu_p, sigma_p,
+        kl_max=float('inf'), eps=eps, alpha_div=alpha_div,
+    ).sum()
     _alpha_scalar = (
         float(alpha_eff.detach().mean().item())
         if isinstance(alpha_eff, torch.Tensor)
@@ -267,6 +311,12 @@ class VFEEStep(nn.Module):
         # F-monotone monitor: records F at every iter and warns on non-monotone
         # descent. Fires .item() CUDA syncs per iter when on; default off.
         self.monitor_monotonicity = getattr(cfg, 'monitor_monotonicity', False)
+        # Per-forward trainer-controlled gates. The post-iteration attention
+        # state rebuild (compute_gauge_transport on the converged φ) is only
+        # consumed by the periodic attention plot, so the trainer should set
+        # this False on non-eval steps to skip the rebuild. Default True so
+        # callers that don't reset it preserve historical behavior.
+        self._capture_attention_state: bool = True
         # Hoist embed_dim scale used by the attention-entropy term and a few
         # diagnostic expressions; static value, no need to recompute per iter.
         self._dim_scale = math.sqrt(max(cfg.embed_dim, 1))
@@ -517,7 +567,7 @@ class VFEEStep(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: Optional[Callable] = None,
+        active_inference_fn: "Optional[ActiveInferenceFn]" = None,
     ) -> BeliefState:
         r"""Run the iterative E-step.
 
@@ -814,6 +864,7 @@ class VFEEStep(nn.Module):
                         dim_scale=self._dim_scale,
                         include_attention_entropy=self.include_attention_entropy,
                         lambda_align=self.lambda_align,
+                        alpha_div=self.alpha_divergence,
                         f_history=f_history, f_prev=f_prev,
                         f_abs_tol=f_monotone_abs_tol,
                         f_rel_tol=f_monotone_rel_tol,
@@ -857,44 +908,58 @@ class VFEEStep(nn.Module):
                 # transport/*, beta_*, attention_*) all come from this dict,
                 # so the CSV stays populated even when the user opts out of
                 # the expensive diagnostics path.
-                with torch.no_grad():
-                    _bsafe = beta.clamp(min=_BETA_LOG_FLOOR)
-                    _phi_norm = phi.norm(dim=-1)
-                    if is_diagonal:
-                        _sigma_for_stats = sigma
-                    else:
-                        _sigma_for_stats = sigma.diagonal(dim1=-2, dim2=-1)
-                    _stats = torch.stack([
-                        beta.mean(),
-                        beta.std(unbiased=False) if beta.numel() > 1 else torch.zeros((), device=beta.device, dtype=beta.dtype),
-                        beta.max(dim=-1)[0].mean(),
-                        -(_bsafe * _bsafe.log()).sum(-1).mean(),  # attention_entropy
-                        _sigma_for_stats.mean(),
-                        _sigma_for_stats.min(),
-                        _sigma_for_stats.max(),
-                        _sigma_for_stats.std(unbiased=False) if _sigma_for_stats.numel() > 1 else torch.zeros((), device=sigma.device, dtype=sigma.dtype),
-                        sigma_p.mean(),
-                        _phi_norm.mean(),
-                        _phi_norm.std(unbiased=False) if _phi_norm.numel() > 1 else torch.zeros((), device=phi.device, dtype=phi.dtype),
-                        _phi_norm.max(),
-                    ])
-                    _v = _stats.detach().cpu().tolist()
-                    self._last_diagnostics = {
-                        'beta_mean':                  _v[0],
-                        'beta_std':                   _v[1],
-                        'attention_concentration':    _v[2],
-                        'attention_entropy':          _v[3],
-                        'sigma_q_mean':               _v[4],
-                        'sigma_q_min':                _v[5],
-                        'sigma_q_max':                _v[6],
-                        'sigma_q_std':                _v[7],
-                        'sigma_p_mean':               _v[8],
-                        'phi_norm_mean':              _v[9],
-                        'phi_norm_std':               _v[10],
-                        'phi_norm_max':               _v[11],
-                        'kl_mean': kl_matrix.mean().item() if kl_matrix is not None else 0.0,
-                        'kl_max':  kl_matrix.max().item()  if kl_matrix is not None else 0.0,
-                    }
+                #
+                # SKIP when track_layer_diagnostics=True: the expensive
+                # block below at line ~901 unconditionally overwrites
+                # self._last_diagnostics with a richer dict, so the cheap
+                # work here would be wasted (was wasted prior to this gate).
+                if not self.track_layer_diagnostics:
+                    with torch.no_grad():
+                        _bsafe = beta.clamp(min=_BETA_LOG_FLOOR)
+                        _phi_norm = phi.norm(dim=-1)
+                        if is_diagonal:
+                            _sigma_for_stats = sigma
+                        else:
+                            _sigma_for_stats = sigma.diagonal(dim1=-2, dim2=-1)
+                        if kl_matrix is not None:
+                            _kl_mean = kl_matrix.mean()
+                            _kl_max = kl_matrix.max()
+                        else:
+                            _kl_mean = torch.zeros((), device=beta.device, dtype=beta.dtype)
+                            _kl_max = torch.zeros((), device=beta.device, dtype=beta.dtype)
+                        _stats = torch.stack([
+                            beta.mean(),
+                            beta.std(unbiased=False) if beta.numel() > 1 else torch.zeros((), device=beta.device, dtype=beta.dtype),
+                            beta.max(dim=-1)[0].mean(),
+                            -(_bsafe * _bsafe.log()).sum(-1).mean(),  # attention_entropy
+                            _sigma_for_stats.mean(),
+                            _sigma_for_stats.min(),
+                            _sigma_for_stats.max(),
+                            _sigma_for_stats.std(unbiased=False) if _sigma_for_stats.numel() > 1 else torch.zeros((), device=sigma.device, dtype=sigma.dtype),
+                            sigma_p.mean(),
+                            _phi_norm.mean(),
+                            _phi_norm.std(unbiased=False) if _phi_norm.numel() > 1 else torch.zeros((), device=phi.device, dtype=phi.dtype),
+                            _phi_norm.max(),
+                            _kl_mean,
+                            _kl_max,
+                        ])
+                        _v = _stats.detach().cpu().tolist()
+                        self._last_diagnostics = {
+                            'beta_mean':                  _v[0],
+                            'beta_std':                   _v[1],
+                            'attention_concentration':    _v[2],
+                            'attention_entropy':          _v[3],
+                            'sigma_q_mean':               _v[4],
+                            'sigma_q_min':                _v[5],
+                            'sigma_q_max':                _v[6],
+                            'sigma_q_std':                _v[7],
+                            'sigma_p_mean':               _v[8],
+                            'phi_norm_mean':              _v[9],
+                            'phi_norm_std':               _v[10],
+                            'phi_norm_max':               _v[11],
+                            'kl_mean':                    _v[12],
+                            'kl_max':                     _v[13],
+                        }
 
             if t == self.n_e_steps - 1 and self.track_layer_diagnostics:
                 with torch.no_grad():
@@ -1008,8 +1073,16 @@ class VFEEStep(nn.Module):
             # Final-iteration per-head diagnostic snapshot. Rebuild
             # block_exp_pairs from the post-phi-update φ so the plot reflects
             # the converged frame, not the iteration-start frame. Performed
-            # only once per forward (`t == n_e_steps - 1`).
-            if t == self.n_e_steps - 1:
+            # only once per forward (`t == n_e_steps - 1`) AND only when the
+            # trainer has opted in (`_capture_attention_state=True`) or the
+            # expensive diagnostics path is active. The trainer flips the
+            # flag for the steps it intends to plot; the snapshot is a fresh
+            # compute_gauge_transport call (matrix-exp + inv per token per
+            # block) so skipping it on every non-eval step is the dominant
+            # per-forward win.
+            if t == self.n_e_steps - 1 and (
+                self._capture_attention_state or self.track_layer_diagnostics
+            ):
                 if is_diagonal:
                     _last_sigma = sigma.detach()
                 else:
@@ -1108,6 +1181,12 @@ class VFEEStep(nn.Module):
                 # F has no separate "softmax-coupling" knob — the product-rule split is
                 # an autograd convenience for the entropy-suppressed surrogate path only.
                 # Uniform prior π = 1/N; constant log N dropped (additive const in F).
+                # The α·KL(q||p) self-coupling term is intentionally OMITTED from _F:
+                # it depends only on (q, p), neither of which depends on φ, so its
+                # partial derivative w.r.t. φ is identically zero (and including it
+                # would only add an attached-but-zero-grad scalar). The φ-loss therefore
+                # collapses to the (β·KL + τ·β·log(β/π)) terms that actually couple to φ
+                # through Ω_ij = exp(φ_i)·exp(-φ_j).
                 # Verified by tests/test_entropy_envelope.py: production config matches
                 # the envelope prediction to ~1e-18 for any λ_soft.
                 beta_safe = beta_phi.clamp(min=_BETA_LOG_FLOOR)
@@ -1161,6 +1240,22 @@ class VFEEStep(nn.Module):
         eps: float,
         is_diagonal: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # The autograd (μ,σ) path reconstructs the standard KL functional from
+        # scratch via compute_kl_attention; the Rényi α-divergence is NOT
+        # routed through this branch. Refuse to execute silently with a
+        # configuration the path cannot honor — previously this combination
+        # warned at __post_init__ after the dataclass had already forced
+        # use_autograd_mu_sigma=True, leaving the user with an active but
+        # invalid setting.
+        if abs(self.alpha_divergence - 1.0) > 1e-9:
+            raise RuntimeError(
+                f"alpha_divergence={self.alpha_divergence} is incompatible "
+                "with the autograd (μ,σ) gradient path: this kernel "
+                "reconstructs the standard KL functional and silently "
+                "ignores the Rényi α exponent. Either set alpha_divergence=1.0 "
+                "or disable use_autograd_mu_sigma / use_non_flat_transport / "
+                "gauge_parameterization='omega_direct'."
+            )
         r"""Compute dF/dmu, dF/dsigma via autograd through compute_kl_attention.
 
         Total-derivative path: autograd over the manuscript F functional
@@ -1458,8 +1553,18 @@ class VFEEStep(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor],
-        active_inference_fn: Optional[Callable],
+        active_inference_fn: "Optional[ActiveInferenceFn]",
     ) -> BeliefState:
+        # Same guard as _compute_mu_sigma_grad_autograd: the omega-direct
+        # path reconstructs standard KL and would silently drop the Rényi α.
+        if abs(self.alpha_divergence - 1.0) > 1e-9:
+            raise RuntimeError(
+                f"alpha_divergence={self.alpha_divergence} is incompatible "
+                "with gauge_parameterization='omega_direct': this path "
+                "reconstructs the standard KL functional and silently "
+                "ignores the Rényi α exponent. Either set alpha_divergence=1.0 "
+                "or use gauge_parameterization='phi'."
+            )
         r"""E-step inner loop with :math:`\Omega \in G` as the gauge state.
 
         Iterates :math:`(\mu, \sigma, \Omega)` instead of :math:`(\mu, \sigma,
@@ -1633,6 +1738,7 @@ class VFEEStep(nn.Module):
                         dim_scale=self._dim_scale,
                         include_attention_entropy=self.include_attention_entropy,
                         lambda_align=self.lambda_align,
+                        alpha_div=self.alpha_divergence,
                         f_history=f_history, f_prev=f_prev,
                         f_abs_tol=f_monotone_abs_tol,
                         f_rel_tol=f_monotone_rel_tol,
@@ -1661,24 +1767,43 @@ class VFEEStep(nn.Module):
                     with torch.no_grad():
                         # Sample (1st batch element, 1st block) of Ω for log.
                         Om0 = omega[0][0]
-                        self._last_diagnostics = {
-                            'nat_grad_mu_norm': nat_grad_mu.norm().item(),
-                            'nat_grad_sigma_norm': nat_grad_sigma.norm().item(),
-                            'grad_mu_norm': grad_mu.norm().item(),
-                            'grad_sigma_norm': grad_sigma.norm().item(),
-                            'beta_mean': beta_det.mean().item(),
+                        _Om0_fro = Om0.norm(dim=(-2, -1))
+                        _stats = torch.stack([
+                            nat_grad_mu.norm(),
+                            nat_grad_sigma.norm(),
+                            grad_mu.norm(),
+                            grad_sigma.norm(),
+                            beta_det.mean(),
                             # unbiased=False — population std, defined for numel=1
                             # (B=N=1 during single-token generate forward).
-                            'beta_std': beta_det.std(unbiased=False).item(),
-                            'kl_mean': kl_det.mean().item(),
-                            'kl_max': kl_det.max().item(),
-                            'sigma_q_mean': sigma.mean().item(),
-                            'sigma_q_min': sigma.min().item(),
-                            'sigma_q_max': sigma.max().item(),
-                            # Group state norms (per-block first-block summary).
-                            'omega_fro_mean': Om0.norm(dim=(-2, -1)).mean().item(),
-                            'omega_fro_max': Om0.norm(dim=(-2, -1)).max().item(),
-                            'omega_det_mean': torch.linalg.det(Om0.float()).mean().item(),
+                            beta_det.std(unbiased=False)
+                            if beta_det.numel() > 1
+                            else torch.zeros((), device=beta_det.device, dtype=beta_det.dtype),
+                            kl_det.mean(),
+                            kl_det.max(),
+                            sigma.mean(),
+                            sigma.min(),
+                            sigma.max(),
+                            _Om0_fro.mean(),
+                            _Om0_fro.max(),
+                            torch.linalg.det(Om0.float()).mean(),
+                        ])
+                        _v = _stats.detach().cpu().tolist()
+                        self._last_diagnostics = {
+                            'nat_grad_mu_norm':    _v[0],
+                            'nat_grad_sigma_norm': _v[1],
+                            'grad_mu_norm':        _v[2],
+                            'grad_sigma_norm':     _v[3],
+                            'beta_mean':           _v[4],
+                            'beta_std':            _v[5],
+                            'kl_mean':             _v[6],
+                            'kl_max':              _v[7],
+                            'sigma_q_mean':        _v[8],
+                            'sigma_q_min':         _v[9],
+                            'sigma_q_max':         _v[10],
+                            'omega_fro_mean':      _v[11],
+                            'omega_fro_max':       _v[12],
+                            'omega_det_mean':      _v[13],
                         }
                         if f_history:
                             self._last_diagnostics['f_history'] = list(f_history)

@@ -93,6 +93,10 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     'use_prior_bank':           True,
     'mask_self_attention':      False,
+    # Match train_vfe.py: per-token (μ_v, σ_v) lookup priors. Without this
+    # key the dataclass default (True = shared-base gauge-orbit) silently
+    # selects a structurally different prior than the live entry point uses.
+    'gauge_fixed_priors':       False,
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
 
@@ -258,6 +262,14 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
         'param': 'lambda_soft',
         'values': [0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         'baseline_value': 0.0,
+        # lambda_soft only enters the φ-update through the entropy-suppressed
+        # surrogate path (e_step.py: legacy product-rule decomposition).
+        # When include_attention_entropy=True (the BASELINE default), every
+        # gradient gate forces lambda_softmax=0.0 — so all sweep values
+        # collapse to bitwise-identical loss. Disable the entropy term for
+        # this sweep so the surrogate path is exercised and lambda_soft is
+        # observable in val PPL.
+        'requires': {'include_attention_entropy': False},
     },
 
     # --- Attention temperature -----------------------------------------------

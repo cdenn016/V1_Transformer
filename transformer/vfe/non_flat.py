@@ -486,9 +486,16 @@ def compute_kl_attention_pairwise(
         mu_target = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)  # (B, N, N, d_h)
 
         # σ_target_ij[b, i, j, k] = Σ_l Omega_ij[b, i, j, k, l]² · σ_j[b, j, l]
-        # (diagonal-of-sandwich approx). Folded Omega_h**2 into the einsum
-        # operand list to avoid materializing the (B, N, N, d_h, d_h) square
-        # as a temporary.
+        # is the diagonal of `Omega @ diag(σ) @ Omega^T` — NOT the full
+        # sandwich. For non-orthogonal Omega ∈ GL(d_h) the off-diagonal
+        # entries of the sandwich are non-zero and dropped. This is the
+        # diagonal-σ approximation documented in `VFEConfig` (see
+        # `diagonal_covariance` / `exact_diagonal_transport`). The non-flat
+        # track does not expose an `exact_diagonal_transport` toggle —
+        # `compute_kl_attention_pairwise` rejects full-cov input at the top
+        # (`sigma.dim() != 3` → NotImplementedError). Folded Omega_h**2 into
+        # the einsum operand list to avoid materializing the (B,N,N,d_h,d_h)
+        # square as a temporary.
         sigma_target = torch.einsum(
             'bijkl,bijkl,bjl->bijk', Omega_h, Omega_h, sigma_h,
         ).clamp(min=eps)

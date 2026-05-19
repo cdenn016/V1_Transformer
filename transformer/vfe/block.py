@@ -9,13 +9,14 @@ iteration (dynamic beta).
 from __future__ import annotations
 
 import warnings
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
+    from transformer.vfe.stack import ActiveInferenceFn
 
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, CenteredMahalanobisNorm, RMSNorm
@@ -112,6 +113,33 @@ class VFEBlock(nn.Module):
         # BEFORE normalization so it sees the converged belief and feeds the
         # norm/handoff path. None when the flag is off — zero compute cost.
         if cfg.use_equivariant_head_mixer:
+            # Equivariance of the head mixer requires a TIED per-token gauge
+            # across heads (one shared gauge action per token). GL(K) with
+            # `generate_glK_multihead_generators` instead gives each head its
+            # OWN gl(d_head) sub-algebra — independent per-head gauges — so
+            # `kron(A, I_d)` does not commute with the actual gauge action.
+            # SO3 / SON share a single group across heads and satisfy the
+            # tied condition. Warn the user that the GL(K) multihead path
+            # only approximately preserves equivariance (the deviation is
+            # zero at the identity init `mixer_delta=0` and grows as A drifts
+            # from I during training).
+            if (
+                cfg.gauge_group == 'GLK'
+                and sum(mult for _, mult, _ in cfg.irrep_spec) > 1
+            ):
+                warnings.warn(
+                    "use_equivariant_head_mixer=True with gauge_group='GLK' "
+                    "and >1 head: the multihead GL(K) generator construction "
+                    "(generate_glK_multihead_generators) gives each head an "
+                    "INDEPENDENT gl(d_head) sub-algebra, so the mixer's "
+                    "kron(A, I_d) action does not commute with the per-head "
+                    "gauge action. Strict gauge equivariance holds only "
+                    "under SO3/SON (single shared group across heads). For "
+                    "GLK the mixer is exact at init (mixer_delta=0) and "
+                    "deviates as A drifts from I.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             self.head_mixer = VFEHeadMixer(cfg.irrep_spec, cfg.embed_dim)
         else:
             self.head_mixer = None
@@ -124,7 +152,7 @@ class VFEBlock(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: Optional[Callable] = None,
+        active_inference_fn: "Optional[ActiveInferenceFn]" = None,
     ) -> BeliefState:
         """Forward pass: E-step + normalization.
 
