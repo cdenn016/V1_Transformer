@@ -378,12 +378,23 @@ def compute_pairwise_omega_with_delta(
         # algebra_ij[b, i, j, k, l] = sum_a delta[b, i, j, a] * G_h[a, k, l]
         algebra = torch.einsum('bija,akl->bijkl', delta, G_h)
 
+        # phi_pairs[h][1] is None iff fused_block_matrix_exp_pairs detected
+        # skew-symmetric generators (SO(N)). In that case exp(-X) = exp(X)^T
+        # for any X in the same Lie algebra, so we can save one matrix_exp
+        # on the δ-exp pair by reusing the transpose. This is bit-exact for
+        # skew-symmetric generators; for general GL(K) we still need two
+        # matrix_exp calls.
+        _is_skew = phi_pairs[h][1] is None
+
         # exp(δ_ij · G^(h)) — autograd through matrix_exp is supported as of
         # PyTorch 1.7. Float32 path; AMP off for stability (matrix_exp is
         # sensitive to overflow at fp16).
         with torch.amp.autocast('cuda', enabled=False):
             exp_delta = torch.linalg.matrix_exp(algebra.float())             # (B, N, N, d_h, d_h)
-            exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())        # (B, N, N, d_h, d_h)
+            if _is_skew:
+                exp_neg_delta = exp_delta.transpose(-1, -2)
+            else:
+                exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())     # (B, N, N, d_h, d_h)
 
         exp_phi_h = phi_pairs[h][0].to(exp_delta.dtype)            # (B, N, d_h, d_h)
         exp_neg_phi_h = phi_pairs[h][1].to(exp_delta.dtype) if phi_pairs[h][1] is not None else None
@@ -486,9 +497,16 @@ def compute_kl_attention_pairwise(
         mu_target = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)  # (B, N, N, d_h)
 
         # σ_target_ij[b, i, j, k] = Σ_l Omega_ij[b, i, j, k, l]² · σ_j[b, j, l]
-        # (diagonal-of-sandwich approx). Folded Omega_h**2 into the einsum
-        # operand list to avoid materializing the (B, N, N, d_h, d_h) square
-        # as a temporary.
+        # is the diagonal of `Omega @ diag(σ) @ Omega^T` — NOT the full
+        # sandwich. For non-orthogonal Omega ∈ GL(d_h) the off-diagonal
+        # entries of the sandwich are non-zero and dropped. This is the
+        # diagonal-σ approximation documented in `VFEConfig` (see
+        # `diagonal_covariance` / `exact_diagonal_transport`). The non-flat
+        # track does not expose an `exact_diagonal_transport` toggle —
+        # `compute_kl_attention_pairwise` rejects full-cov input at the top
+        # (`sigma.dim() != 3` → NotImplementedError). Folded Omega_h**2 into
+        # the einsum operand list to avoid materializing the (B,N,N,d_h,d_h)
+        # square as a temporary.
         sigma_target = torch.einsum(
             'bijkl,bijkl,bjl->bijk', Omega_h, Omega_h, sigma_h,
         ).clamp(min=eps)

@@ -209,6 +209,17 @@ def _build_killing_matrix_per_block(
     restricted to that block. Used to decompose a ``d_h × d_h`` algebra
     direction back onto the generator basis.
 
+    .. note::
+       Name is historical. The implementation builds the **Frobenius gram**
+       :math:`M_{ab} = \langle G^a, G^b \rangle_F`, not the Killing form
+       :math:`B(X,Y) = 2n \cdot \mathrm{tr}(XY) - 2 \mathrm{tr}(X)\mathrm{tr}(Y)`
+       on :math:`\mathfrak{gl}(n)`. The two coincide up to a positive factor
+       only for trace-free skew bases — neither holds for ``GL(K)``. The
+       function is suitable as a projection metric (which is what callers
+       need), not as a natural-gradient preconditioner derived from the
+       Killing form. The companion ``core/gauge_preconditioner.py`` does
+       implement a Killing-style metric.
+
     Frobenius inner product :math:`\langle X, G^a \rangle_F = \mathrm{tr}(X^\top
     G^a)` defines the projection coefficient :math:`c_a = (M^{-1})_{ab}
     \langle X, G^b \rangle_F` where :math:`M_{ab} = \langle G^a, G^b \rangle_F`.

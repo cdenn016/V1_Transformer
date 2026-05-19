@@ -113,7 +113,7 @@ class VFEModel(nn.Module):
         self.final_norm = _resolve_vfe_norm(cfg.norm_type, cfg.embed_dim)
 
         # Active inference callback (Section 10)
-        self._active_inference_fn = None
+        self._active_inference_fn: "Optional[VFEActiveInference]" = None
         if cfg.active_inference:
             from transformer.vfe.active_inference import VFEActiveInference
             self.active_inference_module = VFEActiveInference(cfg, self.prior_bank)
@@ -198,8 +198,12 @@ class VFEModel(nn.Module):
 
         # 7. Decode: beliefs → logits. Two paths gated by cfg.use_prior_bank.
         if self.use_prior_bank:
-            # Law-3 decode: KL-to-prior on the gauge manifold.
-            logits = self.prior_bank.decode(mu_final, beliefs.sigma)
+            # Law-3 decode: KL-to-prior on the gauge manifold. Pass the
+            # configured decode_tau so the user-set softmax temperature
+            # reaches the logit construction (defaulted to 1.0 previously).
+            logits = self.prior_bank.decode(
+                mu_final, beliefs.sigma, tau=self.cfg.decode_tau,
+            )
         else:
             # Linear projection ablation: mu_final → logits, sigma discarded.
             # No KL geometry at the decode boundary; only the encode + E-step

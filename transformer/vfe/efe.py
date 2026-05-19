@@ -12,7 +12,9 @@ See VFE_Transformer_Idea.md Section 11.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, Literal, Tuple, TYPE_CHECKING
+
+PreferenceMode = Literal['current_belief', 'target', 'uniform']
 
 import torch
 import torch.nn.functional as F
@@ -53,10 +55,15 @@ class VFEExpectedFreeEnergy:
         self,
         model: 'VFEModel',
         gamma: float = 1.0,
-        preference_mode: str = 'uniform',
+        preference_mode: PreferenceMode = 'uniform',
         epistemic_weight: float = 0.0,
         epistemic_samples: int = 4,
     ) -> None:
+        if preference_mode not in ('current_belief', 'target', 'uniform'):
+            raise ValueError(
+                f"preference_mode must be 'current_belief', 'target', or "
+                f"'uniform'; got {preference_mode!r}."
+            )
         self.model = model
         self.gamma = gamma
         self.preference_mode = preference_mode

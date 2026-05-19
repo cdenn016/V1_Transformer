@@ -10,7 +10,7 @@ Consolidates duplicated matrix exponential and KL divergence patterns.
 
 import torch
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, cast
 
 from math_utils.numerical_monitor import record as _nr
 from transformer.core.vfe_utils import (
@@ -277,7 +277,13 @@ def fused_block_matrix_exp_pairs(
     for idx, s, e, d in block_info:
         dim_groups[d].append((idx, s, e))
 
-    results: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * len(irrep_dims)
+    # Slots are filled by the per-dim scatter loop below; every index in
+    # `irrep_dims` is assigned exactly once. The `Optional[]` wrapper is the
+    # *initialisation* type, not the post-scatter contract — the actual
+    # contract matches the declared return type.
+    results: List[Optional[Tuple[torch.Tensor, Optional[torch.Tensor]]]] = (
+        [None] * len(irrep_dims)
+    )
 
     # Content-stable cache key (survives checkpoint reload, multiprocessing)
     _cache_key = _gen_cache_key(generators, irrep_dims)
@@ -335,7 +341,13 @@ def fused_block_matrix_exp_pairs(
                 exp_neg_phi_all[local_idx].contiguous() if exp_neg_phi_all is not None else None,
             )
 
-    return results  # type: ignore[return-value]
+    # Per-dim loop above filled every slot; assert the invariant in debug
+    # builds, then cast to drop the Optional[] wrapper. Tighter than the
+    # blanket `type: ignore[return-value]` it replaces.
+    assert all(r is not None for r in results), (
+        "fused_block_matrix_exp_pairs scatter left a slot unfilled — bug."
+    )
+    return cast(List[Tuple[torch.Tensor, Optional[torch.Tensor]]], results)
 
 
 def fused_block_diagonal_kl_diag(

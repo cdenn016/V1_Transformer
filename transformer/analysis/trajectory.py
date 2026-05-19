@@ -153,8 +153,6 @@ class TrajectoryRecorder:
         record_attention: bool = False,
         max_batch_elements: int = 4,  # Only record first N batch elements (memory)
         device_for_storage: str = 'cpu',
-        # Legacy parameters (ignored)
-        record_leapfrog: bool = False,
     ):
         """
         Initialize trajectory recorder.
@@ -409,7 +407,6 @@ def set_global_recorder(recorder: TrajectoryRecorder) -> None:
 def enable_trajectory_tracking(
     record_attention: bool = False,
     max_batch_elements: int = 4,
-    record_leapfrog: bool = False,  # Legacy parameter, ignored
 ) -> TrajectoryRecorder:
     """
     Enable trajectory tracking with a new global recorder.

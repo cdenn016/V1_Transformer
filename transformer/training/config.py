@@ -13,7 +13,7 @@ trivialized (gauge_mode='trivial') to recover standard KL-attention.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, Union
 
 
 @dataclass
@@ -176,7 +176,7 @@ class TrainingConfig:
     # ==========================================================================
     # Checkpointing
     # ==========================================================================
-    checkpoint_dir: Optional[Path] = None  
+    checkpoint_dir: Union[Path, str, None] = None  # coerced to Path in __post_init__
     resume_from: Optional[str] =     None  # Path to checkpoint to resume from
     save_total_limit: int =          3
     # ==========================================================================
@@ -284,7 +284,7 @@ class TrainingConfig:
     quiet: bool = False  # Suppress verbose banners/config dumps (for ablation sweeps)
     
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert checkpoint_dir to Path if string."""
         if isinstance(self.checkpoint_dir, str):
             self.checkpoint_dir = Path(self.checkpoint_dir)

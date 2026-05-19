@@ -1321,7 +1321,6 @@ def _fused_attention_and_vfe_gradients_block_diag(
     if mask_self_attention:
         diag_idx = torch.arange(N, device=device)
         has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1
-        logits = logits.clone()
         diag_vals = logits[:, diag_idx, diag_idx]
         masked_diag_vals = torch.where(
             has_other_targets,
