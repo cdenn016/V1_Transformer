@@ -10,8 +10,8 @@
 \usepackage{enumitem}
  \usepackage{subcaption} 
 \geometry{margin=1in}
-\newcommand{\KL}{\mathrm{KL}}
-\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\tr}{\operatorname{tr}}
 \newcommand{\Sig}{\Sigma}
 \newcommand{\SigQ}{\Sigma^q}
 \newcommand{\SigP}{\Sigma^p}
@@ -136,7 +136,7 @@ The transformed belief can then be compared with agent $i$'s own beliefs via KL 
 D_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} \cdot q_j)
 \end{equation}
 
-The natural gauge group for KL-based belief coupling is $G = \mathrm{GL}(d)$, the general linear group of invertible $d \times d$ matrices \citep{Dennis2025}. This is because KL divergence between Gaussians is invariant under any invertible linear transformation of the sufficient statistics: for any $\Omega \in \mathrm{GL}(d)$, we have $D_{\mathrm{KL}}(\Omega \cdot q \| \Omega \cdot p) = D_{\mathrm{KL}}(q \| p)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality. Since our transport operators are parameterized via the matrix exponential, $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$, so their determinants are always positive. Important subgroups include $\mathrm{SO}(d)$ (rotations, preserving the metric structure so that agents agree on how different two beliefs are), $\mathrm{SL}(d)$ (volume-preserving transformations), and $\mathrm{O}(d)$ (orthogonal transformations). For the concrete derivations in this paper, we work primarily in the flat gauge limit $\Omega_{ij} = I$ or with $G = \mathrm{SO}(d)$ for illustrative purposes, but the general $\mathrm{GL}(d)$ structure is available for applications (such as language modeling \citep{Dennis2025}) where reference frame transformations are not metric-preserving.
+The natural gauge group for KL-based belief coupling is $G = \mathrm{GL}(d)$, the general linear group of invertible $d \times d$ matrices \citep{Dennis2025trans}. This is because KL divergence between Gaussians is invariant under any invertible linear transformation of the sufficient statistics: for any $\Omega \in \mathrm{GL}(d)$, we have $D_{\mathrm{KL}}(\Omega \cdot q \| \Omega \cdot p) = D_{\mathrm{KL}}(q \| p)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality. Since our transport operators are parameterized via the matrix exponential, $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$, so their determinants are always positive. Important subgroups include $\mathrm{SO}(d)$ (rotations, preserving the metric structure so that agents agree on how different two beliefs are), $\mathrm{SL}(d)$ (volume-preserving transformations), and $\mathrm{O}(d)$ (orthogonal transformations). For the concrete derivations in this paper, we work primarily in the flat gauge limit $\Omega_{ij} = I$ or with $G = \mathrm{SO}(d)$ for illustrative purposes, but the general $\mathrm{GL}(d)$ structure is available for applications (such as language modeling \citep{Dennis2025trans}) where reference frame transformations are not metric-preserving.
 
 As we show later, the flat gauge ($\Omega_{ij} = I$ for all agent pairs) recovers standard consensus models where all agents share a common reference frame. All derivations in this paper, such as the mass formula, classical model limits, and dynamical predictions, hold in the flat gauge limit.
 
@@ -2095,7 +2095,7 @@ In variational inference, the forward KL $D_{\mathrm{KL}}(q \| p)$ is the natura
 \section{Derivation of Social Coupling from Mixture-of-Sources Generative Model}
 \label{app:social_coupling}
 
-The social coupling term $\sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}\cdot q_k)$ in our free energy is not an ad hoc regularizer but emerges from a mixture-of-sources generative model with gauge-transported components. This derivation, adapted from the $\mathrm{GL}(K)$ attention framework \citep{Dennis2025}, establishes the coupling as posterior inference over which neighboring agent generated the focal agent's latent state.
+The social coupling term $\sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}\cdot q_k)$ in our free energy is not an ad hoc regularizer but emerges from a mixture-of-sources generative model with gauge-transported components. This derivation, adapted from the $\mathrm{GL}(K)$ attention framework \citep{Dennis2025trans}, establishes the coupling as posterior inference over which neighboring agent generated the focal agent's latent state.
 
 \subsection{Mixture-of-Sources Generative Model}
 
