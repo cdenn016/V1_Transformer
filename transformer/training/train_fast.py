@@ -328,7 +328,7 @@ class FastTrainer:
             max_samples: Maximum number of samples to evaluate (default: 128000,
                 matching run_test_evaluation in experiment_runner.py). Old default
                 was 12800, which produced misleading val numbers on datasets where
-                the val_loader's prefix is non-representative — notably wiki-ja,
+                the val_loader's prefix is non-representative — for example wiki-ja,
                 whose tail-sliced val split has no curation guarantee that early
                 articles are typical of the split. Bumped to 128000 so val and
                 test eval geometry are byte-identical.

@@ -49,15 +49,18 @@ plot/analysis code identical to the core-package suite.
 import copy
 import gc
 import json
+import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
+
+logger = logging.getLogger(__name__)
 
 # Add project root to sys.path so the absolute imports below resolve when
 # the file is run as a script from inside transformer/vfe/.
@@ -88,7 +91,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'max_seq_len':              32,
     'max_steps':                2000,
 
-    'use_prior_bank':           False,
+    'use_prior_bank':           True,
     'mask_self_attention':      False,
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
@@ -109,7 +112,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'e_phi_lr':                 0.05,
    
     'alpha':                    1.0,
-    'lambda_align':             1.0,
+    'lambda_align':             4,
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
@@ -139,11 +142,11 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Positional encoding ===
     'use_rope':                 True,
     'rope_full_gauge':          'off',
-    'rope_base':                100,
+    'rope_base':                150,
 
     # === Embedding init ===
-    'mu_init_std':              0.4,
-    'phi_scale':                0.05,
+    'mu_init_std':              0.001,
+    'phi_scale':                0.001,
     'sigma_init':               0.4,
 
     # === Active inference ===
@@ -164,10 +167,10 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
     'm_mu_lr':                  0.2,
-    'm_sigma_lr':               0.05,
-    'm_phi_lr':                 0.001,
+    'm_sigma_lr':               0.015,
+    'm_phi_lr':                 0.025,
     'm_hyper_lr':               0.001,
-    'm_other_lr':               0.001,
+    'm_other_lr':               0.05,
     'weight_decay':             0.01,
     
     'warmup_steps':             100,
@@ -200,6 +203,14 @@ BASELINE_CONFIG: Dict[str, Any] = {
 SWEEPS: Dict[str, Dict[str, Any]] = {
 
     # --- E-step learning rates -----------------------------------------------
+    'alpha_divergence': {
+        'description': 'alpha_divergence',
+        'param': 'alpha_divergence',
+        'values': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
+        'baseline_value': 0.1,
+    },
+    
+    
     'e_mu_lr': {
         'description': 'E-step natural-gradient step size for mu_q',
         'param': 'e_mu_lr',
@@ -321,8 +332,8 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'm_phi_lr': {
         'description': 'M-step LR for PriorBank.phi_embed and Positional.pos_phi',
         'param': 'm_phi_lr',
-        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
-        'baseline_value': 0.001,
+        'values': [0.005, 0.015, 0.025, 0.035, 0.045],
+        'baseline_value': 0.01,
     },
 
     'm_hyper_lr': {
@@ -335,7 +346,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'm_other_lr': {
         'description': 'M-step LR for catch-all group (head_mixer, non_flat W_raw, output projection, ...)',
         'param': 'm_other_lr',
-        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
+        'values': [0.025, 0.035, 0.045, 0.055, 0.065, 0.075],
         'baseline_value': 0.001,
     },
 
@@ -353,24 +364,24 @@ SWEEP_ORDER: List[str] = [
   #  'e_mu_lr',
    # 'e_sigma_lr',
    # 'e_phi_lr',
-
-  #  'm_mu_lr',
+   'alpha_divergence',
+   # 'm_mu_lr',
    # 'm_sigma_lr',
-    'm_phi_lr',
-    'm_hyper_lr',
-    'm_other_lr',
+    #'m_phi_lr',
+   # 'm_hyper_lr',
+   # 'm_other_lr',
 
    # 'weight_decay',
     
-    'lambda_align',
-    'lambda_softmax',
+  #  'lambda_align',
+   # 'lambda_softmax',
    
-    'rope_base',
-    'mass_phi',
+   # 'rope_base',
+  #  'mass_phi',
     
-    'mu_init_std',
-    'phi_scale',
-    'sigma_init',
+   # 'mu_init_std',
+   # 'phi_scale',
+   # 'sigma_init',
     # 'kappa',
    # 'phi_trace_clamp',
 ]
@@ -393,7 +404,9 @@ def _strip_to_vfe_kwargs(cfg: Dict[str, Any]) -> Dict[str, Any]:
 # RANGE / VALUE EXPANSION (verbatim from scripts/run_ablation_suite.py)
 # =============================================================================
 
-def _expand_range(range_spec) -> list:
+def _expand_range(
+    range_spec: "Union[Dict[str, Union[int, float]], List[Union[int, float]]]",
+) -> "List[Union[int, float]]":
     """Expand a ``'range': [start, stop, step]`` spec into an explicit list."""
     if isinstance(range_spec, dict):
         start = range_spec['start']
@@ -423,7 +436,7 @@ def _expand_range(range_spec) -> list:
     return values
 
 
-def _sweep_values(sweep: Dict[str, Any]) -> list:
+def _sweep_values(sweep: Dict[str, Any]) -> "List[Union[int, float]]":
     if 'configs' in sweep:
         return []
     if 'values' in sweep:
@@ -698,10 +711,8 @@ def run_sweep(
             else:
                 print(f"  -> Val PPL: {result['final_ppl']:.2f},  Time: {elapsed:.0f}s")
 
-        except Exception as e:
-            print(f"  -> ERROR: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as e:  # noqa: BLE001 - sweep driver must survive per-run failures
+            logger.exception("sweep %s/%s failed", sweep_name, label)
             results.append({
                 'sweep': sweep_name,
                 'label': label,

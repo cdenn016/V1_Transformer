@@ -30,7 +30,7 @@ config = {
     
     'batch_size':               64,
     
-    'max_seq_len':              64,
+    'max_seq_len':              128,
     'max_steps':                15000,
 
     'use_prior_bank':           False,
@@ -47,7 +47,7 @@ config = {
     'learnable_kappa':          False,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  False,
+    'use_equivariant_head_mixer':  True,
     'gauge_covariant_ridge':       False,
 
     # === E-step dynamics ===
@@ -169,12 +169,15 @@ if __name__ == '__main__':
 
     # Build dataloaders
     logging.info(f"Loading dataset: {DATASET}")
+    # num_workers=2 keeps CPU tokenization pipelined with the GPU step;
+    # process-spawn overhead on Windows makes 4+ workers a poor trade.
     train_loader, val_loader, test_loader, vocab_size = create_dataloaders(
         max_seq_len=config['max_seq_len'],
         batch_size=config['batch_size'],
         vocab_size=config.get('vocab_size'),
         dataset=DATASET,
         include_test=True,
+        num_workers=2,
     )
     logging.info(f"Dataset loaded: vocab_size={vocab_size}, "
                  f"train_batches={len(train_loader)}, val_batches={len(val_loader)}, "

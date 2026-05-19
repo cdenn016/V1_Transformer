@@ -12,7 +12,7 @@ import math
 import time
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
@@ -20,6 +20,12 @@ from torch.utils.data import DataLoader
 
 from transformer.vfe.config import VFEConfig
 from transformer.vfe.model import VFEModel
+
+if TYPE_CHECKING:
+    import numpy as _np_typing
+    from transformer.vfe.e_step import VFEEStep
+    from transformer.training.metrics_tracking import PublicationMetricsTracker
+    from transformer.analysis.publication_metrics import TrainingTracker
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +62,11 @@ def _format_duration(secs: float) -> str:
 
 
 class VFETrainer:
+    # Class-level annotations for attributes set in __init__ to None
+    # (Optional types so downstream methods type-check with mypy).
+    _metrics_tracker: "Optional[PublicationMetricsTracker]"
+    _pub_tracker: "Optional[TrainingTracker]"
+
     r"""Training loop for VFEModel with full metrics and diagnostics.
 
     Implements the clean E-step/M-step split with comprehensive logging:
@@ -253,7 +264,9 @@ class VFETrainer:
             kl = getattr(b.e_step, '_last_kl_matrix', None)
             if beta is None or kl is None:
                 continue
-            beta_safe = beta.clamp(min=1e-10)
+            # Match e_step.py's _BETA_LOG_FLOOR = 1e-30 — same op (β·log β
+            # entropy), same float64-underflow boundary.
+            beta_safe = beta.clamp(min=1e-30)
             per_block.append(torch.stack([
                 (beta * kl).mean(),
                 beta.mean(),
@@ -310,7 +323,9 @@ class VFETrainer:
             text = ds.decode(generated[0])
             text = " ".join(text.split())   # collapse whitespace for one-line display
             return text[:display_chars]
-        except Exception as e:   # never abort training on a sampling glitch
+        except (RuntimeError, AttributeError, IndexError, KeyError, ValueError) as e:
+            # Surface the failure mode but don't abort training on a sampling glitch.
+            logger.warning("sample generation failed: %s: %s", type(e).__name__, e)
             return f"<sample failed: {type(e).__name__}: {e}>"
 
     def _collect_e_step_diagnostics(self) -> Dict[str, float]:
@@ -342,26 +357,42 @@ class VFETrainer:
         return diag
 
     def _collect_bayesian_alpha_stats(self) -> Dict[str, float]:
-        """Collect Bayesian alpha diagnostics if E_learnable_alpha is enabled."""
+        """Collect Bayesian alpha diagnostics if E_learnable_alpha is enabled.
+
+        Stacks all eight scalars into one tensor and pulls them back to host
+        with a single ``.tolist()`` call — previously fired eight ``.item()``
+        syncs per log interval.
+        """
         if not self.cfg.E_learnable_alpha:
             return {}
-        stats = {}
         with torch.no_grad():
             for block in self.model.stack.blocks:
                 es = block.e_step
                 c0 = F.softplus(es.raw_c0)
                 b0 = F.softplus(es.raw_b0)
                 alpha_at_zero = c0 / b0  # alpha when KL=0
-                stats['alpha_c0'] = c0.mean().item()
-                stats['alpha_b0'] = b0.mean().item()
-                stats['alpha_c0_std'] = c0.std().item()
-                stats['alpha_b0_std'] = b0.std().item()
-                stats['alpha_mean'] = alpha_at_zero.mean().item()
-                stats['alpha_std'] = alpha_at_zero.std().item()
-                stats['alpha_min'] = alpha_at_zero.min().item()
-                stats['alpha_max'] = alpha_at_zero.max().item()
-                break  # Just report first layer
-        return stats
+                packed = torch.stack([
+                    c0.mean(),
+                    b0.mean(),
+                    c0.std(unbiased=False) if c0.numel() > 1 else torch.zeros((), device=c0.device, dtype=c0.dtype),
+                    b0.std(unbiased=False) if b0.numel() > 1 else torch.zeros((), device=b0.device, dtype=b0.dtype),
+                    alpha_at_zero.mean(),
+                    alpha_at_zero.std(unbiased=False) if alpha_at_zero.numel() > 1 else torch.zeros((), device=alpha_at_zero.device, dtype=alpha_at_zero.dtype),
+                    alpha_at_zero.min(),
+                    alpha_at_zero.max(),
+                ])
+                vals = packed.detach().cpu().tolist()
+                return {
+                    'alpha_c0':     vals[0],
+                    'alpha_b0':     vals[1],
+                    'alpha_c0_std': vals[2],
+                    'alpha_b0_std': vals[3],
+                    'alpha_mean':   vals[4],
+                    'alpha_std':    vals[5],
+                    'alpha_min':    vals[6],
+                    'alpha_max':    vals[7],
+                }
+        return {}
 
     def _collect_kappa_stats(self) -> Dict[str, float]:
         """Collect learnable kappa diagnostics."""
@@ -395,15 +426,15 @@ class VFETrainer:
         if decode is None:
             return None
         try:
-            # TODO(future): cl100k_base byte-pair tokens that span multiple
-            # chars may render replacement boxes when the [:6] slice cuts
-            # mid-codepoint. Acceptable visual artifact; not a correctness
-            # bug. Consider a sanitizer that truncates on grapheme clusters.
+            # cl100k_base byte-pair tokens that span multiple chars may render
+            # replacement boxes when the [:6] slice cuts mid-codepoint —
+            # acceptable visual artifact, not a correctness bug.
             return [str(decode([int(t)]))[:6] for t in ids.tolist()]
-        except Exception:  # noqa: BLE001
+        except (UnicodeDecodeError, ValueError, KeyError, RuntimeError) as e:
+            logger.debug("axis-label decode failed: %s: %s", type(e).__name__, e)
             return None
 
-    def _compute_per_head_beta(self, e_step) -> Optional[Any]:
+    def _compute_per_head_beta(self, e_step: "VFEEStep") -> "Optional[_np_typing.ndarray]":
         r"""Compute per-head softmax β for sample 0 from the post-iteration state.
 
         Returns ``None`` when the cached ``_last_attention_state`` is absent
@@ -433,7 +464,13 @@ class VFETrainer:
         mu_q = state['mu_q'][0:1]            # (1, N, K)
         sigma_q = state['sigma_q'][0:1]       # (1, N, K)
         bep = state['block_exp_pairs']
-        kappa = state['kappa']
+        _k = state['kappa']
+        # Convert kappa to a Python float ONLY here (plot path), not in the
+        # E-step iteration. One host sync per plot vs one per forward.
+        if isinstance(_k, torch.Tensor):
+            kappa = float(_k.detach().cpu().item())
+        else:
+            kappa = float(_k)
         irrep_dims = state['irrep_dims']
         if not irrep_dims:
             return None
@@ -442,6 +479,12 @@ class VFETrainer:
         eps = 1e-6
         block_start = 0
         with _t.no_grad():
+            # Hoist the causal mask outside the per-head loop — N is constant.
+            N_seq = mu_q.shape[1]
+            causal = _t.triu(
+                _t.ones(N_seq, N_seq, device=mu_q.device, dtype=_t.bool),
+                diagonal=1,
+            )
             for h, d_h in enumerate(irrep_dims):
                 block_end = block_start + d_h
                 mu_h = mu_q[..., block_start:block_end]                    # (1, N, d_h)
@@ -469,8 +512,6 @@ class VFETrainer:
                 # equal or earlier positions only.
                 tau_h = float(kappa) * (float(d_h) ** 0.5)
                 logits = -kl / tau_h                                         # (1, N, N)
-                N = logits.shape[-1]
-                causal = _t.triu(_t.ones(N, N, device=logits.device, dtype=_t.bool), diagonal=1)
                 logits = logits.masked_fill(causal, float('-inf'))
                 beta_h = _t.softmax(logits, dim=-1)                          # (1, N, N)
                 beta_per_head.append(beta_h[0].cpu().numpy())
@@ -481,18 +522,20 @@ class VFETrainer:
         return _np.stack(beta_per_head, axis=0)  # (H, N, N)
 
     def _plot_attention_patterns(self, step: int) -> None:
-        r"""Save a publication-quality β heatmap PNG into
-        ``output_dir/attention/attention_step_{step:08d}.png``.
+        r"""Save publication-quality β heatmap PNGs, one file per (layer, head)
+        panel, into ``output_dir/attention/attention_step_{step:08d}_L{layer}
+        _H{head}.png`` (the collapsed-β fallback omits the ``_H{head}`` part).
 
-        Per-head panels (one column per gauge head, one row per layer) when
-        ``block.e_step._last_attention_state`` is populated (the default).
-        Falls back to a single collapsed-β panel per layer when the per-head
-        state cache is missing.
+        Per-head panels when ``block.e_step._last_attention_state`` is
+        populated (the default). Falls back to a single collapsed-β panel
+        per layer when the per-head state cache is missing.
 
         Sample 0 of the most recent val batch. Causal upper triangle is
-        NaN-masked and rendered light grey. Color scale is shared across all
-        panels. Failure to plot is logged and swallowed so a matplotlib
-        glitch never aborts training.
+        NaN-masked and rendered light grey. Color scale (log10 β over
+        [-5, 0]) is shared across all panels by construction so PNGs are
+        directly comparable across layers, heads, and steps. Failure to
+        plot is logged and swallowed so a matplotlib glitch never aborts
+        training.
         """
         if self.output_dir is None or not self.generate_figures:
             return
@@ -525,30 +568,29 @@ class VFETrainer:
             labels = self._decode_first_sample_tokens()
 
             set_pub_style()
-            n = len(panels)
-            fig, axes = plt.subplots(
-                1, n,
-                figsize=(max(5.5, 4.0 * n), 4.8),
-                squeeze=False,
-            )
-            axes = axes[0]
             log_floor = -5.0
             cmap = plt.get_cmap('viridis').copy()
             cmap.set_bad('#dddddd')
 
-            im = None
-            for ax, (layer_idx, head_idx, b) in zip(axes, panels):
+            out_dir = self.output_dir / 'attention'
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            saved: List[Path] = []
+            for layer_idx, head_idx, b in panels:
+                fig, ax = plt.subplots(figsize=(5.5, 4.8))
                 log_b = np.log10(np.clip(b, 10.0 ** log_floor, 1.0))
                 iu = np.triu_indices_from(log_b, k=1)
                 log_b[iu] = np.nan
                 im = ax.imshow(log_b, cmap=cmap, vmin=log_floor, vmax=0.0, aspect='equal')
                 if head_idx is None:
-                    ax.set_title(f'layer {layer_idx}')
+                    panel_label = f'layer {layer_idx}'
+                    suffix = f'L{layer_idx}'
                 else:
-                    ax.set_title(f'layer {layer_idx} | head {head_idx}')
+                    panel_label = f'layer {layer_idx} | head {head_idx}'
+                    suffix = f'L{layer_idx}_H{head_idx}'
+                ax.set_title(rf'Attention $\beta$  |  step {step}  |  {panel_label}')
                 ax.set_xlabel('key pos')
-                if ax is axes[0]:
-                    ax.set_ylabel('query pos')
+                ax.set_ylabel('query pos')
                 if labels is not None:
                     N = b.shape[0]
                     stride = max(1, N // 16)
@@ -560,22 +602,20 @@ class VFETrainer:
                         ax.set_xticklabels(tlabels, rotation=45, ha='right', fontsize=7)
                         ax.set_yticklabels(tlabels, fontsize=7)
                 ax.grid(False)
-
-            cbar = fig.colorbar(im, ax=list(axes), shrink=0.85, pad=0.02)
-            cbar.set_label(r'$\log_{10} \beta_{ij}$')
-            fig.suptitle(rf'Attention $\beta$  |  step {step}', y=1.02)
-
-            out_dir = self.output_dir / 'attention'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            # TODO(future): for very long runs (>1M steps) consider a
-            # rotating "keep last K" policy or a stride-by-K scheme.
-            # At eval_interval=1000 / max_steps=30k this produces ~30
-            # files / ~5MB total — no rotation needed yet.
-            out_path = out_dir / f'attention_step_{step:08d}.png'
-            fig.savefig(out_path)
-            plt.close(fig)
-            logger.info(f"  attention plot saved: {out_path}")
-        except Exception as exc:  # noqa: BLE001
+                cbar = fig.colorbar(im, ax=ax, shrink=0.85, pad=0.02)
+                cbar.set_label(r'$\log_{10} \beta_{ij}$')
+                # TODO(future): for very long runs (>1M steps) consider a
+                # rotating "keep last K" policy or a stride-by-K scheme.
+                # At eval_interval=1000 / max_steps=30k with H heads this
+                # produces ~30·H files / ~5·H MB total — no rotation needed.
+                out_path = out_dir / f'attention_step_{step:08d}_{suffix}.png'
+                fig.savefig(out_path, bbox_inches='tight')
+                plt.close(fig)
+                saved.append(out_path)
+            logger.info(
+                f"  attention plots saved: {len(saved)} file(s) under {out_dir}"
+            )
+        except Exception as exc:
             logger.warning(f"  attention plot failed: {exc}")
 
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
@@ -678,8 +718,9 @@ class VFETrainer:
             return {}
 
         self.model.eval()
-        total_ce = 0.0   # accumulate unscaled CE for correct PPL/BPC at eval
-        total_tokens = 0
+        # Accumulate on-device. One .item() sync per loop instead of 2/batch.
+        total_ce_gpu: Optional[torch.Tensor] = None
+        total_tokens_gpu: Optional[torch.Tensor] = None
         total_samples = 0
 
         first_batch_seen = False
@@ -695,22 +736,24 @@ class VFETrainer:
                 target_ids = batch['target_ids'].to(self.device)
 
             # Capture sample 0 of the first val batch for attention-heatmap
-            # axis labels. Refreshed every evaluate() call so the heatmap
-            # always reflects what the most recent val batch saw.
-            # TODO(future): expose a `fixed_reference_batch` config so the
-            # plotted batch is held constant across eval intervals — that
-            # makes attention-pattern temporal comparison strictly visual
-            # (same input, evolving β).
+            # axis labels.
             if not first_batch_seen:
                 self._last_val_input_ids = input_ids[0].detach().cpu()
                 first_batch_seen = True
 
             _, _, ce_for_log = self.model(input_ids, targets=target_ids)
-            n_tokens = (target_ids != -100).sum().item()
-            total_ce += ce_for_log.item() * n_tokens
-            total_tokens += n_tokens
+            n_tokens_t = (target_ids != -100).sum()
+            ce_contrib = ce_for_log * n_tokens_t.to(ce_for_log.dtype)
+            if total_ce_gpu is None:
+                total_ce_gpu = ce_contrib
+                total_tokens_gpu = n_tokens_t
+            else:
+                total_ce_gpu = total_ce_gpu + ce_contrib
+                total_tokens_gpu = total_tokens_gpu + n_tokens_t
             total_samples += input_ids.shape[0]
 
+        total_tokens = int(total_tokens_gpu.item()) if total_tokens_gpu is not None else 0
+        total_ce = float(total_ce_gpu.item()) if total_ce_gpu is not None else 0.0
         avg_ce = total_ce / max(total_tokens, 1)
         # `val_loss` semantically means avg unscaled CE (matches val_ppl/val_bpc).
         # Default configs (mass_phi=0, normalize_ce_by_dim=False) are unaffected.
@@ -746,9 +789,10 @@ class VFETrainer:
         logger.info("=" * 70)
         logger.info(f"  Evaluating up to {max_samples} samples...")
 
+        was_training = self.model.training
         self.model.eval()
-        total_ce_tokens = 0.0
-        total_tokens = 0
+        total_ce_gpu: Optional[torch.Tensor] = None
+        total_tokens_gpu: Optional[torch.Tensor] = None
         total_samples = 0
         num_batches = 0
 
@@ -763,9 +807,14 @@ class VFETrainer:
                 target_ids = batch['target_ids'].to(self.device)
 
             _, _, ce_for_log = self.model(input_ids, targets=target_ids)
-            n_tokens = (target_ids != -100).sum().item()
-            total_ce_tokens += ce_for_log.item() * n_tokens
-            total_tokens += n_tokens
+            n_tokens_t = (target_ids != -100).sum()
+            ce_contrib = ce_for_log * n_tokens_t.to(ce_for_log.dtype)
+            if total_ce_gpu is None:
+                total_ce_gpu = ce_contrib
+                total_tokens_gpu = n_tokens_t
+            else:
+                total_ce_gpu = total_ce_gpu + ce_contrib
+                total_tokens_gpu = total_tokens_gpu + n_tokens_t
             total_samples += input_ids.shape[0]
             num_batches += 1
 
@@ -774,6 +823,11 @@ class VFETrainer:
                     f"  Evaluated {total_samples}/{max_samples} samples "
                     f"({num_batches} batches)..."
                 )
+
+        total_tokens = int(total_tokens_gpu.item()) if total_tokens_gpu is not None else 0
+        total_ce_tokens = float(total_ce_gpu.item()) if total_ce_gpu is not None else 0.0
+        if was_training:
+            self.model.train()
 
         test_ce = total_ce_tokens / max(total_tokens, 1)
         test_ppl = math.exp(min(test_ce, 20.0))
@@ -907,6 +961,12 @@ class VFETrainer:
         # is preferred over ``0`` for un-collected metrics so the CSV cell
         # reads as blank (matching publication-side semantics) rather than
         # as a misleading literal zero.
+        # NOTE: ``train_loss_total`` is the optimizer's target loss. Under
+        # ``normalize_ce_by_dim=True`` (default for VFE-style training) this is
+        # ``(CE_raw + mass_phi_reg + sum_aux_hyperparam) / sqrt(K)``. The raw
+        # cross-entropy is also exposed under ``train_loss_ce`` / ``_raw`` so
+        # readers do not have to infer the rescaling — both columns are
+        # included to make the relationship obvious in dashboards.
         csv_metrics = {
             # Bare-name lookups (metrics_tracking.py:136-157)
             'train_loss_total': metrics['loss'],
@@ -1274,8 +1334,38 @@ class VFETrainer:
         # only if a test_loader was supplied (the click-to-run entry point
         # at train_vfe.py opts in via include_test=True). Mirrors the
         # publication path at experiment_runner.py:2234-2241.
+        test_results: Dict[str, float] = {}
         if self.test_loader is not None:
-            self.run_test_evaluation()
+            test_results = self.run_test_evaluation()
+
+        # Rename run directory to encode the measured test PPL + structural
+        # config (per-user 2026-05-18). Old: vfe_runs/<dataset>_<timestamp>/;
+        # new: vfe_runs/<test_ppl>=test-PPL_K=<K>_<gauge_label>/. Cosmetic —
+        # swallow any I/O error so it can't kill an otherwise good run.
+        if self.output_dir is not None and 'test_ppl' in test_results:
+            try:
+                test_ppl = float(test_results['test_ppl'])
+                K = int(self.cfg.embed_dim)
+                gg = self.cfg.gauge_group
+                if gg == 'GLK':
+                    group_label = f"GL({K})"
+                elif gg == 'SO3':
+                    group_label = "SO(3)"
+                elif gg == 'SON':
+                    group_label = f"SO({K})"
+                else:
+                    group_label = str(gg)
+                new_name = f"{test_ppl:.2f}=test-PPL_K={K}_{group_label}"
+                new_path = self.output_dir.parent / new_name
+                if new_path.exists() and new_path.resolve() != self.output_dir.resolve():
+                    from datetime import datetime as _dt
+                    new_path = self.output_dir.parent / f"{new_name}_{_dt.now().strftime('%H%M%S')}"
+                if new_path.resolve() != self.output_dir.resolve():
+                    self.output_dir.rename(new_path)
+                    self.output_dir = new_path
+                    logger.info(f"Run directory renamed to: {self.output_dir}")
+            except Exception as exc:
+                logger.warning(f"Run directory rename skipped: {exc}")
 
         # Save publication tracker history
         if self._pub_tracker and self.output_dir:

@@ -395,6 +395,13 @@ class VFEConfig:
         # When the relevant lift fails, sweeping e_sigma_lr / e_phi_lr scales
         # tensors that are autograd-disconnected from CE and the loss is
         # bitwise identical across the sweep.
+        # σ-orphan lift conditions depend on whether direct-mode prior is
+        # active: under `gauge_fixed_priors=False` the σ parameter is
+        # `sigma_log_embed`, which receives gradient through the starting-σ
+        # path in the E-step regardless of `e_sigma_lr` — so sweeping
+        # `e_sigma_lr` is still orphaned (it scales a tensor discarded after
+        # the inner update), but `sigma_log_embed` itself learns. The
+        # warning text below now disambiguates the two cases.
         _sigma_lift_via_norm = self.norm_type in ('mahalnorm', 'centered_mahalnorm')
         _sigma_orphan = (
             self.n_e_steps == 1
@@ -409,6 +416,14 @@ class VFEConfig:
                 _dead.append("e_sigma_lr")
             if _phi_orphan:
                 _dead.append("e_phi_lr")
+            _direct_mode_note = (
+                " NOTE: gauge_fixed_priors=False — the σ parameter "
+                "(`sigma_log_embed`) still learns via the starting-σ path; "
+                "only `e_sigma_lr` (the inner-iteration σ retraction rate) "
+                "is dead under this configuration."
+                if not self.gauge_fixed_priors and _sigma_orphan
+                else ""
+            )
             import warnings
             warnings.warn(
                 f"Orphaned E-step retraction: with n_e_steps={self.n_e_steps}, "
@@ -418,7 +433,8 @@ class VFEConfig:
                 f"when swept: {', '.join(_dead)}. Lift conditions — σ: "
                 f"n_e_steps>=2 OR n_layers>=2 OR use_prior_bank=True OR "
                 f"norm_type in {{'mahalnorm','centered_mahalnorm'}}; φ: "
-                f"n_e_steps>=2 OR n_layers>=2.",
+                f"n_e_steps>=2 OR n_layers>=2."
+                f"{_direct_mode_note}",
                 UserWarning,
                 stacklevel=2,
             )

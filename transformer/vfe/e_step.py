@@ -94,6 +94,13 @@ from transformer.vfe.omega_direct import (
 )
 
 
+# Common floor for β·log β entropy computations. β is row-stochastic so the
+# only way to underflow is when softmax saturates onto one column; 1e-30 sits
+# safely above float64 underflow (~1e-323) and below any meaningful softmax
+# probability, so β·log β > -69 ≈ log(1e-30) is bounded.
+_BETA_LOG_FLOOR: float = 1e-30
+
+
 def _diag_kl(
     mu_q: torch.Tensor,
     mu_p: torch.Tensor,
@@ -132,8 +139,8 @@ def _f_monotone_step(
     eps: float,
     beta_det: torch.Tensor,
     kl_det: torch.Tensor,
-    alpha_eff,
-    kappa,
+    alpha_eff: "torch.Tensor | float",
+    kappa: "torch.Tensor | float",
     dim_scale: float,
     include_attention_entropy: bool,
     lambda_align: float,
@@ -169,7 +176,7 @@ def _f_monotone_step(
             if isinstance(kappa, torch.Tensor)
             else float(kappa)
         )
-        _beta_safe = beta_det.clamp(min=1e-30)
+        _beta_safe = beta_det.clamp(min=_BETA_LOG_FLOOR)
         f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
         f_align_total = (
             float(f_align_sum.item())
@@ -480,7 +487,7 @@ class VFEEStep(nn.Module):
                 mask_self_attention=self.mask_self_attention,
                 exact_diagonal_transport=self.exact_diagonal_transport,
             )
-            beta_safe = beta.clamp(min=1e-30)
+            beta_safe = beta.clamp(min=_BETA_LOG_FLOOR)
             sum_beta_kl = (beta * kl_attn).sum()
             # Entropy with uniform prior pi = 1/N: tau * sum beta * log(beta * N)
             #   = tau * sum beta * log beta + tau * log N * sum beta
@@ -689,7 +696,12 @@ class VFEEStep(nn.Module):
                         block_end = block_start + d_h
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_parts[h]
                         block_start = block_end
-                kl_matrix = beta  # beta_h from last head (for diagnostics)
+                # _compute_rope_full_gauge_gradient_per_head returns only β
+                # (not the per-pair KL), so we have no real KL matrix to
+                # surface as a diagnostic here. Marking None avoids the
+                # earlier `kl_matrix = beta` aliasing that mis-labelled
+                # softmax probabilities as KL values in dashboards.
+                kl_matrix = None
             else:
                 # Fused path: single-pass β + ∇F computation when the gating
                 # conditions of `_fused_attention_and_vfe_gradients_block_diag`
@@ -699,7 +711,7 @@ class VFEEStep(nn.Module):
                 # twice; the fused path builds it once).
                 _can_use_fused = (
                     is_diagonal
-                    and self.irrep_dims is not None
+                    and bool(self.irrep_dims)
                     and not self.exact_diagonal_transport
                     and not self.use_autograd_mu_sigma
                 )
@@ -786,7 +798,13 @@ class VFEEStep(nn.Module):
             # downstream test ``test_f_history_populated_with_entropy`` needs
             # f_history when track_layer_diagnostics is on, but a default
             # production run (both flags off) pays no .item() syncs here.
-            if is_diagonal and (self.monitor_monotonicity or self.track_layer_diagnostics):
+            # Skipped when kl_matrix is None (rope_full_gauge per-head path
+            # returns only β, no KL matrix to monitor).
+            if (
+                is_diagonal
+                and kl_matrix is not None
+                and (self.monitor_monotonicity or self.track_layer_diagnostics)
+            ):
                 with torch.no_grad():
                     f_prev = _f_monotone_step(
                         mu_q=mu, mu_p=mu_p, sigma_q=sigma, sigma_p=sigma_p,
@@ -821,38 +839,63 @@ class VFEEStep(nn.Module):
             # consume them). The expensive `.item()`-heavy diagnostics dict is
             # gated behind `track_layer_diagnostics` because each `.item()`
             # call is a CUDA sync that stalls the stream on every forward.
+            # The per-head `_last_attention_state` is stored AFTER the phi
+            # update at the bottom of the loop so the cached block_exp_pairs
+            # reflects the post-update φ — the value the next forward would
+            # use as its starting frame.
             if t == self.n_e_steps - 1:
                 self._last_attention = beta.detach()
-                self._last_kl_matrix = kl_matrix.detach()
-                # Cache the post-iteration (μ, σ, block_exp_pairs) snapshot so
-                # `VFETrainer._plot_attention_patterns` can render per-head β
-                # at eval time. The collapsed `_last_attention` cannot recover
-                # head structure because both the fused and non-fused KL paths
-                # sum per-block KL before softmax. Storing detached tensor
-                # references costs nothing extra in memory (they already exist
-                # in the autograd graph for this step); the per-head softmax
-                # is computed on-demand in the plot path.
-                if is_diagonal:
-                    _last_sigma = sigma.detach()
-                else:
-                    _last_sigma = sigma.detach().diagonal(dim1=-2, dim2=-1)
-                _kappa_val = (
-                    float(_kappa.detach().cpu().item())
-                    if isinstance(_kappa, torch.Tensor) else float(_kappa)
+                self._last_kl_matrix = (
+                    kl_matrix.detach() if kl_matrix is not None else None
                 )
-                self._last_attention_state = {
-                    'mu_q': mu.detach(),
-                    'sigma_q': _last_sigma,
-                    'block_exp_pairs': [
-                        (
-                            p[0].detach() if p[0] is not None else None,
-                            p[1].detach() if p[1] is not None else None,
-                        )
-                        for p in block_exp_pairs
-                    ],
-                    'kappa': _kappa_val,
-                    'irrep_dims': list(self.irrep_dims) if self.irrep_dims else None,
-                }
+
+                # Cheap diagnostics — populated regardless of
+                # `track_layer_diagnostics`. One batched `.tolist()` per
+                # forward (per layer) replaces ~12 individual `.item()`
+                # syncs from the expensive block below. The columns the
+                # vfe CSV remap reads via prefixed lookups (cov/*,
+                # transport/*, beta_*, attention_*) all come from this dict,
+                # so the CSV stays populated even when the user opts out of
+                # the expensive diagnostics path.
+                with torch.no_grad():
+                    _bsafe = beta.clamp(min=_BETA_LOG_FLOOR)
+                    _phi_norm = phi.norm(dim=-1)
+                    if is_diagonal:
+                        _sigma_for_stats = sigma
+                    else:
+                        _sigma_for_stats = sigma.diagonal(dim1=-2, dim2=-1)
+                    _stats = torch.stack([
+                        beta.mean(),
+                        beta.std(unbiased=False) if beta.numel() > 1 else torch.zeros((), device=beta.device, dtype=beta.dtype),
+                        beta.max(dim=-1)[0].mean(),
+                        -(_bsafe * _bsafe.log()).sum(-1).mean(),  # attention_entropy
+                        _sigma_for_stats.mean(),
+                        _sigma_for_stats.min(),
+                        _sigma_for_stats.max(),
+                        _sigma_for_stats.std(unbiased=False) if _sigma_for_stats.numel() > 1 else torch.zeros((), device=sigma.device, dtype=sigma.dtype),
+                        sigma_p.mean(),
+                        _phi_norm.mean(),
+                        _phi_norm.std(unbiased=False) if _phi_norm.numel() > 1 else torch.zeros((), device=phi.device, dtype=phi.dtype),
+                        _phi_norm.max(),
+                    ])
+                    _v = _stats.detach().cpu().tolist()
+                    self._last_diagnostics = {
+                        'beta_mean':                  _v[0],
+                        'beta_std':                   _v[1],
+                        'attention_concentration':    _v[2],
+                        'attention_entropy':          _v[3],
+                        'sigma_q_mean':               _v[4],
+                        'sigma_q_min':                _v[5],
+                        'sigma_q_max':                _v[6],
+                        'sigma_q_std':                _v[7],
+                        'sigma_p_mean':               _v[8],
+                        'phi_norm_mean':              _v[9],
+                        'phi_norm_std':               _v[10],
+                        'phi_norm_max':               _v[11],
+                        'kl_mean': kl_matrix.mean().item() if kl_matrix is not None else 0.0,
+                        'kl_max':  kl_matrix.max().item()  if kl_matrix is not None else 0.0,
+                    }
+
             if t == self.n_e_steps - 1 and self.track_layer_diagnostics:
                 with torch.no_grad():
                     self._last_diagnostics = {
@@ -868,8 +911,8 @@ class VFEEStep(nn.Module):
                         # population. Also avoids the std-of-numel=1 warning during
                         # _generate_sample (B=N=1 for the first token).
                         'beta_std': beta.std(unbiased=False).item(),
-                        'kl_mean': kl_matrix.mean().item(),
-                        'kl_max': kl_matrix.max().item(),
+                        'kl_mean': kl_matrix.mean().item() if kl_matrix is not None else 0.0,
+                        'kl_max': kl_matrix.max().item() if kl_matrix is not None else 0.0,
                         # Share the clamp+log between both entropy metrics — the
                         # log dominates the FLOP count here.
                         **(lambda _bsafe, _blog: {
@@ -878,13 +921,15 @@ class VFEEStep(nn.Module):
                                 float((_kappa * self._dim_scale * (_bsafe * _blog).sum()).item())
                                 if self.include_attention_entropy else 0.0
                             ),
-                        })(beta.clamp(min=1e-30), beta.clamp(min=1e-30).log()),
+                        })(beta.clamp(min=_BETA_LOG_FLOOR), beta.clamp(min=_BETA_LOG_FLOOR).log()),
                         'attention_concentration': beta.max(dim=-1)[0].mean().item(),
                         # Covariance health
                         'sigma_q_mean': sigma.mean().item(),
                         'sigma_q_min': sigma.min().item(),
                         'sigma_q_max': sigma.max().item(),
-                        'sigma_q_std': sigma.std().item(),
+                        # unbiased=False (population std) — matches adjacent stats
+                        # and avoids NaN on numel=1 (B=N=1 single-token generate).
+                        'sigma_q_std': sigma.std(unbiased=False).item(),
                         'sigma_p_mean': sigma_p.mean().item(),
                         # Phi norms — share one norm() reduction across all three stats.
                         # unbiased=False on .std() — population std, well-defined for
@@ -906,9 +951,16 @@ class VFEEStep(nn.Module):
                     # Free-energy trajectory (diagonal covariance only; empty
                     # list on full-cov paths).  Downstream can assert
                     # monotonicity as a hard correctness gate in unit tests.
+                    # Note: f_history[-1] is F measured at the START of the
+                    # final iteration (before that iteration's μ/σ/φ updates),
+                    # which is why we also expose `f_pre_final_update` as an
+                    # alias to make the semantics explicit. The post-final-
+                    # update F is not measured (computing it would require an
+                    # extra β + KL recomputation after step 7).
                     if f_history:
                         self._last_diagnostics['f_history'] = list(f_history)
                         self._last_diagnostics['f_final'] = f_history[-1]
+                        self._last_diagnostics['f_pre_final_update'] = f_history[-1]
                         def _ok(i: int) -> bool:
                             prev = f_history[i - 1]
                             tol = max(
@@ -952,6 +1004,43 @@ class VFEEStep(nn.Module):
                 # path. The dead arg is dropped from the call to make this
                 # explicit.
                 phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
+
+            # Final-iteration per-head diagnostic snapshot. Rebuild
+            # block_exp_pairs from the post-phi-update φ so the plot reflects
+            # the converged frame, not the iteration-start frame. Performed
+            # only once per forward (`t == n_e_steps - 1`).
+            if t == self.n_e_steps - 1:
+                if is_diagonal:
+                    _last_sigma = sigma.detach()
+                else:
+                    _last_sigma = sigma.detach().diagonal(dim1=-2, dim2=-1)
+                with torch.no_grad():
+                    _post_phi_bep = compute_gauge_transport(
+                        phi.detach(),
+                        self.generators,
+                        self.irrep_dims,
+                        enforce_orthogonal=self.enforce_orthogonal,
+                    )
+                # Store the kappa tensor (not a Python float) — converting
+                # on demand in _compute_per_head_beta avoids a host sync
+                # on every forward.
+                _kappa_cached = (
+                    _kappa.detach() if isinstance(_kappa, torch.Tensor)
+                    else torch.tensor(float(_kappa))
+                )
+                self._last_attention_state = {
+                    'mu_q': mu.detach(),
+                    'sigma_q': _last_sigma,
+                    'block_exp_pairs': [
+                        (
+                            p[0].detach() if p[0] is not None else None,
+                            p[1].detach() if p[1] is not None else None,
+                        )
+                        for p in _post_phi_bep
+                    ],
+                    'kappa': _kappa_cached,
+                    'irrep_dims': list(self.irrep_dims) if self.irrep_dims else None,
+                }
 
         # Cache an auxiliary scalar F to deliver gradients to raw_c0, raw_b0,
         # log_kappa. None when neither hyperparameter is learnable. The model
@@ -1021,7 +1110,7 @@ class VFEEStep(nn.Module):
                 # Uniform prior π = 1/N; constant log N dropped (additive const in F).
                 # Verified by tests/test_entropy_envelope.py: production config matches
                 # the envelope prediction to ~1e-18 for any λ_soft.
-                beta_safe = beta_phi.clamp(min=1e-30)
+                beta_safe = beta_phi.clamp(min=_BETA_LOG_FLOOR)
                 _F = (beta_phi * kl_h).sum() + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()
                 alignment_loss = self.lambda_align * _F
             else:
@@ -1328,7 +1417,7 @@ class VFEEStep(nn.Module):
             )
 
             if self.include_attention_entropy:
-                beta_safe = beta_phi.clamp(min=1e-30)
+                beta_safe = beta_phi.clamp(min=_BETA_LOG_FLOOR)
                 _F = (
                     (beta_phi * kl_h).sum()
                     + _kappa * self._dim_scale * (beta_safe * beta_safe.log()).sum()

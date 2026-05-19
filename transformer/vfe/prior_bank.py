@@ -85,7 +85,14 @@ class VFEPriorBank(nn.Module):
         self.diagonal_covariance = cfg.diagonal_covariance
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.sigma_max = cfg.sigma_max
-        self.eps = 1e-6
+        # Numerical floor for σ. The base-σ helper at `:base_sigma` uses
+        # 0.01 — the historical floor for gauge-fixed mode — and the
+        # direct-mode `_per_token_priors` uses the same constant so the
+        # two parameterizations span the same reachable Gaussian manifold.
+        # The smaller `1e-6` used elsewhere is retained as `self.eps_small`
+        # for places that previously consumed `self.eps`.
+        self.eps = 0.01
+        self.eps_small = 1e-6
         self.phi_project_slk = cfg.phi_project_slk
         self.phi_trace_clamp = cfg.phi_trace_clamp
 
@@ -197,7 +204,11 @@ class VFEPriorBank(nn.Module):
         """
         mu = self.mu_embed(token_ids)                               # (..., K)
         log_sigma = self.sigma_log_embed(token_ids)                 # (..., K)
-        sigma_diag = torch.exp(log_sigma.float()).clamp(self.eps, self.sigma_max)
+        # Compute σ in float32 for numerical stability of `exp` + `clamp`,
+        # then cast back to μ's dtype so the (μ, σ) pair matches downstream.
+        sigma_diag = (
+            torch.exp(log_sigma.float()).clamp(self.eps, self.sigma_max).to(mu.dtype)
+        )
         return mu, sigma_diag
 
     def _diag_to_full_block(self, sigma_diag: torch.Tensor) -> torch.Tensor:
@@ -309,7 +320,7 @@ class VFEPriorBank(nn.Module):
                     _M_h = _exp_h @ _exp_h.transpose(-1, -2)
                     sigma_p[..., _block_start:_block_end, _block_start:_block_end] = (
                         sigma_p[..., _block_start:_block_end, _block_start:_block_end]
-                        + self.eps * _M_h
+                        + self.eps_small * _M_h
                     )
                     _block_start = _block_end
             else:

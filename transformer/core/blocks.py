@@ -827,7 +827,7 @@ class GaugeTransformerBlock(nn.Module):
                 cached_head_transports = []
                 dim_start = 0
                 for d in irrep_dims:
-                    # Include 'exp_phi' so downstream consumers (notably the
+                    # Include 'exp_phi' so downstream consumers (specifically the
                     # gauge_covariant_ridge branches in attention.aggregate_messages)
                     # can build the covariant ridge eps*(g·g^T). Without it, those
                     # branches silently fall back to eps*I and the opt-in becomes

@@ -81,8 +81,8 @@ def stable_matrix_exp_pair(
 
     Args:
         matrix: (..., d, d) matrix to exponentiate.
-        dim_threshold: Upcast to float64 when d >= this value. Default 8.
-        max_norm: Maximum Frobenius norm for input matrix. Default 20.0.
+        dim_threshold: Upcast to float64 when d >= this value. Default 20.
+        max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
         skew_symmetric: If True, skip computing exp(-M) and use exp(M).mT
             instead. For skew-symmetric M, exp(-M) = exp(M)^T exactly.
             Cache this flag at init rather than checking every forward pass.

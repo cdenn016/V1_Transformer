@@ -205,16 +205,16 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Group
     # --------------------------------------------------------------------------
-    # NOTE: gauge_mode, gauge_param, isotropic_covariance below are MIRROR-ONLY
-    # fields. Architecture lives in the flat config dict consumed by
-    # BlockConfig.from_config — assigning these on a TrainingConfig instance
-    # has no runtime effect. They are preserved here only for callers that
-    # construct a TrainingConfig and read the dataclass for display/logging.
+    # NOTE: gauge_mode, gauge_param, isotropic_covariance, omega_trust_region
+    # below are MIRROR-ONLY fields. Architecture lives in the flat config dict
+    # consumed by BlockConfig.from_config — assigning these on a TrainingConfig
+    # instance has no runtime effect. They are preserved here only for callers
+    # that construct a TrainingConfig and read the dataclass for display/logging.
     # ==========================================================================
     gauge_mode: str =           'learned'    # 'learned', 'trivial', 'constant' (mirror-only)
     gauge_param: str =           'phi'       # 'phi' or 'omega' (mirror-only)
     omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
-    omega_trust_region: float =  0.3
+    omega_trust_region: float =  0.3         # (mirror-only)
     omega_det_penalty: float =   0.0          # λ · mean (log|det Ω_h|)² regularizer (keeps Ω invertible under gauge_param='omega'; unused for 'phi')
     isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript) (mirror-only)
 
@@ -269,6 +269,7 @@ class TrainingConfig:
     # non-finite KL values propagate through the softmax into the loss so
     # divergence trips `assert_finite_loss` instead of saturating silently.
     # Intended for diagnostic runs; leave off for normal training.
+    # (mirror-only: read from flat config dict via BlockConfig.from_config)
     propagate_kl_nonfinite: bool = False
 
     # Per-param-group warmup multipliers for _create_scheduler. Keys match

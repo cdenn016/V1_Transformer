@@ -26,6 +26,7 @@ import torch
 from typing import List, Optional, Tuple
 
 from transformer.core.gauge_utils import (
+    _cached_eye,
     stable_matrix_exp_pair,
     newton_schulz_orthogonalize,
     fused_block_matrix_exp_pairs,
@@ -36,7 +37,6 @@ from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_oute
 import transformer.core.vfe_utils as _vfe_utils_mod
 from transformer.core.vfe_utils import (
     kl_diagnostics_enabled as _kl_diagnostics_enabled,
-    SIGMA_EPS,
     TRANSPORT_JITTER,
     KL_CEIL_BASE,
     KL_CEIL_SCALE,
@@ -174,7 +174,7 @@ def _compute_vfe_gradients_block_diagonal(
         # ∂D_α/∂μ_q = α_d · Σ̃⁻¹ · (μ_q - μ_p)
         # ∂D_α/∂Σ_q = ½(Σ̃⁻¹ - Σ_q⁻¹) - ½·α_d·(1-α_d)·Σ̃⁻¹·ΔμΔμᵀ·Σ̃⁻¹
         sigma_blend = (1.0 - alpha_div) * sigma_q + alpha_div * sigma_p  # (B, N, K, K)
-        I_K = torch.eye(K, device=device, dtype=dtype)
+        I_K = _cached_eye(K, device, dtype)
         if exp_phi_full is not None:
             _R_K_blend = exp_phi_full @ exp_phi_full.transpose(-1, -2)
         else:
@@ -348,20 +348,13 @@ def _compute_vfe_gradients_block_diagonal(
             # any NaN-containing pair (i, j) with identity so the offending
             # pair contributes zero KL and zero gradient instead.  Mirrors
             # the guard in _fused_attention_and_vfe_gradients_block_diag.
-            #
-            # REVERTED 2026-04-08: the unconditional `torch.where` path was
-            # a no-op optimization on clean inputs but paired with the
-            # unconditional nan_to_num below produced training instability
-            # via inf → 3.4e38 replacement. Restoring the conditional guards.
-            I_d = torch.eye(d, device=device, dtype=dtype)
-            if torch.isnan(Omega_chunk).any():
+            # Unconditional torch.where avoids a host sync; clean inputs
+            # are unchanged (isnan returns False everywhere).
+            I_d = _cached_eye(d, device, dtype)
+            _omega_nan = torch.isnan(Omega_chunk)
+            if _kl_diagnostics_enabled() and bool(_omega_nan.any().item()):
                 _nr("vfe_full_omega_nan")
-                _nan_mask = torch.isnan(Omega_chunk).any(dim=-1).any(dim=-1)  # (B, C, N)
-                Omega_chunk = torch.where(
-                    _nan_mask.unsqueeze(-1).unsqueeze(-1),
-                    I_d.expand_as(Omega_chunk),
-                    Omega_chunk,
-                )
+            Omega_chunk = torch.where(_omega_nan, I_d.expand_as(Omega_chunk), Omega_chunk)
 
             # Transport means and covariances for this chunk.
             # When use_rope is active, we also transport the rope-rotated mu so
@@ -382,30 +375,28 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Second-line NaN guards.  Even with a clean Omega, sigma_block
             # itself can be NaN (extreme M-step σ_p update).  clamp() does
-            # not replace NaN, only out-of-range finite values, so we explicit
-            # mask here too.  Mirrors the guards in
-            # _fused_attention_and_vfe_gradients_block_diag.
-            if torch.isnan(sigma_j_transported).any():
+            # not replace NaN, only out-of-range finite values, so we
+            # explicitly mask here too.  Unconditional torch.where avoids
+            # a host sync per chunk; counter incurs a sync only when the
+            # diagnostics flag is enabled.
+            _sigma_nan = torch.isnan(sigma_j_transported)
+            if _kl_diagnostics_enabled() and bool(_sigma_nan.any().item()):
                 _nr("vfe_full_sigma_t_nan")
-                _nan_mask_s = torch.isnan(sigma_j_transported).any(dim=-1).any(dim=-1)
-                sigma_j_transported = torch.where(
-                    _nan_mask_s.unsqueeze(-1).unsqueeze(-1),
-                    I_d.expand_as(sigma_j_transported),
-                    sigma_j_transported,
-                )
-            if torch.isnan(mu_j_transported).any():
+            sigma_j_transported = torch.where(
+                _sigma_nan, I_d.expand_as(sigma_j_transported), sigma_j_transported,
+            )
+            _mu_nan = torch.isnan(mu_j_transported)
+            if _kl_diagnostics_enabled() and bool(_mu_nan.any().item()):
                 _nr("vfe_full_mu_t_nan")
-                mu_j_transported = torch.where(
-                    torch.isnan(mu_j_transported),
-                    torch.zeros_like(mu_j_transported),
-                    mu_j_transported,
-                )
-            if use_rope and torch.isnan(mu_j_transported_rope).any():
-                _nr("vfe_full_mu_t_rope_nan")
+            mu_j_transported = torch.where(
+                _mu_nan, torch.zeros_like(mu_j_transported), mu_j_transported,
+            )
+            if use_rope:
+                _mu_r_nan = torch.isnan(mu_j_transported_rope)
+                if _kl_diagnostics_enabled() and bool(_mu_r_nan.any().item()):
+                    _nr("vfe_full_mu_t_rope_nan")
                 mu_j_transported_rope = torch.where(
-                    torch.isnan(mu_j_transported_rope),
-                    torch.zeros_like(mu_j_transported_rope),
-                    mu_j_transported_rope,
+                    _mu_r_nan, torch.zeros_like(mu_j_transported_rope), mu_j_transported_rope,
                 )
 
             # Regularize and invert (adaptive regularization for numerical stability)
@@ -450,7 +441,7 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Use contiguous slice and clone for expand to avoid view issues
             sigma_i_block_slice = sigma_block[:, i_start:i_end].contiguous()  # (B, C, d, d)
-            sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, C, N, d, d)
+            sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, C, N, d, d) — einsum accepts non-contiguous
             trace_block = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_block))
 
             try:
@@ -483,7 +474,7 @@ def _compute_vfe_gradients_block_diagonal(
             if compute_sigma_align_grad:
                 sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=TRANSPORT_JITTER)  # (B, C, d, d)
                 # Use .clone() after expand to ensure contiguous memory layout
-                sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
+                sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # einsum accepts non-contiguous
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)  # (B, C, N, d, d)
                 beta_chunk = beta[:, i_start:i_end, :].contiguous()  # (B, C, N)
                 grad_sigma_block_weighted = lambda_belief * torch.einsum('bij,bijkl->bikl', beta_chunk, grad_sigma_block)
@@ -1175,7 +1166,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         # kl_computation._kl_kernel_dense and gauge_utils fused KL kernels.
         # Unconditional torch.where avoids the host sync that an `.any()`
         # branch would force on every block of every E-step iteration.
-        _eye_d = torch.eye(d, device=Omega_block.device, dtype=Omega_block.dtype)
+        _eye_d = _cached_eye(d, Omega_block.device, Omega_block.dtype)
         _nan_mask = torch.isnan(Omega_block).any(dim=-1).any(dim=-1)  # (B, N, N)
         if _kl_diagnostics_enabled() and _nan_mask.any():
             _nr("fused_vfe_omega_nan", count=int(_nan_mask.sum().item()))
@@ -1870,18 +1861,15 @@ def compute_vfe_gradients_gpu(
         # Matches the symmetrization pattern in the fused block-diag path.
         sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
 
-        # Regularize and invert
-        sigma_j_reg = sigma_j_transported + max(eps, TRANSPORT_JITTER) * torch.eye(K, device=device, dtype=dtype)
-        # NaN safety: if transport produced NaN, replace with identity covariance
-        if torch.isnan(sigma_j_reg).any():
+        # Regularize and invert. Unconditional torch.where + cached eye
+        # avoids a host sync per call on the full-covariance natural-gradient
+        # path; the diagnostic counter is gated by the diagnostics flag.
+        eye_K_cached = _cached_eye(K, device, dtype)
+        sigma_j_reg = sigma_j_transported + max(eps, TRANSPORT_JITTER) * eye_K_cached
+        _sigma_reg_nan = torch.isnan(sigma_j_reg)
+        if _kl_diagnostics_enabled() and bool(_sigma_reg_nan.any().item()):
             _nr("vfe_fullcov_sigma_reg_nan")
-            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
-            eye_K = torch.eye(K, device=device, dtype=dtype)
-            sigma_j_reg = torch.where(
-                nan_mask.unsqueeze(-1).unsqueeze(-1),
-                eye_K.expand_as(sigma_j_reg),
-                sigma_j_reg,
-            )
+        sigma_j_reg = torch.where(_sigma_reg_nan, eye_K_cached.expand_as(sigma_j_reg), sigma_j_reg)
         sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=eps)  # (B, N, N, K, K)
 
         # ∂KL_ij/∂μ_i
@@ -1895,7 +1883,7 @@ def compute_vfe_gradients_gpu(
 
         # Trace term: tr(Σ_j_transported^{-1} @ Σ_i)
         # Use .clone() after expand for contiguous memory layout
-        sigma_i_expanded = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
+        sigma_i_expanded = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K) — einsum accepts non-contiguous
         trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_expanded))
 
         # Log-determinant terms using Cholesky with fallback
@@ -1906,7 +1894,7 @@ def compute_vfe_gradients_gpu(
             eigvals = torch.linalg.eigvalsh(sigma_j_reg)
             logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
 
-        sigma_i_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_i_reg = sigma_q + eps * eye_K_cached
         try:
             L_i = torch.linalg.cholesky(sigma_i_reg)  # (B, N, K, K)
             logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N)
@@ -1914,7 +1902,7 @@ def compute_vfe_gradients_gpu(
             eigvals = torch.linalg.eigvalsh(sigma_i_reg)
             logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
         # Use .clone() after expand for contiguous memory layout
-        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
+        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N)  # (B, N, N) — broadcast view
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
@@ -1943,7 +1931,7 @@ def compute_vfe_gradients_gpu(
         if compute_sigma_align_grad:
             # Use Σ_i^{-1} computed earlier in self-coupling section (sigma_q_inv)
             # Use .clone() after expand for contiguous memory layout
-            sigma_i_inv_expanded = sigma_q_inv[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
+            sigma_i_inv_expanded = sigma_q_inv[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K) — einsum accepts non-contiguous
 
             # Gradient per pair: 0.5 * (Σ_j_transported^{-1} - Σ_i^{-1})
             grad_sigma_per_pair = 0.5 * (sigma_j_inv - sigma_i_inv_expanded)  # (B, N, N, K, K)
@@ -2173,7 +2161,7 @@ def _compute_rope_full_gauge_gradient_per_head(
         )  # (B, N, N, d_h, d_h)
         # Numerical stability: symmetrize and add eps to diagonal
         sigma_t = 0.5 * (sigma_t + sigma_t.transpose(-1, -2))
-        eye_dh = torch.eye(d_h, device=device, dtype=_f32)
+        eye_dh = _cached_eye(d_h, device, _f32)
         # Gauge-covariant ridge: Σ_t and Σ_i_rope both live in position-i's
         # frame (Σ_t after Ω Σ_j Ω^T transport, Σ_i_rope is Σ_i rotated by RoPE
         # which does not change the gauge-transport frame at position i).
@@ -2272,7 +2260,7 @@ def _compute_rope_full_gauge_gradient_per_head(
                 F_self = F_self - 0.5 * (_alpha_det.pow(2) / _c0_det * kl_self.pow(2)).sum()
         else:
             # Full covariance: KL(q||p) = 0.5[tr(Sp^{-1} Sq) + delta^T Sp^{-1} delta - d + log|Sp| - log|Sq|]
-            eye_dh_self = torch.eye(d_h, device=device, dtype=_f32)
+            eye_dh_self = _cached_eye(d_h, device, _f32)
             # Gauge-covariant ridge for the self-KL: Σ_p and Σ_q both live at
             # position i with local frame exp_phi_h (per-head, per-position).
             if gauge_covariant_ridge:

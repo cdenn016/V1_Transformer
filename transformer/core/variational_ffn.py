@@ -72,13 +72,10 @@ from transformer.core.vfe_utils import (
 from transformer.core.vfe_utils import (
     _grad_norm,
     _per_pos_stats,
-    _aggregate_multihead_vfe_debug,
     squeeze_trailing_singletons,
     _safe_spd_inv,
     _safe_eigh,
     spd_eigfloor,
-    retract_spd_torch,
-    retract_spd_diagonal_torch,
     _retract_phi,
 )
 
@@ -96,17 +93,12 @@ from transformer.core.attention import compute_attention_weights
 # These functions are defined in transformer.core.vfe_gradients and imported
 # here for backward compatibility.  Do not add gradient logic here.
 from transformer.core.vfe_gradients import (
-    _compute_vfe_gradients_block_diagonal,
-    _compute_vfe_gradients_block_diagonal_diag,
     _fused_attention_and_vfe_gradients_block_diag,
     compute_vfe_gradients_gpu,
     compute_natural_gradient_gpu,
     _compute_rope_full_gauge_gradient_per_head,
 )
 from transformer.core.phi_evolution import precondition_phi_gradient
-
-
-# retract_spd_torch and retract_spd_diagonal_torch are imported from vfe_utils above.
 
 
 # =============================================================================
@@ -1175,8 +1167,14 @@ class VariationalFFNDynamic(nn.Module):
         By default, beliefs (mu_current, sigma_current) are detached, giving the
         partial derivative ∂F/∂φ|_{q fixed} — a semi-gradient that treats beliefs
         as constants. When ``exact_phi_grad=True`` and ``amortized_inference=True``,
-        beliefs stay attached, giving the full total derivative dF/dφ through
-        the E-step iteration graph (IFT-correct).
+        beliefs stay attached, giving the gradient through the unrolled E-step
+        iteration graph — this is amortized inference [BaiKolterKoltun2019],
+        NOT a true implicit-function-theorem gradient. True IFT (solving
+        ``(I − J_T)^{-T} v`` via a Neumann series) is implemented in
+        ``transformer/core/vfe_deq.py`` and is gated behind
+        ``use_deq=True ∧ deq_include_phi=True``. The historical "IFT-correct"
+        label was retained on the `ift_phi` em_mode for back-compat with
+        saved configs; the actual gradient profile here is amortized.
 
         Returns the preconditioned gradient, or None if no gradient could be computed.
         """

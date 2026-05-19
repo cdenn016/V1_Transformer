@@ -12,7 +12,8 @@ where:
     - KL: Kullback-Leibler divergence (information distance)
     - κ: Temperature parameter
 
-Key Insight: NO W_Q, W_K matrices! Attention emerges from geometry.
+Mechanism: NO W_Q, W_K matrices. Attention emerges from the KL between
+parallel-transported belief Gaussians.
 
 0D Architecture:
     - All agents at single point c*
