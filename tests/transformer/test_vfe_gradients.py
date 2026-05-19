@@ -753,3 +753,139 @@ def _make_spd(B, N, K, device='cpu'):
     """Generate random SPD matrices (B, N, K, K)."""
     A = torch.randn(B, N, K, K, device=device) * 0.3
     return A @ A.transpose(-1, -2) + 0.2 * torch.eye(K, device=device)
+
+
+# =============================================================================
+# F4.10: causal_lower_triangle parity tests
+# =============================================================================
+
+
+def _fused_kernel_inputs(B, N, K, n_gen, device='cpu', dtype=torch.float32):
+    """Canonical input set for _fused_attention_and_vfe_gradients_block_diag."""
+    torch.manual_seed(0)
+    mu_q = torch.randn(B, N, K, device=device, dtype=dtype) * 0.5
+    sigma_q = torch.rand(B, N, K, device=device, dtype=dtype).clamp(min=0.3) + 0.2
+    mu_p = torch.randn(B, N, K, device=device, dtype=dtype) * 0.3
+    sigma_p = torch.rand(B, N, K, device=device, dtype=dtype).clamp(min=0.3) + 0.3
+    phi = torch.randn(B, N, n_gen, device=device, dtype=dtype) * 0.05
+    generators = torch.zeros(n_gen, K, K, device=device, dtype=dtype)
+    for g in range(min(n_gen, K * K)):
+        i, j = divmod(g, K)
+        if i < K and j < K:
+            generators[g, i, j] = 1.0
+    return mu_q, sigma_q, mu_p, sigma_p, phi, generators
+
+
+class TestCausalLowerTriangleParity:
+    """F4.10: the lower-triangle fast path must be bit-identical to the dense
+    path for beta, grad_mu, grad_sigma under a strict causal mask. kl_matrix
+    differs in the upper triangle only (real KL vs zero) — lower-triangle and
+    diagonal must still match.
+    """
+
+    @pytest.mark.parametrize("use_rope", [False, True])
+    @pytest.mark.parametrize("mask_self_attention", [False, True])
+    @pytest.mark.parametrize("alpha_div", [1.0, 0.5])
+    def test_parity_with_dense(self, use_rope, mask_self_attention, alpha_div):
+        from transformer.core.vfe_gradients import (
+            _fused_attention_and_vfe_gradients_block_diag,
+        )
+
+        B, N, K, n_gen = 2, 8, 6, 6 * 6
+        irrep_dims = [3, 3]
+        mu_q, sigma_q, mu_p, sigma_p, phi, generators = _fused_kernel_inputs(
+            B, N, K, n_gen
+        )
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1).contiguous()
+
+        shared = dict(
+            mu_q=mu_q, sigma_q=sigma_q, mu_p=mu_p, sigma_p=sigma_p,
+            phi=phi, generators=generators,
+            alpha=1.0, lambda_belief=1.0, lambda_softmax=0.5,
+            kappa=1.0, eps=1e-6, irrep_dims=irrep_dims,
+            compute_sigma_align_grad=True,
+            mask=mask, mask_self_attention=mask_self_attention,
+            use_rope=use_rope, rope_base=10000.0,
+            return_kl=True, alpha_div=alpha_div,
+        )
+
+        beta_dense, gmu_dense, gsig_dense, kl_dense = (
+            _fused_attention_and_vfe_gradients_block_diag(
+                **shared, causal_lower_triangle=False
+            )
+        )
+        beta_tri, gmu_tri, gsig_tri, kl_tri = (
+            _fused_attention_and_vfe_gradients_block_diag(
+                **shared, causal_lower_triangle=True
+            )
+        )
+
+        # beta, grad_mu, grad_sigma must be bit-identical (or extremely close
+        # within fp32 noise) because beta=0 at j>i in both paths annihilates
+        # any value at those positions.
+        torch.testing.assert_close(beta_tri, beta_dense, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(gmu_tri, gmu_dense, rtol=1e-4, atol=1e-6)
+        torch.testing.assert_close(gsig_tri, gsig_dense, rtol=1e-4, atol=1e-6)
+
+        # kl_matrix lower triangle must match; upper triangle is zero in the
+        # triangle path and real in the dense path (this is documented).
+        assert kl_dense is not None and kl_tri is not None
+        tril_mask = torch.tril(torch.ones(N, N, dtype=torch.bool))
+        torch.testing.assert_close(
+            kl_tri[:, tril_mask], kl_dense[:, tril_mask], rtol=1e-4, atol=1e-5
+        )
+        # Upper triangle of kl_tri must be exactly zero.
+        upper_idx = torch.triu(torch.ones(N, N, dtype=torch.bool), diagonal=1)
+        assert (kl_tri[:, upper_idx] == 0).all()
+
+    def test_beta_is_row_stochastic_under_triangle(self):
+        from transformer.core.vfe_gradients import (
+            _fused_attention_and_vfe_gradients_block_diag,
+        )
+        B, N, K, n_gen = 2, 6, 4, 16
+        irrep_dims = [4]
+        mu_q, sigma_q, mu_p, sigma_p, phi, generators = _fused_kernel_inputs(
+            B, N, K, n_gen
+        )
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1).contiguous()
+        beta, _, _, _ = _fused_attention_and_vfe_gradients_block_diag(
+            mu_q=mu_q, sigma_q=sigma_q, mu_p=mu_p, sigma_p=sigma_p,
+            phi=phi, generators=generators,
+            alpha=1.0, lambda_belief=1.0, lambda_softmax=0.0,
+            kappa=1.0, eps=1e-6, irrep_dims=irrep_dims,
+            compute_sigma_align_grad=False,
+            mask=mask, mask_self_attention=False,
+            return_kl=False, causal_lower_triangle=True,
+        )
+        # Row sums = 1 within fp32 tolerance.
+        row_sums = beta.sum(dim=-1)
+        torch.testing.assert_close(
+            row_sums, torch.ones_like(row_sums), rtol=1e-5, atol=1e-5
+        )
+        # Upper-triangle entries must be exactly zero (softmax of -inf logits).
+        upper_idx = torch.triu(torch.ones(N, N, dtype=torch.bool), diagonal=1)
+        assert (beta[:, upper_idx] == 0).all()
+
+    def test_finite_outputs_under_triangle(self):
+        from transformer.core.vfe_gradients import (
+            _fused_attention_and_vfe_gradients_block_diag,
+        )
+        B, N, K, n_gen = 2, 5, 4, 16
+        irrep_dims = [4]
+        mu_q, sigma_q, mu_p, sigma_p, phi, generators = _fused_kernel_inputs(
+            B, N, K, n_gen
+        )
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1).contiguous()
+        beta, gmu, gsig, kl = _fused_attention_and_vfe_gradients_block_diag(
+            mu_q=mu_q, sigma_q=sigma_q, mu_p=mu_p, sigma_p=sigma_p,
+            phi=phi, generators=generators,
+            alpha=1.0, lambda_belief=1.0, lambda_softmax=0.5,
+            kappa=1.0, eps=1e-6, irrep_dims=irrep_dims,
+            compute_sigma_align_grad=True,
+            mask=mask, mask_self_attention=True,
+            return_kl=True, causal_lower_triangle=True,
+        )
+        assert torch.isfinite(beta).all()
+        assert torch.isfinite(gmu).all()
+        assert torch.isfinite(gsig).all()
+        assert kl is not None and torch.isfinite(kl).all()
