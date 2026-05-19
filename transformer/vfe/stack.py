@@ -36,7 +36,7 @@ desired) to recover the canonical scheme.
 
 from __future__ import annotations
 
-from typing import Optional, Callable, List, TYPE_CHECKING
+from typing import Optional, Callable, TYPE_CHECKING
 
 import torch
 import torch.nn as nn

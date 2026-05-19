@@ -113,21 +113,24 @@ def compute_ambiguity(
     predictive_probs: torch.Tensor,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    r"""Compute ambiguity for each candidate action.
+    r"""Compute ambiguity = entropy of the marginal predictive.
 
-    Ambiguity = :math:`H[p(o | z_{t+1}(a))]`, the entropy of the readout
-    distribution at the rolled-out belief state.  High ambiguity means the
-    model is uncertain about what observation follows this action.
-
-    With a deterministic rollout (delta transition), this is the entropy
-    of the readout evaluated at the single rolled-out point.
+    NOTE: Canonical EFE ambiguity is :math:`\mathbb{E}_{q(z)}[H[p(o|z)]]`
+    (the expected per-sample entropy under the belief distribution), NOT
+    :math:`H[q_{\text{marginal}}]`. These differ by exactly the BALD
+    mutual information; using the marginal entropy here makes
+    `risk + ambiguity` cancel to `log V` under uniform preferences. The
+    canonical quantity is returned by :func:`_compute_epistemic_value` as
+    `mean_H`. Callers that need the true ambiguity should consume
+    `mean_H` directly; this helper is retained for any callers that want
+    the marginal-entropy form explicitly.
 
     Args:
-        predictive_probs: ``(K, V)`` readout probabilities after rollout.
+        predictive_probs: ``(K, V)`` readout probabilities.
         eps: Numerical floor for log.
 
     Returns:
-        ambiguity: ``(K,)`` entropy per candidate.
+        ambiguity: ``(K,)`` marginal entropy per candidate.
     """
     log_probs = predictive_probs.clamp(min=eps).log()
     ambiguity = -(predictive_probs * log_probs).sum(dim=-1)  # (K,)

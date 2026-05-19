@@ -6,8 +6,16 @@ gradient flow at the EM boundary. Extracted from block_config.py to decouple
 variational_ffn.py from the config module.
 
 Three modes supported:
-    'ift_phi'  : amortized μ,σ; full IFT φ gradient (default; mathematically
-                 pure path under skip_attention=True).
+    'ift_phi'  : amortized μ,σ + amortized φ gradient via a single
+                 `torch.autograd.grad` on a fresh `phi_for_grad` leaf
+                 (default; mathematically pure path under
+                 ``skip_attention=True``). NOTE: this is amortized
+                 inference in the [BaiKolterKoltun2019] sense, NOT a true
+                 implicit-function-theorem gradient. True IFT (Neumann
+                 series `(I − J_T)^{-T} v`) lives behind ``use_deq=True``
+                 in ``transformer/core/vfe_deq.py``; the `ift_phi` label
+                 is the historical mode name kept for back-compat with
+                 saved configs and is not renamed here.
     'em_phi_q' : amortized μ; σ and φ in q; all detached at EM boundary.
     'em_phi_p' : amortized μ; σ amortized; φ frozen in E-step (M-step only).
 

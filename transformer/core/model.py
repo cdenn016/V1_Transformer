@@ -46,8 +46,6 @@ from transformer.core.vfe_utils import get_global_recorder
 # Try to import generators (fallback to random if unavailable)
 try:
     from math_utils.generators import (
-        generate_so3_generators,
-        generate_soN_generators,
         generate_multi_irrep_generators,
         generate_multi_irrep_soN_generators,
         generate_glK_generators,

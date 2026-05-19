@@ -144,5 +144,5 @@ class TestFastTrainerCheckpoint:
         trainer.global_step = 10
         trainer.save_checkpoint(is_best=True)
         best_path = str(trainer.config.checkpoint_dir / 'best_model.pt')
-        checkpoint = torch.load(best_path, map_location='cpu', weights_only=False)
+        checkpoint = torch.load(best_path, map_location='cpu', weights_only=False)  # trusted: self-saved checkpoint inside test sandbox
         assert 'model_state_dict' in checkpoint

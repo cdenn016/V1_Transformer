@@ -59,7 +59,7 @@ class TestEvaluateCheckpoint:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = _make_synthetic_checkpoint(minimal_config, model, tmp_dir)
-            checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(path, map_location='cpu', weights_only=False)  # trusted: self-saved checkpoint inside test sandbox
             assert 'config' in checkpoint
             assert 'model_state_dict' in checkpoint
             assert checkpoint['step'] == 100
@@ -71,7 +71,7 @@ class TestEvaluateCheckpoint:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = _make_synthetic_checkpoint(minimal_config, model, tmp_dir)
-            checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(path, map_location='cpu', weights_only=False)  # trusted: self-saved checkpoint inside test sandbox
             config = checkpoint['config']
             assert config['vocab_size'] == 100
             assert config['embed_dim'] == 15
@@ -83,7 +83,7 @@ class TestEvaluateCheckpoint:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = _make_synthetic_checkpoint(minimal_config, model, tmp_dir)
-            checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(path, map_location='cpu', weights_only=False)  # trusted: self-saved checkpoint inside test sandbox
             state = checkpoint['model_state_dict']
             # Find a weight tensor that reveals vocab size
             for key, val in state.items():

@@ -33,7 +33,6 @@ from math_utils.numerical_monitor import record as _nr
 from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_diag,
     fused_block_diagonal_kl_full,
-    fused_block_matrix_exp_pairs,
 )
 # Diagnostics flag lives in vfe_utils so gauge_utils, kl_computation, and
 # vfe_gradients can all share it without circular imports. Re-exported here

@@ -219,9 +219,17 @@ class VFEModel(nn.Module):
             # combined `loss` is composed.
             ce_for_log = ce_loss.detach()
 
-            # Normalize CE by sqrt(K) to match VFE dim_scale normalization
+            # Normalize CE by sqrt(K) to match VFE dim_scale normalization.
+            # Aux-hyperparameter and mass_phi terms are normalized by the
+            # SAME factor below so the gradient ratio between CE and the
+            # auxiliary terms is invariant to this rescaling. Without this
+            # the aux gradient to raw_c0/raw_b0/log_kappa is `sqrt(K)` times
+            # larger than the CE gradient under normalize_ce_by_dim=True.
             if self.cfg.normalize_ce_by_dim:
-                ce_loss = ce_loss / (self.cfg.embed_dim ** 0.5)
+                loss_scale = 1.0 / (self.cfg.embed_dim ** 0.5)
+                ce_loss = ce_loss * loss_scale
+            else:
+                loss_scale = 1.0
 
             loss = ce_loss
 
@@ -230,18 +238,17 @@ class VFEModel(nn.Module):
                 # Normalize by (B * N) so penalty is per-position, independent of
                 # batch size, sequence length, and generator count
                 phi_norm_sq = (beliefs.phi ** 2).sum() / (beliefs.phi.shape[0] * beliefs.phi.shape[1])
-                loss = loss + 0.5 * self.cfg.mass_phi * phi_norm_sq
+                loss = loss + loss_scale * (0.5 * self.cfg.mass_phi * phi_norm_sq)
 
             # Auxiliary hyperparameter loss: each E-step caches a scalar F
             # (mu/sigma/phi detached, kappa/alpha attached) so raw_c0,
             # raw_b0, log_kappa receive gradients on the outer backward.
-            # Without this, the descent kernels' inner torch.autograd.grad
-            # calls discard the hyperparameter subgraph and m_hyper_lr is a
-            # no-op. None per layer when neither hyperparameter is learnable.
+            # Scaled by `loss_scale` so the gradient magnitude matches CE
+            # under normalize_ce_by_dim=True.
             for block in self.stack.blocks:
                 aux = getattr(block.e_step, '_aux_hyperparam_loss', None)
                 if aux is not None:
-                    loss = loss + aux
+                    loss = loss + loss_scale * aux
 
             return logits, loss, ce_for_log
 

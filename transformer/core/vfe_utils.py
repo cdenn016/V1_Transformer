@@ -62,8 +62,6 @@ SIGMA_EPS: float = 1e-6
 TRANSPORT_JITTER: float = 1e-4
 KL_CEIL_BASE: float = 100.0
 KL_CEIL_SCALE: float = 5.0
-GRAD_CLIP_THRESHOLD: float = 10.0
-KAPPA_CLAMP_RANGE: Tuple[float, float] = (0.5, 1.5)
 
 # =============================================================================
 # VFE Gradient Debug Infrastructure
@@ -629,11 +627,11 @@ def _retract_phi(
     delta_phi: torch.Tensor,
     generators: torch.Tensor,
     step_size: float,
-    trust_region: float = None,  # None = auto-select based on gauge group
-    max_norm: float = None,  # None = auto-select based on gauge group
-    bch_order: int = None,  # None = auto-select based on gauge group
+    trust_region: Optional[float] = None,  # None = auto-select based on gauge group
+    max_norm: Optional[float] = None,  # None = auto-select based on gauge group
+    bch_order: Optional[int] = None,  # None = auto-select based on gauge group
     eps: float = 1e-6,
-    gauge_group: str = None,  # Explicit: 'GLK', 'SON', or None for auto-detect
+    gauge_group: Optional[str] = None,  # Explicit: 'GLK', 'SON', or None for auto-detect
     project_slk: bool = False,  # Hard project φ → sl(K) per block (det Ω_h = 1)
     trace_clamp: Optional[float] = None,  # Soft per-block cap |tr(φ·G_h)| ≤ T
     irrep_dims: Optional[List[int]] = None,  # Required for project_slk/trace_clamp on multi-block GL(K)
@@ -892,12 +890,15 @@ class IterationSnapshot:
 class RecorderProtocol(Protocol):
     """Structural type for a trajectory recorder.
 
-    Any object implementing ``record_step`` and ``start_forward`` satisfies
-    the protocol. Used by ``set_global_recorder`` to type the global hook
-    without forcing analysis-layer code to inherit a base class.
+    Conformers (`TrajectoryRecorder` in `analysis/trajectory.py`,
+    `PublicationMetrics` in `analysis/publication_metrics.py`) implement
+    these with concrete shared-prefix signatures; the trailing `**kwargs`
+    absorbs conformer-specific optional arguments.
     """
-    def record_step(self, *args: Any, **kwargs: Any) -> None: ...
-    def start_forward(self, *args: Any, **kwargs: Any) -> None: ...
+    def record_step(self, step: int, epoch: float,
+                    train_metrics: Dict[str, float], **kwargs: Any) -> None: ...
+    def start_forward(self, batch_size: int, seq_len: int,
+                      **kwargs: Any) -> None: ...
 
 
 _global_recorder: Optional[RecorderProtocol] = None
@@ -1098,8 +1099,21 @@ def retract_sigma_e_step(
         else:
             try:
                 eigvals = torch.linalg.eigvalsh(sigma_current)
-            except (RuntimeError, torch.linalg.LinAlgError):
+            except (RuntimeError, torch.linalg.LinAlgError) as _e:
+                # Surface the failure mode so an ill-conditioned σ propagating
+                # downstream is not invisible. Apply a defensive eps·I ridge so
+                # the next KL/inv call has a fighting chance against the same
+                # near-singular block.
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "retract_sigma_e_step condition-clamp eigvalsh failed: %s: %s",
+                    type(_e).__name__, _e,
+                )
                 eigvals = None
+                K = sigma_current.shape[-1]
+                sigma_current = sigma_current + eps * torch.eye(
+                    K, device=sigma_current.device, dtype=sigma_current.dtype
+                )
             if eigvals is not None:
                 e_min = eigvals[..., 0:1].clamp(min=eps)
                 e_max = eigvals[..., -1:]

@@ -21,8 +21,20 @@ Mathematical background
 -----------------------
 The Active Inference free energy augments the VFE with:
 
-    F_AI = lambda_prag * H[p_pred(v | mu_i)]            (pragmatic: entropy min)
+    F_AI = lambda_prag * H[p_pred(v | mu_i)]            (self-confidence term;
+                                                         see disclosure below)
          - lambda_epi  * MI(v; mu | q_i)                (epistemic: BALD MI)
+
+NOVEL-CONSTRUCTION DISCLOSURE. The ``lambda_prag`` term is the entropy
+of the model's OWN predictive distribution at the current ``mu_i``. This
+is NOT the canonical EFE pragmatic value, which per
+[ParrPezzuloFriston2022] is :math:`\mathbb{E}_q[-\log p^*(o)]` — the
+expected negative log preference under a target distribution. The
+present construction is a self-evidencing / self-confidence surrogate
+that drives the readout toward low-entropy (peaked) predictions without
+requiring an external preference. ``lambda_prag`` is named for symmetry
+with the EFE literature; readers comparing this against
+[ParrPezzuloFriston2022] should note the substitution.
 
 Both terms are differentiable in mu.  Gradients are computed via
 ``torch.autograd.grad`` on a freshly-detached mu leaf inside

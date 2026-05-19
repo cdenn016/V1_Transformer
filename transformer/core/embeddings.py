@@ -11,7 +11,7 @@ Gauge-Theoretic Token Embeddings (0D Transformer)
 
 Maps discrete tokens → agent beliefs (μ_i, Σ_i, φ_i) at single base manifold point c*.
 
-Key Insight from plan.py:
+Construction from plan.py:
     "0D Transformer: All N tokens → N agents at the SAME base point c*
      Each token i → (μ_i, Σ_i, φ_i) where:
      - μ_i ∈ ℝ^K: mean belief vector (NO spatial dependence)
@@ -35,7 +35,6 @@ Updated: GL(K) generalization - February 2026
 
 import math
 import warnings
-import numpy as np
 import torch
 import torch.nn as nn
 from typing import List, Tuple, Optional

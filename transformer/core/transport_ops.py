@@ -24,15 +24,20 @@ import torch
 from typing import List, Optional, Tuple, TypedDict
 
 
-class TransportDict(TypedDict, total=False):
-    """Return shape of ``compute_transport_operators`` / ``...direct``.
-
-    ``exp_phi``, ``exp_neg_phi``, ``Omega`` are always present;
-    ``exp_delta`` appears only when ``connection_delta`` is supplied.
-    """
+class _TransportDictRequired(TypedDict):
+    """Required keys for `TransportDict` — always populated."""
     exp_phi: torch.Tensor       # (B, N, K, K)
     exp_neg_phi: torch.Tensor   # (B, N, K, K)
     Omega: torch.Tensor         # (B, N, N, K, K)
+
+
+class TransportDict(_TransportDictRequired, total=False):
+    """Return shape of ``compute_transport_operators`` / ``...direct``.
+
+    Inherits three always-present keys (`exp_phi`, `exp_neg_phi`, `Omega`)
+    from `_TransportDictRequired`. The optional `exp_delta` is present only
+    when `connection_delta` is supplied.
+    """
     exp_delta: torch.Tensor     # (B, N, N, K, K), optional
 
 from transformer.core.gauge_utils import (
@@ -63,8 +68,8 @@ __all__ = [
 # =============================================================================
 
 def _build_rope_freqs(K: int, base: float = 10000.0,
-                      device: torch.device = None,
-                      dtype: torch.dtype = None) -> torch.Tensor:
+                      device: Optional[torch.device] = None,
+                      dtype: Optional[torch.dtype] = None) -> torch.Tensor:
     """Compute RoPE frequency bands for K-dimensional beliefs.
 
     Returns:
@@ -274,7 +279,7 @@ def compute_transport_operators(
     gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
     connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local connection
     cocycle_relaxation: float = 0.0,  # Scale factor for connection_delta: 0=flat, 1=fully non-flat
-    **kwargs,  # generators_are_skew: Optional[bool] — pre-computed skew-symmetry flag
+    generators_are_skew: Optional[bool] = None,  # Pre-computed skew-symmetry flag
 ) -> TransportDict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -359,8 +364,7 @@ def compute_transport_operators(
 
     # Check if generators are skew-symmetric (SO(K) gauge group).
     # For skew-symmetric A: exp(-A) = exp(A)^T, saving one matrix_exp call.
-    # Accept pre-computed flag to avoid torch.allclose on every forward pass.
-    _is_skew = kwargs.get('generators_are_skew', None)
+    _is_skew = generators_are_skew
     if _is_skew is None:
         _is_skew = torch.allclose(
             generators + generators.transpose(-1, -2),

@@ -12,7 +12,7 @@ See VFE_Transformer_Idea.md Section 11.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, TYPE_CHECKING
+from typing import Optional, Dict, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
@@ -20,10 +20,7 @@ import torch.nn.functional as F
 if TYPE_CHECKING:
     from transformer.vfe.model import VFEModel
 
-from transformer.core.expected_free_energy import (
-    compute_risk,
-    compute_ambiguity,
-)
+from transformer.core.expected_free_energy import compute_risk
 
 
 class VFEExpectedFreeEnergy:
@@ -70,8 +67,8 @@ class VFEExpectedFreeEnergy:
         self,
         mu: torch.Tensor,
         sigma: torch.Tensor,
-    ) -> torch.Tensor:
-        r"""Compute BALD mutual information from belief uncertainty.
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        r"""Compute BALD mutual information and mean predictive entropy.
 
         :math:`I(z; o | q) = H[\bar{p}] - \frac{1}{S}\sum_s H[p_s]`
 
@@ -83,7 +80,12 @@ class VFEExpectedFreeEnergy:
             sigma: ``(1, N, K)`` diagonal variances from rollout.
 
         Returns:
-            Scalar epistemic value for the last position.
+            ``(epistemic_mi, mean_H)`` — the BALD mutual information
+            :math:`H[\bar p] - \mathbb E_z[H[p(o|z)]]` AND the mean
+            predictive entropy :math:`\mathbb E_z[H[p(o|z)]]`. The mean
+            entropy is the canonical EFE "ambiguity" term per
+            [ParrPezzuloFriston2022]; the marginal-predictive entropy
+            ``H[\bar p]`` would double-count uncertainty.
         """
         S = self.epistemic_samples
         prior_bank = self.model.prior_bank
@@ -122,7 +124,7 @@ class VFEExpectedFreeEnergy:
         H_bar = -(p_bar * (p_bar + eps).log()).sum(dim=-1)  # (1,)
         mean_H = torch.stack(H_samples).mean(dim=0)  # (1,)
 
-        return (H_bar - mean_H).squeeze()  # scalar
+        return (H_bar - mean_H).squeeze(), mean_H.squeeze()
 
     @torch.no_grad()
     def score_candidates(
@@ -174,21 +176,19 @@ class VFEExpectedFreeEnergy:
             )
             risks.append(risk.squeeze())
 
-            # Ambiguity: entropy of the predictive distribution
-            ambiguity = compute_ambiguity(predictive_probs=probs)
-            ambiguities.append(ambiguity.squeeze())
-
-            # Epistemic: BALD mutual information from belief uncertainty
+            # Ambiguity AND epistemic share a single BALD pass: ambiguity is
+            # the mean predictive entropy E_q(z)[H[p(o|z)]], epistemic is the
+            # mutual information I(z;o) = H[p_bar] - mean_H. Pre-fix the
+            # ambiguity term was computed as H[q_marginal] which exactly
+            # cancels risk in 'uniform' preference mode (sum = log V).
+            beliefs = self.model.prior_bank.encode(trial_ids)
+            beliefs = beliefs._replace(
+                phi=self.model.pos_enc(beliefs.phi, trial_ids.shape[1])
+            )
+            ep_mi, mean_H = self._compute_epistemic_value(beliefs.mu, beliefs.sigma)
+            ambiguities.append(mean_H)
             if self.epistemic_weight > 0:
-                # Get beliefs from the last forward pass
-                # Run a second forward pass to extract beliefs
-                # (model stores no intermediate state, so re-encode)
-                beliefs = self.model.prior_bank.encode(trial_ids)
-                beliefs = beliefs._replace(
-                    phi=self.model.pos_enc(beliefs.phi, trial_ids.shape[1])
-                )
-                ep = self._compute_epistemic_value(beliefs.mu, beliefs.sigma)
-                epistemics.append(ep)
+                epistemics.append(ep_mi)
             else:
                 _dtype = risks[0].dtype if risks else torch.float32
                 epistemics.append(torch.tensor(0.0, device=device, dtype=_dtype))
