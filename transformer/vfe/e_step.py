@@ -185,11 +185,29 @@ def _f_monotone_step(
     where ``D`` is the configured divergence (standard KL when
     ``alpha_div == 1.0``, Rényi alpha-divergence otherwise; delegates to
     ``_kl_kernel_diagonal``). Appends to ``f_history`` and emits a
-    ``RuntimeWarning`` when ``f_t > f_prev + tol`` (monotone descent
-    violation). All ``.item()`` syncs are concentrated here — callers should
-    already be in ``torch.no_grad()``.
+    ``RuntimeWarning`` when ``f_t > f_prev + tol``. All ``.item()`` syncs
+    are concentrated here — callers should already be in
+    ``torch.no_grad()``.
 
     Returns the new scalar ``f_t`` (caller assigns to ``f_prev``).
+
+    **Caveat — the warning is expected under canonical E-step, not a bug.**
+    The E-step retracts all q_i in parallel using the mean-field VMP
+    gradient (query-side partial of F holding all other q_j fixed).
+    Parallel mean-field updates are NOT guaranteed to produce a monotone
+    F decrease per outer iteration — only fully sequential coordinate
+    descent has that property (Jordan et al. 1999 §6; Beal 2003 §2.3).
+    So a ``RuntimeWarning: F increased`` under the analytic kernel is a
+    feature of parallel VMP, not a sign of mis-conditioned LRs or a
+    gradient bug. The earlier audit-2026-05-17 fix that wired
+    ``_compute_mu_sigma_grad_autograd`` to silence this warning by
+    switching to a total-derivative gradient is superseded — that path
+    introduces a non-canonical gradient (sigma RMS ratio ~20–145x the
+    canonical kernel; see ``post_edit_2026-05-19.md`` Wave 6) and
+    produces measurably worse training results. Treat this monitor as a
+    sanity-bound diagnostic, not a strict convergence criterion;
+    re-tune LRs only if the violations are large in magnitude or
+    persistent across many iterations.
 
     Note on the scalar's relationship to the canonical F functional:
     the manuscript canonical F has the attention-entropy term `tau * sum
@@ -249,7 +267,9 @@ def _f_monotone_step(
             warnings.warn(
                 f"{label} iter {iter_idx}: F increased "
                 f"{f_prev:.6f} -> {f_t:.6f} (delta={f_t - f_prev:.2e}). "
-                f"Monotone descent violated; check e_*_lr or conditioning.",
+                f"Parallel mean-field VMP is not guaranteed per-iteration "
+                f"monotone (Jordan et al. 1999 §6); only large or persistent "
+                f"violations indicate an LR or conditioning issue.",
                 RuntimeWarning,
                 stacklevel=3,
             )
@@ -1323,13 +1343,66 @@ class VFEEStep(nn.Module):
         eps: float,
         is_diagonal: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # The autograd (μ,σ) path reconstructs the standard KL functional from
-        # scratch via compute_kl_attention; the Rényi α-divergence is NOT
-        # routed through this branch. Refuse to execute silently with a
-        # configuration the path cannot honor — previously this combination
-        # warned at __post_init__ after the dataclass had already forced
-        # use_autograd_mu_sigma=True, leaving the user with an active but
-        # invalid setting.
+        r"""Total-derivative dF/d(mu,sigma) — NON-CANONICAL research variant.
+
+        **Default off, and it should stay off.** The analytic kernel
+        ``compute_vfe_gradients_gpu`` (and its fused sibling
+        ``_fused_attention_and_vfe_gradients_block_diag``) computes the
+        canonical mean-field variational message-passing gradient — the
+        query-side partial holding all other q_j fixed (Beal 2003 Ch. 2;
+        Winn & Bishop 2005; Friston 2010). This method instead computes
+        the total derivative of the manuscript F functional via
+        ``torch.autograd.grad(F_total, [mu_g, sigma_g])``, which adds the
+        key-side contribution: mu_k and Sigma_k also appear in
+        KL(q_i || Omega_ik q_k) for every i != k through the transported
+        mean Omega_ik mu_k and the transported covariance Omega_ik Sigma_k Omega_ik^T.
+
+        Under parallel q-updates (the case here: all positions are
+        retracted simultaneously each iteration) this double-counts the
+        asymmetric coupling KL(q_i || Omega_ij q_j) != KL(q_j || Omega_ji q_i):
+        each q_i receives both its incoming-message gradient (query-side)
+        and the gradient it should be sending to q_j (key-side) in the
+        same step. Empirically (probe at
+        ``scripts/diagnostic_autograd_gradient_scale_probe.py``) the
+        sigma-gradient RMS ratio (autograd/analytic) grows from ~20x at
+        iteration 0 to ~145x by iteration 5 at the production config; the
+        per-token sigma-cosine reaches -0.3 in the tail, so the direction
+        is partly orthogonal to the canonical gradient, not just rescaled.
+        Step sizes ``e_mu_lr``, ``e_sigma_lr`` calibrated against the
+        analytic kernel therefore overshoot dramatically when this flag
+        is on, and retuning alone cannot recover the sigma direction.
+
+        Historical context: this path was added in audit-2026-05-17 to
+        suppress the F-monotone monitor warning that fires under the
+        analytic path. That justification does not hold — parallel
+        mean-field VMP is *not* expected to monotonically decrease F per
+        iteration (Jordan et al. 1999 §6; only fully sequential
+        coordinate descent gives that guarantee). The warning is
+        expected, not a defect. See ``_f_monotone_step`` and
+        ``post_edit_2026-05-19.md`` Wave 6 for the full diagnostic.
+
+        Mechanics: ``beta`` is detached inside the autograd block so the
+        gradient produced is the envelope-correct
+        ``sum beta . dKL/d(mu,sigma)`` — the entropy term's d/d(mu,sigma)
+        contribution vanishes under ``beta.detach()`` and is omitted.
+
+        Returns:
+            grad_mu: (B, N, K) total derivative dF/dmu (NOT the canonical
+                mean-field gradient).
+            grad_sigma: (B, N, K) (diagonal) total derivative dF/dsigma
+                (NOT the canonical mean-field gradient).
+
+        Raises:
+            RuntimeError: if ``alpha_divergence != 1.0`` — this path
+                reconstructs the standard KL and silently ignores the
+                Rényi-alpha exponent. Either set ``alpha_divergence=1.0``
+                or disable ``use_autograd_mu_sigma`` /
+                ``use_non_flat_transport`` /
+                ``gauge_parameterization='omega_direct'``.
+            NotImplementedError: if ``is_diagonal`` is False — full-cov
+                self-KL via autograd needs logdet through eigendecomposition,
+                not yet wired.
+        """
         if abs(self.alpha_divergence - 1.0) > 1e-9:
             raise RuntimeError(
                 f"alpha_divergence={self.alpha_divergence} is incompatible "
@@ -1339,31 +1412,6 @@ class VFEEStep(nn.Module):
                 "or disable use_autograd_mu_sigma / use_non_flat_transport / "
                 "gauge_parameterization='omega_direct'."
             )
-        r"""Compute dF/dmu, dF/dsigma via autograd through compute_kl_attention.
-
-        Total-derivative path: autograd over the manuscript F functional
-        captures BOTH contributions to dF/dmu_k:
-
-        - **Query-side** (k = i): mu_k appears as the first argument's mean
-          in KL(q_k || Omega_kj q_j) for all j.
-        - **Key-side** (k = j): mu_k appears as the second argument's mean
-          (via Omega_ik mu_k) and its covariance (Omega_ik Sigma_k Omega_ik^T)
-          in KL(q_i || Omega_ik q_k) for all i.
-
-        The analytic kernel compute_vfe_gradients_gpu computes the query-side
-        partial only (mean-field convention). This method computes the total
-        derivative, matching the F monitor at e_step.py:370-407 and the phi
-        update at _update_phi.
-
-        Envelope at softmax stationary point: beta is detached so autograd
-        produces dF/dtheta = Sum beta . dKL/dtheta directly, exactly the
-        envelope-correct gradient. The entropy term has no (mu, sigma)
-        dependence under beta.detach() and is therefore omitted.
-
-        Returns:
-            grad_mu: (B, N, K) total derivative dF/dmu.
-            grad_sigma: (B, N, K) (diagonal) total derivative dF/dsigma.
-        """
         if not is_diagonal:
             # Self-KL requires full-cov logdet (eigendecomposition through
             # autograd). Out of scope for this fix; restrict to diagonal.
