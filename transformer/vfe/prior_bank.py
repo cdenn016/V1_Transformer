@@ -95,7 +95,13 @@ class VFEPriorBank(nn.Module):
         K = cfg.embed_dim
         self.vocab_size = V
         self.embed_dim = K
-        self.irrep_dims: List[int] = cfg.irrep_dims
+        # Gauge-block partition for trace vectors, sl(K) projection, and per-
+        # block sandwich-transform iteration. Under cross_couplings this is
+        # the super-block layout: phi_project_slk then targets one trace per
+        # super-block (the determinant of each super-block GL(d_super)) which
+        # is the correct constraint for the merged gauge group.
+        self.irrep_dims: List[int] = cfg.effective_block_dims
+        self._original_irrep_dims: List[int] = cfg.irrep_dims
         self.diagonal_covariance = cfg.diagonal_covariance
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.sigma_max = cfg.sigma_max

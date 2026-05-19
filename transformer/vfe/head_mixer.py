@@ -44,7 +44,7 @@ exceptions`` and the legacy mixer at ``transformer/core/attention.py``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -70,6 +70,7 @@ class VFEHeadMixer(nn.Module):
         self,
         irrep_spec: List[Tuple[str, int, int]],
         embed_dim: int,
+        super_block_head_groups: Optional[List[List[int]]] = None,
     ) -> None:
         super().__init__()
 
@@ -81,21 +82,52 @@ class VFEHeadMixer(nn.Module):
                 f"embed_dim={embed_dim}; these must agree."
             )
 
+        # Under cross_couplings, the gauge group on each super-block is the
+        # full GL(d_super) (acting irreducibly on the merged subspace), so its
+        # Schur commutant collapses to scalar (R · I_{d_super}). Mixing across
+        # original heads INSIDE a merged super-block would require A to
+        # commute with GL(d_super), which is impossible non-trivially. We
+        # therefore:
+        #   - Only build mixer groups across **singleton** super-blocks
+        #     (where d_super == d_head), preserving the standard /vfe semantics.
+        #   - Skip heads belonging to merged super-blocks (d_super > d_head)
+        #     entirely — those heads are gauge-locked together, and any
+        #     additional value-level mixing breaks equivariance more than
+        #     the existing tied-gauge approximation already does.
+        # Build per-head super-block id and per-head singleton flag.
+        head_to_super: Optional[Dict[int, int]] = None
+        merged_heads: set = set()
+        if super_block_head_groups is not None:
+            # Flatten: head_index -> super_block_id
+            head_to_super = {}
+            for super_id, head_ids in enumerate(super_block_head_groups):
+                for hid in head_ids:
+                    head_to_super[hid] = super_id
+            # Singleton if its super-block has exactly one head.
+            for head_ids in super_block_head_groups:
+                if len(head_ids) > 1:
+                    for hid in head_ids:
+                        merged_heads.add(hid)
+
         # Group consecutive heads by type. We do NOT permute heads — the
         # block-diagonal layout in /vfe matches `irrep_spec` order
-        # (transformer/vfe/config.py:irrep_dims). If two non-contiguous entries
-        # share a type_name, they get their OWN slice list (still grouped under
-        # one A_t) so the mixer treats them as one type. The layout assumed by
-        # `_apply_block` is contiguous per-type only when irrep_spec is sorted
-        # by type — we don't enforce that here; the per-type slice list
-        # captures whatever the layout actually is.
+        # (transformer/vfe/config.py:irrep_dims). Under cross_couplings the
+        # generator basis has been permuted so super-blocks are contiguous in
+        # K, but the original irrep_spec head ordering is preserved at the
+        # mixer level (we only mix singleton heads, which keep their original
+        # d_head slot in the permuted K-layout one-for-one).
         type_to_slices: "OrderedDict[str, List[Tuple[int, int, int]]]" = OrderedDict()
         cursor = 0
+        global_head_idx = 0
         for type_name, mult, dim in irrep_spec:
-            slices = type_to_slices.setdefault(type_name, [])
             for _ in range(mult):
-                slices.append((cursor, cursor + dim, dim))
-                cursor += dim
+                start, end = cursor, cursor + dim
+                # Under cross_couplings: skip heads inside merged super-blocks.
+                if head_to_super is None or global_head_idx not in merged_heads:
+                    slices = type_to_slices.setdefault(type_name, [])
+                    slices.append((start, end, dim))
+                cursor = end
+                global_head_idx += 1
 
         # One A_t parameter per type, initialized at identity. Storing the
         # "delta-from-identity" rather than A_t itself keeps the init exact
@@ -115,6 +147,20 @@ class VFEHeadMixer(nn.Module):
                     "type. Split into distinct type_names if intentional."
                 )
             self.mixer_delta[type_name] = nn.Parameter(torch.zeros(n, n))
+
+        if super_block_head_groups is not None and merged_heads:
+            import warnings
+            warnings.warn(
+                f"VFEHeadMixer: {len(merged_heads)} head(s) belong to merged "
+                f"super-blocks (cross_couplings active) and are excluded from "
+                f"the mixer. Each merged super-block has full GL(d_super) "
+                f"gauge with scalar Schur commutant; any additional value-"
+                f"level mixing across its constituent heads would break "
+                f"equivariance under the merged gauge. Remaining singleton "
+                f"heads are mixed by type as usual.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def _A(self, type_name: str) -> torch.Tensor:
         r"""Return :math:`A_t = I + \Delta_t` for the named type."""

@@ -99,8 +99,12 @@ class VFEModel(nn.Module):
             self.output_proj = nn.Linear(cfg.embed_dim, cfg.vocab_size, bias=False)
         else:
             self.output_proj = None
+        # Pos enc and downstream block iterators must walk the *gauge-block*
+        # partition. Under cross_couplings this is the super-block layout
+        # (cfg.super_block_dims); without coupling it falls back to irrep_dims.
         self.pos_enc = VFEPositionalEncoding(
-            cfg, generators.shape[0], generators, irrep_dims=cfg.irrep_dims,
+            cfg, generators.shape[0], generators,
+            irrep_dims=cfg.effective_block_dims,
         )
         self.stack = VFEStack(cfg, generators)
 
@@ -168,7 +172,7 @@ class VFEModel(nn.Module):
         if self.cfg.gauge_parameterization == 'omega_direct':
             from transformer.vfe.omega_direct import init_omega_from_phi
             omega_pairs = init_omega_from_phi(
-                beliefs.phi, self.generators, self.cfg.irrep_dims,
+                beliefs.phi, self.generators, self.cfg.effective_block_dims,
             )
             beliefs = beliefs._replace(omega=omega_pairs)
 
@@ -336,13 +340,27 @@ class VFEModel(nn.Module):
 
     @staticmethod
     def _build_generators(cfg: VFEConfig) -> torch.Tensor:
-        """Build Lie algebra generators from config."""
+        """Build Lie algebra generators from config.
+
+        Under ``cfg.cross_couplings`` (GL(K) multi-head only) this dispatches
+        to the cross-head builder, then merges coupled heads into super-blocks
+        and reorders the basis so super-blocks are contiguous in the K
+        dimension. The resulting permutation, super-block dims, and head
+        groups are stashed on ``cfg`` so downstream consumers can read them.
+        Optionally validates / closes the basis under [.,.] per
+        ``cfg.auto_close_cross_head_basis`` and ``cfg.validate_cross_head_closure``.
+        """
         try:
             from math_utils.generators import (
                 generate_so3_generators,
                 generate_soN_generators,
                 generate_glK_generators,
                 generate_glK_multihead_generators,
+                generate_glK_cross_head_generators,
+                merge_coupled_heads,
+                reorder_cross_head_generators,
+                close_under_brackets,
+                validate_generator_closure,
                 generate_multi_irrep_generators,
                 generate_multi_irrep_soN_generators,
             )
@@ -351,6 +369,10 @@ class VFEModel(nn.Module):
                 f"math_utils.generators not available: {e}. "
                 f"Cannot build gauge group generators."
             )
+
+        import logging
+        import numpy as np
+        logger = logging.getLogger(__name__)
 
         K = cfg.embed_dim
         irrep_spec = cfg.irrep_spec
@@ -362,6 +384,68 @@ class VFEModel(nn.Module):
             # Check if multihead
             if len(irrep_spec) == 1 and irrep_spec[0][1] > 1:
                 _, n_heads, d_head = irrep_spec[0]
+                if cfg.cross_couplings:
+                    # 1. Build diagonal + cross generators in original head order.
+                    generators = generate_glK_cross_head_generators(
+                        K, n_heads, list(cfg.cross_couplings)
+                    )
+                    # 2. Compute super-block partition.
+                    super_block_dims, super_block_head_groups = merge_coupled_heads(
+                        n_heads, d_head, list(cfg.cross_couplings)
+                    )
+                    # 3. Reorder so super-blocks are contiguous along K.
+                    generators, perm = reorder_cross_head_generators(
+                        generators, n_heads, d_head, list(cfg.cross_couplings),
+                        super_block_head_groups,
+                    )
+                    # 4. Optional Lie-closure handling.
+                    if cfg.auto_close_cross_head_basis:
+                        G_closed, close_info = close_under_brackets(np.asarray(generators))
+                        logger.info(
+                            "auto_close_cross_head_basis=True: closed basis %d -> %d "
+                            "generators in %d iter(s) (converged=%s, hit_max_dim=%s).",
+                            close_info['initial_dim'], close_info['final_dim'],
+                            close_info['n_iters'], close_info['converged'],
+                            close_info['hit_max_dim'],
+                        )
+                        if close_info['n_added'] > 0:
+                            logger.warning(
+                                "auto_close_cross_head_basis added %d new generators. "
+                                "These may span across the user-supplied super-block "
+                                "partition, so downstream block-diagonal assumptions "
+                                "may see non-zero off-block components.",
+                                close_info['n_added'],
+                            )
+                        generators = G_closed
+                    elif cfg.validate_cross_head_closure:
+                        report = validate_generator_closure(generators)
+                        if not report['closed']:
+                            logger.warning(
+                                "cross-head generator basis is NOT closed under "
+                                "[.,.] (max relative residual %.3e across %d/%d "
+                                "unordered pairs). BCH/bracket composition silently "
+                                "projects onto the span. Set "
+                                "auto_close_cross_head_basis=True to obtain a true "
+                                "Lie subalgebra, or set "
+                                "validate_cross_head_closure=False to suppress.",
+                                report['max_residual'], report['n_offending_pairs'],
+                                report['n_pairs'],
+                            )
+                    # 5. Stash super-block structure on cfg for downstream consumers.
+                    object.__setattr__(cfg, '_cross_head_perm', perm)
+                    object.__setattr__(cfg, '_super_block_dims_cache', super_block_dims)
+                    object.__setattr__(cfg, '_super_block_head_groups_cache', super_block_head_groups)
+                    n_cross = len(cfg.cross_couplings) * d_head**2
+                    logger.info(
+                        f"GL(K) cross-head: {n_heads} heads x GL({d_head}), "
+                        f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
+                        f"{generators.shape[0]} total"
+                    )
+                    logger.info(
+                        f"       Super-blocks: {super_block_dims} "
+                        f"(groups: {super_block_head_groups})"
+                    )
+                    return generators
                 return generate_glK_multihead_generators(K, n_heads)
             return generate_glK_generators(K)
 

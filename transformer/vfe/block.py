@@ -140,7 +140,14 @@ class VFEBlock(nn.Module):
                     UserWarning,
                     stacklevel=2,
                 )
-            self.head_mixer = VFEHeadMixer(cfg.irrep_spec, cfg.embed_dim)
+            # Pass the super-block head-grouping so the mixer can exclude
+            # heads that belong to a merged super-block (GL(d_super) commutant
+            # is scalar — mixing across constituent heads breaks equivariance).
+            # No-op when cross_couplings is empty.
+            self.head_mixer = VFEHeadMixer(
+                cfg.irrep_spec, cfg.embed_dim,
+                super_block_head_groups=cfg.super_block_head_groups,
+            )
         else:
             self.head_mixer = None
 
