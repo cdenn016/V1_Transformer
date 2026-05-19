@@ -71,6 +71,28 @@ class VFEConfig:
     e_sigma_q_trust: float = 5.0         # Trust-region clamp on whitened |delta_sigma/sigma|
                                          # for the diagonal-sigma retraction. Independent of
                                          # the step LR (CLAUDE.md, 2026-05-13 onward).
+    e_mu_q_trust: Optional[float] = None
+    # r"""Per-component sigma-whitened trust-region clamp on the mean update.
+    # None (default) — no clamping; pure path bitwise unchanged.
+    # float > 0     — clamp |delta_mu_k / sqrt(sigma_q_kk)| <= e_mu_q_trust
+    #                 element-wise, matching the sigma retraction's whitened
+    #                 inf-norm form (vfe_utils.retract_spd_diagonal_torch).
+    # Applied in transformer/vfe/e_step.py just before the mu retraction in
+    # both the phi-mode and omega-direct E-step loops. Whitening uses
+    # diag(Sigma_q) under full covariance, matching the diagonal-only
+    # treatment of the sigma trust region for full-cov inputs."""
+    e_nan_check: Literal['off', 'warn', 'revert', 'abort'] = 'off'
+    # r"""NaN / Inf sentinel policy for the E-step inner loop.
+    # 'off'    (default) — no checking; pure path with zero overhead.
+    # 'warn'   — log a RuntimeWarning on detection; iteration continues
+    #            from the corrupt state (diagnostic only).
+    # 'revert' — restore the pre-iteration snapshot of (mu, sigma, phi)
+    #            and break the loop on detection.
+    # 'abort'  — raise transformer.vfe._numerics.VFENonFiniteError on
+    #            detection, carrying the checkpoint label and field name.
+    # Snapshot memory is allocated only when mode in {'revert', 'abort'};
+    # 'warn' and 'off' pay zero memory overhead. Each check forces a host
+    # sync via .all().item() — enable only when diagnosing instability."""
     e_phi_lr: float = 0.05              # eta_phi: gauge frame step size
     
     alpha: float = 1.0                   # KL(q||p) prior self-coupling weight
@@ -142,6 +164,34 @@ class VFEConfig:
     # GL(K) determinant control (no-op for SO(N), tr(G)=0 already). Pick at most one:
     phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
     phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
+    phi_spec_max: Optional[float] = None
+    # r"""Pre-exp Frobenius rescale on the algebra tensor before matrix_exp.
+    # None (default) — no clamp; pure path bitwise unchanged.
+    # float > 0     — rescale ``algebra <- algebra * min(1, phi_spec_max /
+    #                 ||algebra||_F)`` per (B, N, N, head) slice before
+    #                 :func:`torch.linalg.matrix_exp` at the pairwise-Omega
+    #                 construction sites in :mod:`transformer.vfe.omega_direct`
+    #                 and :mod:`transformer.vfe.non_flat`. Bounds the
+    #                 condition number of the sandwich transport
+    #                 ``Sigma -> Omega Sigma Omega^T`` since
+    #                 ``||exp(X)||_2 <= exp(||X||_F)`` (Hall, *Lie Groups, Lie
+    #                 Algebras, and Representations*).
+    # Caveat: clamping the algebra without writing back to stored phi
+    # temporarily breaks the phi <-> Omega consistency on iterations where
+    # the clamp binds. Acceptable as opt-in defensive layer; not the
+    # default. Field name uses ``spec`` (spectral) as colloquial shorthand
+    # for the Frobenius cap; matches the existing ``phi_*`` namespace."""
+    phi_strict_glplus: bool = False
+    # r"""When True, :func:`transformer.vfe.omega_direct.project_omega_to_slk`
+    # raises :class:`transformer.vfe.omega_direct.VFEGaugeOrientationError`
+    # on detecting a per-block ``det(Omega) < 0`` at the periodic
+    # renormalization step.
+    # False (default) — preserve the sign factor in the rescale (current
+    # behavior; consistent with the manuscript's GL(K) gauge group, which
+    # contains both orientation components ``Attention/GL(K)_attention.tex``
+    # line 432 and the reflection extension at lines 1096-1099).
+    # Set True to enforce the GL+(K) identity-component contract — useful
+    # for ablations that should never reach the reflection branch."""
     enforce_orthogonal: bool = False     # Project Omega to SO(K)
     mask_self_attention: bool = False    # Default: self-attention allowed. Per-user 2026-05-17:
                                          # unmasking matches the active train_vfe.py configs and

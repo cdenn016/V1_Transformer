@@ -112,6 +112,11 @@ from transformer.vfe.omega_direct import (
     project_omega_to_slk,
     _build_killing_matrix_per_block,
 )
+from transformer.vfe._numerics import (
+    VFENonFiniteError,
+    apply_mu_trust_region,
+    check_finite,
+)
 
 
 # Common floor for β·log β entropy computations. β is row-stochastic so the
@@ -401,6 +406,12 @@ class VFEEStep(nn.Module):
         self.phi_preconditioner_mode = cfg.phi_preconditioner
         self.phi_project_slk = cfg.phi_project_slk
         self.phi_trace_clamp = cfg.phi_trace_clamp
+        # Opt-in numerical-conditioning flags (2026-05-19). All default to
+        # values that preserve the pure path bitwise; see VFEConfig docstrings.
+        self.e_mu_q_trust: Optional[float] = getattr(cfg, 'e_mu_q_trust', None)
+        self.e_nan_check: str = getattr(cfg, 'e_nan_check', 'off')
+        self.phi_spec_max: Optional[float] = getattr(cfg, 'phi_spec_max', None)
+        self.phi_strict_glplus: bool = getattr(cfg, 'phi_strict_glplus', False)
 
         if not isinstance(generators, torch.Tensor):
             generators = torch.from_numpy(generators).float()
@@ -813,7 +824,15 @@ class VFEEStep(nn.Module):
         f_monotone_rel_tol = 0.05   # 5% of current |F|
         f_monotone_abs_tol = 1e-2
 
+        # Pre-iteration snapshot for Item 1 (NaN sentinel revert/abort modes).
+        # Allocated only when the sentinel is armed; 'off' and 'warn' modes
+        # pay zero memory overhead (the variable stays None).
+        _nan_check_armed: bool = self.e_nan_check in ('revert', 'abort')
+        _iter_snapshot: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None
+
         for t in range(self.n_e_steps):
+            if _nan_check_armed:
+                _iter_snapshot = (mu.detach().clone(), sigma.detach().clone(), phi.detach().clone())
             # 1. Compute transport and KL attention.
             # The "flat" cache (block_exp_pairs) is built unconditionally
             # because both the flat path and the non-flat path need it as a
@@ -1338,7 +1357,17 @@ class VFEEStep(nn.Module):
                         )
 
             # 5. Mean update: mu -= eta_mu * nat_grad_mu
-            mu = mu - self.e_mu_lr * nat_grad_mu
+            #    Item 2 (e_mu_q_trust): optional sigma-whitened per-component
+            #    clamp on the proposed delta_mu. None ⇒ pure path.
+            _delta_mu = self.e_mu_lr * nat_grad_mu
+            if self.e_mu_q_trust is not None:
+                _delta_mu = apply_mu_trust_region(
+                    _delta_mu, sigma,
+                    trust=self.e_mu_q_trust,
+                    is_diagonal=is_diagonal,
+                    eps=eps,
+                )
+            mu = mu - _delta_mu
 
             # 6. SPD retraction for sigma
             sigma = retract_sigma_e_step(
@@ -1369,6 +1398,23 @@ class VFEEStep(nn.Module):
                 # path. The dead arg is dropped from the call to make this
                 # explicit.
                 phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
+
+            # Item 1 (e_nan_check): NaN/Inf sentinel at end-of-iteration.
+            # Default 'off' is a no-op. 'warn' logs and continues. 'revert'
+            # restores _iter_snapshot and breaks. 'abort' propagates the
+            # VFENonFiniteError to the trainer.
+            if self.e_nan_check != 'off':
+                try:
+                    check_finite(
+                        {'mu': mu, 'sigma': sigma, 'phi': phi},
+                        mode=self.e_nan_check,
+                        step_label=f'iter_{t}_post_update',
+                    )
+                except VFENonFiniteError:
+                    if self.e_nan_check == 'revert' and _iter_snapshot is not None:
+                        mu, sigma, phi = _iter_snapshot
+                        break
+                    raise
 
             # Final-iteration per-head diagnostic snapshot. Rebuild
             # block_exp_pairs from the post-phi-update φ so the plot reflects
@@ -1800,6 +1846,7 @@ class VFEEStep(nn.Module):
                 phi.detach(), delta_det,
                 self.generators, self.irrep_dims,
                 cached_block_exp_pairs=block_exp_pairs,
+                phi_spec_max=self.phi_spec_max,
             )
             beta_det, kl_det = compute_kl_attention_pairwise(
                 mu.detach(), sigma.detach(), omega_pairs_det,
@@ -1839,6 +1886,7 @@ class VFEEStep(nn.Module):
                 phi_d, delta_g,
                 self.generators, self.irrep_dims,
                 cached_block_exp_pairs=block_exp_pairs,
+                phi_spec_max=self.phi_spec_max,
             )
             beta_g, kl_g = compute_kl_attention_pairwise(
                 mu_g, sigma_g, omega_pairs_g, self.irrep_dims, _kappa_d,
@@ -1896,6 +1944,7 @@ class VFEEStep(nn.Module):
                 phi_for_grad, delta,
                 self.generators, self.irrep_dims,
                 cached_block_exp_pairs=None,
+                phi_spec_max=self.phi_spec_max,
             )
             beta_phi, kl_h = compute_kl_attention_pairwise(
                 mu.detach(),
@@ -2017,7 +2066,19 @@ class VFEEStep(nn.Module):
         f_monotone_rel_tol = 0.05
         f_monotone_abs_tol = 1e-2
 
+        # Pre-iteration snapshot for Item 1 (NaN sentinel revert/abort modes).
+        _nan_check_armed: bool = self.e_nan_check in ('revert', 'abort')
+        _iter_snapshot_od: Optional[
+            Tuple[torch.Tensor, torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]
+        ] = None
+
         for t in range(self.n_e_steps):
+            if _nan_check_armed:
+                _iter_snapshot_od = (
+                    mu.detach().clone(),
+                    sigma.detach().clone(),
+                    [(o.detach().clone(), oi.detach().clone()) for (o, oi) in omega],
+                )
             alpha_eff = self.alpha
             if self.E_learnable_alpha:
                 alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
@@ -2033,11 +2094,13 @@ class VFEEStep(nn.Module):
                     self.irrep_dims,
                     delta=delta_det,
                     generators=self.generators,
+                    phi_spec_max=self.phi_spec_max,
                 )
             else:
                 omega_pairs_det = compute_pairwise_omega_from_endpoints(
                     [(o.detach(), oi.detach()) for (o, oi) in omega],
                     self.irrep_dims,
+                    phi_spec_max=self.phi_spec_max,
                 )
 
             with torch.no_grad():
@@ -2089,6 +2152,7 @@ class VFEEStep(nn.Module):
                     omega_g, self.irrep_dims,
                     delta=delta_g,
                     generators=self.generators if delta_g is not None else None,
+                    phi_spec_max=self.phi_spec_max,
                 )
                 beta_g, kl_g = compute_kl_attention_pairwise(
                     mu_g, sigma_g, pairwise_g, self.irrep_dims, _kappa_d,
@@ -2204,7 +2268,16 @@ class VFEEStep(nn.Module):
                             self._last_diagnostics['f_final'] = f_history[-1]
 
             # 6. Mean and covariance updates.
-            mu = mu - self.e_mu_lr * nat_grad_mu
+            #    Item 2 (e_mu_q_trust): optional sigma-whitened delta_mu clamp.
+            _delta_mu = self.e_mu_lr * nat_grad_mu
+            if self.e_mu_q_trust is not None:
+                _delta_mu = apply_mu_trust_region(
+                    _delta_mu, sigma,
+                    trust=self.e_mu_q_trust,
+                    is_diagonal=is_diagonal,
+                    eps=eps,
+                )
+            mu = mu - _delta_mu
             sigma = retract_sigma_e_step(
                 sigma_current=sigma,
                 nat_grad_sigma=nat_grad_sigma,
@@ -2227,12 +2300,35 @@ class VFEEStep(nn.Module):
             )
 
             # 8. Periodic det renormalization (controls Killing-degenerate drift).
+            #    Item 5 (phi_strict_glplus): threading the strict mode through
+            #    so an ablation that demands GL+(K) only sees the abort path.
             if (
                 self.omega_project_slk
                 and self.omega_normalize_every > 0
                 and (t + 1) % self.omega_normalize_every == 0
             ):
-                omega = project_omega_to_slk(omega, self.irrep_dims)
+                omega = project_omega_to_slk(
+                    omega, self.irrep_dims,
+                    strict=self.phi_strict_glplus,
+                )
+
+            # Item 1 (e_nan_check): end-of-iteration NaN sentinel.
+            if self.e_nan_check != 'off':
+                _omega_flat = [o for pair in omega for o in pair]
+                try:
+                    check_finite(
+                        {
+                            'mu': mu, 'sigma': sigma,
+                            **{f'omega_h{h}': _omega_flat[2 * h] for h in range(len(omega))},
+                        },
+                        mode=self.e_nan_check,
+                        step_label=f'iter_{t}_post_update_omega_direct',
+                    )
+                except VFENonFiniteError:
+                    if self.e_nan_check == 'revert' and _iter_snapshot_od is not None:
+                        mu, sigma, omega = _iter_snapshot_od
+                        break
+                    raise
 
         # Hyperparameter aux loss (raw_c0, raw_b0, log_kappa gradient delivery).
         # phi is held at encode-time value in this path but is still the input
