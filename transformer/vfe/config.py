@@ -61,6 +61,21 @@ class VFEConfig:
     lambda_align: float = 1.0            # Boltzmann GLU weight (beta * grad_KL)
     lambda_soft: float = 1.0             # Attention-variance coupling (KL * grad_beta)
     kappa: float = 1.0                   # Attention temperature
+    # per_head_softmax: routing convention for multi-head (H > 1) attention.
+    # True (default, canonical per manuscript eq:per_head_temperature at
+    #   Attention/GL(K)_attention.tex:1744): one softmax per gauge head at
+    #   τ_h = κ · √d_head; per-head βs accumulated for both gradients and
+    #   plotting. Matches the reduced gauge group GL(d_head)^H ⊂ GL(K) the
+    #   multi-head decomposition prescribes and the legacy
+    #   transformer/core/variational_ffn.py pattern at lines 1997-2014.
+    # False: single global softmax over Σ_h KL_h at τ = κ · √K. Canonical
+    #   only in the single-head limit (H = 1). Retained as opt-in for
+    #   ablation against the multi-head reduction and for backward
+    #   compatibility with /vfe runs from before 2026-05-19.
+    # Takes effect only in the fused path (block-diagonal Σ, irrep_dims
+    # set, exact_diagonal_transport=False, use_autograd_mu_sigma=False);
+    # other paths run their existing single-call dispatch.
+    per_head_softmax: bool = True
     prior_handoff_rho: float = 1.0       # μ cross-layer damping (1.0 = no damping, <1 = smoother)
     prior_handoff_sigma: float = 0.0    # σ cross-layer handoff (0.0 = frozen at embedding, >0 = blends posterior)
     learnable_kappa: bool = False        # Learn per-layer kappa via log-space parameter

@@ -336,6 +336,12 @@ class VFEEStep(nn.Module):
         self.rope_full_gauge = cfg.rope_full_gauge
         self.enforce_orthogonal = cfg.enforce_orthogonal
         self.mask_self_attention = cfg.mask_self_attention
+        # Multi-head softmax convention. True (default): per-head softmax at
+        # τ_h = κ·√d_head — canonical for the GL(d_head)^H multi-head reduction
+        # (Attention/GL(K)_attention.tex eq:per_head_temperature, line 1744).
+        # False: single softmax over Σ_h KL_h at τ = κ·√K — single-head limit
+        # only; retained for ablation and pre-2026-05-19 backward compatibility.
+        self.per_head_softmax: bool = getattr(cfg, 'per_head_softmax', True)
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.track_layer_diagnostics = getattr(cfg, 'track_layer_diagnostics', False)
         # F-monotone monitor: records F at every iter and warns on non-monotone
@@ -768,6 +774,9 @@ class VFEEStep(nn.Module):
                 and not torch.is_inference_mode_enabled()
                 and torch.is_grad_enabled()
             ):
+                # rope_full_gauge does its own per-head loop but doesn't
+                # populate _last_attention_per_head — clear stale value.
+                self._last_attention_per_head = None
                 grad_mu_parts = []
                 grad_sigma_parts = []
                 beta = None
@@ -841,7 +850,94 @@ class VFEEStep(nn.Module):
                     and not self.exact_diagonal_transport
                     and not self.use_autograd_mu_sigma
                 )
-                if _can_use_fused:
+                if _can_use_fused and self.per_head_softmax and len(self.irrep_dims) > 1:
+                    # Per-head softmax dispatch — canonical for the multi-head
+                    # GL(d_head)^H reduction. One fused-kernel call per head with
+                    # irrep_dims=[d_h]; per-head βs accumulated for plotting,
+                    # per-head gradients concatenated into the full-K grad_mu /
+                    # grad_sigma. Matches the legacy
+                    # transformer/core/variational_ffn.py:1997-2014 pattern and
+                    # the manuscript eq:per_head_temperature (κ_h · √d_head
+                    # softmax temperature per head; here κ_h = κ shared since
+                    # the per-head κ vector is reserved for a follow-up change).
+                    grad_mu = torch.zeros_like(mu)
+                    grad_sigma = torch.zeros_like(sigma)
+                    beta_heads: List[torch.Tensor] = []
+                    kl_heads: List[Optional[torch.Tensor]] = []
+                    block_start = 0
+                    _lambda_softmax_eff = (
+                        0.0 if self.include_attention_entropy else self.lambda_soft
+                    )
+                    for h, d_h in enumerate(self.irrep_dims):
+                        block_end = block_start + d_h
+                        mu_h = mu[..., block_start:block_end].contiguous()
+                        sigma_h = sigma[..., block_start:block_end].contiguous()
+                        mu_p_h = mu_p[..., block_start:block_end].contiguous()
+                        sigma_p_h = sigma_p[..., block_start:block_end].contiguous()
+                        gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                        _head_bep = (
+                            [block_exp_pairs[h]] if block_exp_pairs is not None else None
+                        )
+                        # alpha may be scalar, tensor, or per-dim (B, N, K) —
+                        # slice the per-dim case to d_h matching the kernel
+                        # signature.
+                        if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3:
+                            alpha_h = alpha_eff[..., block_start:block_end]
+                        else:
+                            alpha_h = alpha_eff
+                        alpha_c0_h = (
+                            alpha_c0_full[block_start:block_end]
+                            if alpha_c0_full is not None
+                            else None
+                        )
+                        beta_h, grad_mu_h, grad_sigma_h, kl_h = (
+                            _fused_attention_and_vfe_gradients_block_diag(
+                                mu_q=mu_h, sigma_q=sigma_h,
+                                mu_p=mu_p_h, sigma_p=sigma_p_h,
+                                phi=phi, generators=gen_h,
+                                alpha=alpha_h,
+                                lambda_belief=self.lambda_align,
+                                lambda_softmax=_lambda_softmax_eff,
+                                kappa=_kappa,
+                                eps=eps,
+                                irrep_dims=[d_h],
+                                compute_sigma_align_grad=True,
+                                enforce_orthogonal=self.enforce_orthogonal,
+                                alpha_c0=alpha_c0_h,
+                                cached_block_exp_pairs=_head_bep,
+                                mask=mask,
+                                mask_self_attention=self.mask_self_attention,
+                                use_rope=self.use_rope,
+                                rope_base=self.rope_base,
+                                return_kl=True,
+                                alpha_div=self.alpha_divergence,
+                                causal_lower_triangle=self.causal_lower_triangle,
+                            )
+                        )
+                        beta_heads.append(beta_h)
+                        kl_heads.append(kl_h)
+                        grad_mu[..., block_start:block_end] = grad_mu_h
+                        grad_sigma[..., block_start:block_end] = grad_sigma_h
+                        block_start = block_end
+                    # Per-head β stack (B, H, N, N) — exposed for the trainer
+                    # plot path; aggregated mean preserves the (B, N, N) shape
+                    # of `_last_attention` that downstream consumers expect.
+                    self._last_attention_per_head = torch.stack(
+                        beta_heads, dim=1
+                    ).detach()
+                    beta = torch.stack(beta_heads, dim=1).mean(dim=1)
+                    # kl_matrix is exposed for the F-monotone monitor and
+                    # diagnostics; mean over heads keeps the (B, N, N) shape.
+                    if all(k is not None for k in kl_heads):
+                        kl_matrix = torch.stack(kl_heads, dim=0).mean(dim=0)
+                    else:
+                        kl_matrix = None
+                elif _can_use_fused:
+                    # Single global softmax over Σ_h KL_h (per_head_softmax=False
+                    # OR single-head H=1 where the two conventions coincide).
+                    # Clear the per-head snapshot so the plotter doesn't read
+                    # stale per-head βs from a previous toggle state.
+                    self._last_attention_per_head = None
                     beta, grad_mu, grad_sigma, kl_matrix = _fused_attention_and_vfe_gradients_block_diag(
                         mu_q=mu, sigma_q=sigma,
                         mu_p=mu_p, sigma_p=sigma_p,
@@ -871,6 +967,9 @@ class VFEEStep(nn.Module):
                     # Fallback: separate β + gradient passes (rebuilds Omega
                     # internally). Used for autograd μ/σ, exact-diagonal
                     # transport, full-cov, or unspecified irrep_dims.
+                    # Clear stale per-head snapshot so the trainer's plot
+                    # path doesn't read it as fresh.
+                    self._last_attention_per_head = None
                     beta, kl_matrix = compute_kl_attention(
                         mu, sigma, phi, self.generators,
                         self.irrep_dims, _kappa, mask,
@@ -983,6 +1082,10 @@ class VFEEStep(nn.Module):
                 self._last_kl_matrix = (
                     kl_matrix.detach() if kl_matrix is not None else None
                 )
+                # _last_attention_per_head is populated by the per-head
+                # dispatch above and cleared (set to None) by the
+                # single-softmax branch; we don't touch it here so the
+                # plotter can read whichever the active branch produced.
 
                 # Cheap diagnostics — populated regardless of
                 # `track_layer_diagnostics`. One batched `.tolist()` per
@@ -1216,6 +1319,14 @@ class VFEEStep(nn.Module):
                     ],
                     'kappa': _kappa_cached,
                     'irrep_dims': list(self.irrep_dims) if self.irrep_dims else None,
+                    # RoPE state for plot reconstruction. Without these the
+                    # per-head plotter at trainer.py:_compute_per_head_beta
+                    # silently dropped RoPE and rendered a non-position-aware
+                    # β, even when training-time β was RoPE-weighted. The
+                    # plotter applies _apply_rope(mu_q, base=rope_base) when
+                    # use_rope is True to match the kernel exactly.
+                    'use_rope': bool(self.use_rope),
+                    'rope_base': float(self.rope_base),
                 }
 
         # Cache an auxiliary scalar F to deliver gradients to raw_c0, raw_b0,

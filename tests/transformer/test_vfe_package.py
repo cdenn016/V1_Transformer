@@ -802,8 +802,15 @@ class TestKeysideTotalDerivative:
             e_step_mod.compute_vfe_gradients_gpu = orig_unfused
 
         total = captured['fused'] + captured['unfused']
-        assert total == cfg.n_e_steps, (
-            f"Expected {cfg.n_e_steps} analytic (non-autograd) gradient calls "
+        # Per-head softmax (cfg.per_head_softmax default True, 2026-05-19)
+        # calls the fused kernel once per head per iteration; the call
+        # count expectation must therefore include the H factor. For the
+        # legacy single-softmax path set per_head_softmax=False.
+        n_heads = len(cfg.irrep_dims) if cfg.per_head_softmax and len(cfg.irrep_dims) > 1 else 1
+        expected = cfg.n_e_steps * n_heads
+        assert total == expected, (
+            f"Expected {expected} analytic (non-autograd) gradient calls "
+            f"(n_e_steps={cfg.n_e_steps} × n_heads={n_heads}) "
             f"with default flag, got fused={captured['fused']} + "
             f"unfused={captured['unfused']} = {total}"
         )
@@ -1050,8 +1057,18 @@ class TestAlphaC0CorrectionWired:
             'alpha_c0 was None despite E_learnable_alpha=True — '
             'product-rule correction will not fire and gradients will be biased.'
         )
-        assert captured['alpha_c0'].shape == (K,), (
-            f'alpha_c0 must be shape (K,) = ({K},); got {captured["alpha_c0"].shape}'
+        # Per-head softmax (default 2026-05-19) slices alpha_c0 to (d_h,)
+        # before each fused-kernel call; the single-softmax legacy path
+        # passes the full (K,) vector.
+        if cfg_lk.per_head_softmax and len(cfg_lk.irrep_dims) > 1:
+            d_h = cfg_lk.irrep_dims[-1]  # last call captured wins
+            expected_shape = (d_h,)
+        else:
+            expected_shape = (K,)
+        assert captured['alpha_c0'].shape == expected_shape, (
+            f'alpha_c0 must be shape {expected_shape} '
+            f'(per_head_softmax={cfg_lk.per_head_softmax}, irrep_dims={cfg_lk.irrep_dims}); '
+            f'got {captured["alpha_c0"].shape}'
         )
 
     def test_alpha_c0_is_none_when_fixed_alpha(self, monkeypatch):
@@ -1125,6 +1142,14 @@ class TestFusedUnfusedEquivalence:
             n_e_steps=2,
             diagonal_covariance=True,
             gauge_group='GLK',
+            # This test compares the fused-kernel single-softmax dispatch
+            # against the unfused single-softmax fallback. With per_head_softmax
+            # default True (2026-05-19) the fused path runs per-head, which is
+            # a mathematically different algorithm than the unfused fallback.
+            # Pin per_head_softmax=False so both paths run the same algorithm
+            # and the test verifies what it's meant to verify (fused/unfused
+            # numerical equivalence on the SAME algorithm).
+            per_head_softmax=False,
         )
         m = VFEModel(cfg)
         m.eval()
