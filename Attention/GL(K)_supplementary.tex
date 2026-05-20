@@ -73,7 +73,7 @@ An agent $\mathcal{A}^i$ is a pair of local sections over a domain $\mathcal{U}_
 
 where $\sigma^i_q : \mathcal{U}_i \to \mathcal{E}_q$ and $\sigma^i_p : \mathcal{U}_i \to \mathcal{E}_p$.
 
-We write $q_i(c) := \sigma^i_q(c) \in \mathcal{B}_q(c)$ and $p_i(c) := \sigma^i_p(c) \in \mathcal{B}_p(c)$ for the belief and model at base point $c$.
+We write $q_i(c) := \sigma^i_q(c) \in \mathcal{B}_q(c)$ for the belief and $s_i(c) := \sigma^i_p(c) \in \mathcal{B}_p(c)$ for the model at base point $c$. The symbol $p_i$ is reserved in the main paper for the belief-channel base prior $p_i(k_i) \in \mathcal{B}_q$ (a probability density on the belief fiber, see main paper Eq.~\ref{eq:base_priors}); the section $\sigma^i_p$ on the model fiber $\mathcal{B}_p$ defined here is therefore named $s_i$ to avoid collision.
 
 Multi-Agent System\\
 A multi-agent system $\mathcal{M}$ over $\mathcal{C}$ is a collection of agents indexed by $\mathcal{I}$:
@@ -88,7 +88,7 @@ Meta-Agent and Epistemic Death\\
 A meta-agent is a multi-agent system whose component agents share identical section values on their overlap:
 
 \begin{equation}
-q_i(c) = q_j(c), \quad p_i(c) = p_j(c) \quad \text{for } c \in \mathcal{U}_i \cap \mathcal{U}_j.
+q_i(c) = q_j(c), \quad s_i(c) = s_j(c) \quad \text{for } c \in \mathcal{U}_i \cap \mathcal{U}_j.
 \end{equation}
 
 A set of agents is epistemically dead if they identically share both beliefs and models. While constituent agents of a meta-agent may be epistemically dead, the meta-agent itself need not be; such agents can be integrated out, yielding coarse-grained higher-order entities and a route toward emergence.
@@ -103,7 +103,7 @@ q_i &= \Omega_{ij} q_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(belief
 s_i &= \tilde{\Omega}_{ij} s_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(model consensus)}. \label{eq:model_consensus}
 \end{align}
 
-When these conditions hold, the agents are epistemically dead in that they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$.
+When these conditions hold, the agents are epistemically dead in that they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$. The cross-scale prior-propagation construction $p_i^{(\zeta)} = \Omega_{i,I}[q_I^{(\zeta+1)}]$ developed in the companion paper \citep{Dennis2025it} treats priors as transported shadows of the meta-agent's posterior at the next-higher scale. The gauge-theoretic transformer of the main paper treats priors as primitive boundary data (the per-token PriorBank, see main paper Section~\ref{sec:embeddings}); the hierarchical formulation sketched in this subsubsection is the framework-level scaffold that the companion paper exercises in detail, and is not invoked by the main paper's single-scale transformer derivations.
 
 Meta-agents at scale $\zeta=0$ (individual agents) can form meta-agents at scale $\zeta=1$ (groups), which can further coalesce into meta-agents at scale $\zeta=2$ (communities), and so on, creating a hierarchical scale structure:
 
@@ -172,6 +172,8 @@ On overlaps, local connections are related by:
 \begin{equation}
 A^{(i)}_\mu = \Omega_{ij} A^{(j)}_\mu \Omega_{ij}^{-1} + \Omega_{ij} \partial_\mu \Omega_{ij}^{-1}.
 \end{equation}
+
+\paragraph{Scope and forward references.} The present chapter establishes the bundle scaffold and the gauge-connection apparatus used throughout this appendix and the main paper. The remaining foundational machinery on which the main paper's derivations build is developed in subsequent chapters of this appendix: the Gaussian KL closed form under $\mathrm{GL}(K)$ gauge transport and the covariance-channel fixed-point dynamics are derived in Section~\ref{app:covariance_dynamics}; the gauge-frame gradient and the differential of the matrix exponential are derived in Section~\ref{app:phi_gradients}; the natural-gradient descent on the Gaussian manifold and the symmetric positive-definite manifold retraction are derived in Section~\ref{app:variational_descent}. The variational free energy functional itself, its E-step / M-step decomposition, and the softmax-$\beta$ derivation from a mixture-of-sources model are developed in the main paper at Sections~\ref{sec:mixture_derivation} and~\ref{sec:final_free_energy}. The $\mathrm{GL}(K)$-invariance of the Gaussian KL divergence is stated and proved in the main paper at Theorem~\ref{thm:glk_invariance}; this appendix uses it without re-proof.
 
 
 
@@ -609,10 +611,11 @@ The computational cost of each mode scales as: clipping $O(n_{\mathrm{gen}})$, C
 
 
 \section{Variational Gradient Descent: Implementation and Numerical Methods}
+\label{app:variational_descent}
 
 
 \subsection{Natural Gradient Descent on the Gaussian Manifold}
-Our implementation uses natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry. Given Euclidean gradients $\nabla_\mu$ and $\nabla_\Sigma$, the natural gradient projections are
+Our implementation uses natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric \citep{Cencov1982,amari2016information}. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry. Given Euclidean gradients $\nabla_\mu$ and $\nabla_\Sigma$, the natural gradient projections are
 \begin{equation}
 \delta\mu = -\Sigma \nabla_\mu, \qquad
 \delta\Sigma = -2 \Sigma \mathrm{sym}(\nabla_\Sigma) \Sigma,

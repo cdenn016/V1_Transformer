@@ -3840,15 +3840,70 @@ To illustrate how the framework applies to familiar physical objects, consider a
 
 A typical rock comprises approximately $10^{23}$ atomic constituents. Each atom functions as a scale-0 agent maintaining beliefs about its local environment - primarily the positions and momenta of neighboring atoms. Atoms in a solid are strongly coupled to their neighbors through electromagnetic interactions, which in our framework manifests as large attention weights $\beta_{\text{atom,neighbor}} \approx 1$. This strong coupling drives belief alignment: atoms in a crystalline lattice maintain highly coherent beliefs about their relative spatial configuration.
 
-When these atomic agents achieve sufficient coherence (small KL divergences between transported beliefs), they form a scale-1 meta-agent - the rock itself. This meta-agent possesses collective belief $q_{\text{rock}}$ representing the consensus configuration of constituent atoms, collective prior $p_{\text{rock}}$ encoding the stable lattice structure characteristic of the material, and collective gauge frame $\phi_{\text{rock}}$ representing the rock's overall internal orientation. The rock's phenomenal geometry - what it would "experience" if it possessed the information integration necessary for experience - is the metric $G_{\text{rock}}$ induced through pullback from its collective belief field.
+When these atomic agents achieve sufficient coherence (small KL divergences between transported beliefs, in the sense of the threshold detector at Section~\ref{sec:meta_agent_threshold}, the implementation-side surrogate for the variational criterion at Eq.~\eqref{eq:meta_agent_FE_criterion}), they form a scale-1 meta-agent - the rock itself. This meta-agent possesses collective belief $q_{\text{rock}}$ representing the consensus configuration of constituent atoms, collective prior $p_{\text{rock}}$ encoding the stable lattice structure characteristic of the material, and collective gauge frame $\phi_{\text{rock}}$ representing the rock's overall internal orientation. The rock admits a pullback-induced geometry $G_{\text{rock}}$ from its collective belief field (cf.\ Section~\ref{sec:pullback}, conditional on the regulator caveat at Section~\ref{sec:scope_limitations}); the framework's pan-agentic commitment at Section~\ref{sec:cognitive_first} does not ascribe phenomenal properties to this geometry.
 
-The rock exhibits slow dynamics characteristic of massive objects. Its Fisher information is large (sharp, confident beliefs about spatial configuration), making belief updates resistant to perturbation. The rock's proper time $\tau_{\text{rock}}$ advances slowly because information updates occur infrequently - the system is near equilibrium. This formalizes the intuition that massive objects have inertia and resist changes in state.
+The rock exhibits slow dynamics under the framework's natural-gradient flow. Its Fisher information is large (sharp, confident beliefs about spatial configuration), making belief updates resistant to perturbation. The rock's Fisher arc length $\tau_{\text{rock}}$ (Section~\ref{sec:fisher_arc_length}) advances slowly because information updates occur infrequently — the system is near equilibrium. In the precision-as-stiffness reading of Section~\ref{sec:mass}, this is the within-framework analogue of the intuition that high-precision agents resist updates; we do not identify Fisher arc length with relativistic proper time (cf.\ Section~\ref{sec:fisher_arc_length}) and we do not equate the framework's effective stiffness with physical inertial mass (cf.\ Section~\ref{sec:mass}).
 
-When a human observes the rock, the coupling $\beta_{\text{human,rock}}$ becomes non-zero. This coupling is not direct but mediated by photon agents - electromagnetic quanta that couple strongly to both rock-atoms (scattering) and human-photoreceptors (absorption). The photons function as information carriers, transporting beliefs about the rock's configuration to the human observer. The human agent's beliefs $q_{\text{human}}$ update to align with the transported rock beliefs $\Omega_{\text{human,rock}}[q_{\text{rock}}]$ through free energy minimization. This process is phenomenologically experienced as "seeing the rock," but it is simply agent-agent information coupling mediated by intermediate agents.
+When a human observes the rock, the coupling $\beta_{\text{human,rock}}$ becomes non-zero. This coupling is not direct but mediated through photon-mediated coupling channels — electromagnetic quanta that couple strongly to both rock-atoms (scattering) and human-photoreceptors (absorption). The photons mediate $\beta_{\text{human,rock}}$ as information carriers, transporting beliefs about the rock's configuration to the human observer. The human agent's beliefs $q_{\text{human}}$ update to align with the transported rock beliefs $\Omega_{\text{human,rock}}[q_{\text{rock}}]$ through free energy minimization. This process is phenomenologically experienced as "seeing the rock," but it is simply agent-agent information coupling mediated by intermediate channels.
 
-observation is bidirectional. The rock's state also updates slightly in response to coupling with the human - or more precisely, in response to the photons that scattered from it. For macroscopic rocks, this perturbation is negligible: $\Delta q_{\text{rock}} \approx 0$ because the rock's large Fisher information (high mass) resists updates. For microscopic quantum particles with broad wavefunctions (low Fisher information, high uncertainty), the perturbation can be significant: $\Delta q_{\text{particle}}$ may be large, corresponding to quantum measurement back-action. The classical-quantum distinction emerges from the magnitude of Fisher information rather than from qualitatively different dynamics.
+observation is bidirectional. The rock's state also updates slightly in response to coupling with the human - or more precisely, in response to the photons that scattered from it. For macroscopic rocks, this perturbation is negligible: $\Delta q_{\text{rock}} \approx 0$ because the rock's large Fisher information resists updates (large effective stiffness in the precision-as-stiffness reading of Section~\ref{sec:mass}). Within the framework, low-precision agents with broad belief distributions can show large $\Delta q$ under coupling. We do not claim this reproduces the standard quantum-mechanical measurement formalism, and we do not identify this low-precision regime with the Born-rule back-action of standard quantum mechanics (cf.\ Section~\ref{sec:scope_limitations}, which states that no rigorous quantum extension of the framework currently exists).
 
-This example illustrates several key principles. First, observation is not a special process but ordinary agent-agent coupling. Second, the observer-observed distinction is conventional rather than ontological - both are agents coupled through information exchange. Third, macroscopic objects emerge as meta-agents from microscopic constituents through consensus formation. Fourth, classical behavior (definite states, negligible back-action) and quantum behavior (superposition, significant back-action) reflect different regimes of the same information-geometric dynamics.
+\subsubsection{Derivations: inertia, cross-observer consensus, and vanishing back-action}
+\label{sec:rock_derivations}
+
+The intuitions of the previous paragraphs are direct consequences of the framework's natural-gradient flow on $\mathcal{F}$ together with the canonical Gaussian KL gradient. We make this explicit in three derivations.
+
+\paragraph{Inertia from precision.} Consider the single-agent free energy
+\begin{equation}
+\mathcal{F}_i = D_{\mathrm{KL}}(q_i \| p_i) + \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j),
+\end{equation}
+with Gaussian $q_i = \mathcal{N}(\mu_i, \Sigma_i)$, $p_i = \mathcal{N}(\bar{\mu}_i, \bar{\Sigma}_i)$, and transported neighbor $\Omega_{ij} q_j = \mathcal{N}(\tilde{\mu}_j, \tilde{\Sigma}_{q_j})$. Differentiating the closed-form Gaussian KL of Appendix~\ref{app:gaussian_kl} with respect to $\mu_i$ gives
+\begin{equation}
+\nabla_{\mu_i}\mathcal{F}_i = \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \beta_{ij}\tilde{\Lambda}_{q_j}(\mu_i - \tilde{\mu}_j),
+\label{eq:rock_grad_mu}
+\end{equation}
+where $\bar{\Lambda}_{p_i} = \bar{\Sigma}_i^{-1}$ and $\tilde{\Lambda}_{q_j} = \tilde{\Sigma}_{q_j}^{-1}$. The natural-gradient flow with Fisher preconditioner $g_{\mu\mu} = \Sigma_i^{-1}$ (Appendix~\ref{app:fisher_gaussian}) gives the mean update
+\begin{equation}
+\dot{\mu}_i = -\eta_q\,\Sigma_i \nabla_{\mu_i}\mathcal{F}_i = -\eta_q\Sigma_i\left[\bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \beta_{ij}\tilde{\Lambda}_{q_j}(\mu_i - \tilde{\mu}_j)\right].
+\label{eq:rock_natural_grad_step}
+\end{equation}
+For a rock with $\Sigma_i = \bar{\Sigma}_i = \epsilon I$ ($\epsilon \ll 1$, $\bar{\Lambda}_{p_i} = \epsilon^{-1} I$) and a low-precision observer agent $j$ with $\tilde{\Lambda}_{q_j} = O(1)$, substitution yields
+\begin{equation}
+\dot{\mu}_i = -\eta_q(\mu_i - \bar{\mu}_i) - \eta_q\,\epsilon\,\beta_{ij}\,O(1)\,(\mu_i - \tilde{\mu}_j) = -\eta_q(\mu_i - \bar{\mu}_i) + O(\epsilon).
+\label{eq:rock_inertia}
+\end{equation}
+The prior-anchor term is $O(1)$ and survives; the coupling-to-low-precision-observer term is $O(\epsilon)$ and vanishes as $\epsilon \to 0$. The rock is pinned to its own sharp prior and ignores low-precision neighbors at leading order. This is the framework realization of "high Fisher information makes belief updates resistant to perturbation": the Fisher preconditioner $\Sigma_i$ in Eq.~\eqref{eq:rock_natural_grad_step} converts large precision into small step size~\cite{Amari2016}.
+
+\paragraph{Cross-observer consensus via photon-mediated coupling.} Consider three agents: rock $R$ with precision $\Lambda_R = \epsilon^{-1}$, photon-mediated channel $\gamma$, and human $h$ with precision $\Lambda_h \ll \Lambda_R$. Under the scattering event the channel $\gamma$ couples to $R$ with weight $\beta_{\gamma R}\tilde{\Lambda}_{q_R} \gg \bar{\Lambda}_\gamma$; setting $\dot{\mu}_\gamma = 0$ in the coupling-dominated regime yields the equilibrium
+\begin{equation}
+\mu_\gamma \to \Omega_{\gamma R}\,\mu_R.
+\end{equation}
+Each human observer $h_k$ subsequently equilibrates against $\gamma$ in the absorption-dominated regime $\beta_{h_k\gamma}\tilde{\Lambda}_{q_\gamma} \gg \bar{\Lambda}_{h_k}$, giving $\mu_{h_k} \to \Omega_{h_k\gamma}\mu_\gamma$. Composing through the channel,
+\begin{equation}
+\mu_{h_k} \to \Omega_{h_k\gamma}\,\Omega_{\gamma R}\,\mu_R = \Omega_{h_k R}\,\mu_R,
+\label{eq:rock_consensus}
+\end{equation}
+where the last equality is the transport composition rule $\Omega_{ik} = \Omega_{ij}\Omega_{jk}$ that follows from the two-exponential parameterization $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$ by cancellation of the middle factor (cf.\ Eq.~\eqref{eq:transport_def}; the composition is exact along flat-connection chains and acquires holonomy corrections under curvature, see~\cite{Nakahara2003}). Two human observers $h_1, h_2$ therefore both equilibrate to the same gauge-transported rock state up to their respective frames. This is the framework realization of cross-observer agreement on the rock's appearance.
+
+\paragraph{Vanishing back-action in the rock limit.} The rock's update under coupling to a low-precision human contributes through the coupling term only:
+\begin{equation}
+\dot{\mu}_R^{(\mathrm{back})} = -\eta_q\,\Sigma_R\,\beta_{Rh}\,\tilde{\Lambda}_{q_h}(\mu_R - \Omega_{Rh}\mu_h) = O(\epsilon),
+\label{eq:rock_back_mu}
+\end{equation}
+since $\Sigma_R = \epsilon I$ and the bracketed term is $O(1)$. For the covariance sector, the natural gradient is $\tilde{\nabla}_{\Sigma_R}\mathcal{F} = 2\Sigma_R(\nabla_{\Sigma_R}\mathcal{F})\Sigma_R$ (Appendix~\ref{app:fisher_gaussian}). The coupling contribution
+\begin{equation}
+\nabla_{\Sigma_R}\mathcal{F}_{\mathrm{coupling}} = \tfrac{1}{2}\beta_{Rh}\big(\tilde{\Lambda}_{q_h} - \Lambda_R\big)
+\end{equation}
+produces
+\begin{equation}
+\dot{\Sigma}_R^{(\mathrm{back})} = -2\eta_q\,\Sigma_R \cdot \tfrac{1}{2}\beta_{Rh}\big(\tilde{\Lambda}_{q_h} - \Lambda_R\big)\cdot \Sigma_R = -\eta_q\,\beta_{Rh}\,\epsilon^2\,\big(\Lambda_h - \epsilon^{-1}\big) = O(\epsilon).
+\label{eq:rock_back_sigma}
+\end{equation}
+Both mean and covariance back-action scale as $\epsilon$ and vanish in the high-precision limit. This is the framework realization of "$\Delta q_{\mathrm{rock}} \approx 0$ because the rock's large Fisher information resists updates": both $\dot{\mu}_R^{(\mathrm{back})}$ and $\dot{\Sigma}_R^{(\mathrm{back})}$ are suppressed by the rock's vanishing covariance prefactor.
+
+\paragraph{Asymptotic reading.} The three derivations above are stated in the asymptotic $\epsilon \to 0$ rock-limit. At finite $\epsilon$ corresponding to thermal motion of constituent atoms, both the coupling pull on $\mu_R$ and the back-action on $(\mu_R, \Sigma_R)$ are nonzero at $O(\epsilon)$; the rock-limit claim is that this scaling sets the regime in which inertia, consensus, and negligible back-action emerge, not that the corresponding quantities are identically zero at finite temperature. The $O(\epsilon)$ scaling is the framework analogue of the macroscopic-limit smallness that lets classical mechanics be read off the underlying many-body dynamics.
+
+This example illustrates several principles. First, observation is not a special process but ordinary agent-agent coupling. Second, the observer-observed distinction is conventional rather than ontological - both are agents coupled through information exchange. Third, macroscopic objects emerge as meta-agents from microscopic constituents through consensus formation. Fourth, within the framework's information-geometric dynamics the high-precision and low-precision limits exhibit qualitatively different back-action behavior; we do not identify the low-precision limit with standard quantum-mechanical superposition (cf.\ Section~\ref{sec:scope_limitations}).
 
 \section{Mathematical Details}
 \label{app:math}
