@@ -91,6 +91,70 @@ def _bald_mi_and_ambiguity(
 
 
 @torch.no_grad()
+def score_components_from_beliefs(
+    beliefs: BeliefState,
+    model: 'VFEModel',
+    preference: 'Preference',
+    cfg: 'AIFConfig',
+) -> EFEComponents:
+    r"""Score EFE components from a cached BeliefState — no forward pass.
+
+    Used by the tree-search inner loop when a candidate's belief is already
+    cached (e.g. it survived from a prior commit via
+    :meth:`BeliefStateCache.commit_action`). Bitwise equivalent to
+    :func:`compute_G_at_node` minus the MC randomness in BALD: the BeliefState
+    determines mu/sigma at the last position; the only stochastic component
+    is the ``epistemic_samples`` Monte Carlo draws against the same
+    ``torch.randn`` stream.
+
+    Decoding from the cached belief uses ``prior_bank.decode``. The cached
+    belief already carries ``mu = mu_final`` (post-final-norm) because
+    `VFEModel._encode_step_decode` substitutes mu_final before returning.
+
+    Args:
+        beliefs: cached converged BeliefState.
+        model: trained ``VFEModel`` (used only for ``prior_bank``).
+        preference: configured ``Preference`` instance.
+        cfg: ``AIFConfig`` for sampling and weights.
+
+    Returns:
+        ``EFEComponents`` decomposition.
+    """
+    # Last-position belief.
+    mu_last = beliefs.mu[:, -1:, :]
+    if beliefs.sigma.dim() == 4:
+        sigma_last = beliefs.sigma[:, -1:, :, :]
+    else:
+        sigma_last = beliefs.sigma[:, -1:, :]
+
+    # Pragmatic: from the decoded predictive at the last position.
+    last_logits = model.prior_bank.decode(
+        mu_last, sigma_last, tau=max(cfg.decode_tau, _EPS),
+    )
+    last_probs = F.softmax(last_logits[:, 0, :], dim=-1)  # (1, V)
+    pragmatic = preference.pragmatic(last_probs).squeeze()
+
+    # Ambiguity + epistemic from one BALD sampling pass.
+    mi, mean_H = _bald_mi_and_ambiguity(
+        mu_last, sigma_last,
+        prior_bank=model.prior_bank,
+        n_samples=cfg.epistemic_samples,
+        decode_tau=cfg.decode_tau,
+    )
+
+    pragmatic_f = float(pragmatic.item())
+    ambiguity_f = float(mean_H.item())
+    epistemic_f = float(mi.item())
+    g_local = pragmatic_f + ambiguity_f - cfg.epistemic_weight * epistemic_f
+    return EFEComponents(
+        pragmatic=pragmatic_f,
+        ambiguity=ambiguity_f,
+        epistemic=epistemic_f,
+        G_local=g_local,
+    )
+
+
+@torch.no_grad()
 def compute_G_at_node(
     context_ids: torch.Tensor,
     candidate_action: int,
@@ -131,22 +195,29 @@ def compute_G_at_node(
     # Single forward — returns both logits and converged BeliefState so
     # the AIF path does not re-encode (closes the double-encode in
     # vfe/efe.py:191-196 per verifier §8.8).
-    logits, beliefs = model.forward_with_beliefs(trial_ids)
+    _logits, beliefs = model.forward_with_beliefs(trial_ids)
 
     # Last-position predictive for the candidate's pragmatic term.
-    last_logits = logits[:, -1, :] / max(cfg.decode_tau, _EPS)
-    last_probs = F.softmax(last_logits, dim=-1)  # (1, V)
+    # Re-decode at the AIF-controlled temperature `cfg.decode_tau` —
+    # independent of `model.cfg.decode_tau` so AIF generation can be tuned
+    # separately. The forward's `_logits` are scaled by the model's tau;
+    # for AIF scoring we want the AIF tau, which is one extra (V, K)
+    # matmul per node (small relative to the rest of the forward).
+    mu_last = beliefs.mu[:, -1:, :]
+    if beliefs.sigma.dim() == 4:
+        sigma_last = beliefs.sigma[:, -1:, :, :]
+    else:
+        sigma_last = beliefs.sigma[:, -1:, :]
+    last_logits = model.prior_bank.decode(
+        mu_last, sigma_last, tau=max(cfg.decode_tau, _EPS),
+    )
+    last_probs = F.softmax(last_logits[:, 0, :], dim=-1)  # (1, V)
 
     # Pragmatic: E_{q(o|a)}[-log p*(o|C)].
     pragmatic = preference.pragmatic(last_probs).squeeze()
 
     # Ambiguity + epistemic share one BALD sampling pass at the last
-    # position. Extract mu/sigma at the final token position.
-    if beliefs.sigma.dim() == 4:
-        sigma_last = beliefs.sigma[:, -1:, :, :]
-    else:
-        sigma_last = beliefs.sigma[:, -1:, :]
-    mu_last = beliefs.mu[:, -1:, :]
+    # position. mu_last / sigma_last already extracted above.
     mi, mean_H = _bald_mi_and_ambiguity(
         mu_last, sigma_last,
         prior_bank=model.prior_bank,

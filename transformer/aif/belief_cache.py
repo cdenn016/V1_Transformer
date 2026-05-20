@@ -99,6 +99,33 @@ class BeliefStateCache:
             del self._store[k]
         return len(to_evict)
 
+    def commit_action(self, action: int) -> int:
+        r"""Re-key the cache after the agent commits to ``action``.
+
+        Entries whose key starts with ``(action,)`` are re-keyed by stripping
+        the leading element — their belief state is unchanged because
+        ``[old_prompt, action, ...]`` is the same context as
+        ``[new_prompt, ...]`` where ``new_prompt = old_prompt ++ (action,)``.
+        Entries whose key starts with a different first action are evicted
+        because the subtree is no longer reachable from the new root.
+
+        Truncation safety: when ``len(old_prompt) + len(key)`` exceeds
+        ``max_seq_len`` the model's forward pass truncates to the last
+        ``max_seq_len`` tokens; the cached belief reflects that truncation.
+        After commit, ``[new_prompt, key[1:]]`` truncates to the same
+        ``max_seq_len`` tokens, so the cached belief remains valid.
+
+        Returns:
+            Number of entries kept after re-keying (for the
+            cache-hit-rate diagnostic).
+        """
+        new_store: 'OrderedDict[Tuple[int, ...], BeliefState]' = OrderedDict()
+        for key, beliefs in self._store.items():
+            if len(key) >= 1 and key[0] == action:
+                new_store[key[1:]] = beliefs
+        self._store = new_store
+        return len(new_store)
+
     def clear(self) -> None:
         self._store.clear()
         self.hits = 0
