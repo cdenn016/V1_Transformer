@@ -2531,9 +2531,11 @@ An agent following a belief trajectory $q(\tau)$ through the statistical manifol
 \Delta \tau = \int_{\tau_1}^{\tau_2} \sqrt{g_{\mathcal{B}}(\dot{q}, \dot{q})}  d\tau,
 \end{equation}
 
-where $g_{\mathcal{B}}$ is the Fisher-Rao metric. This is the "information distance" traversed along the trajectory and is a positive-definite Riemannian length. Different agents following different trajectories accumulate different Fisher arc lengths, which we use as an internal information-geometric clock. We do not identify this quantity with relativistic proper time: as discussed in detail in Section~\ref{sec:fisher_arc_length}, Fisher arc length and special-relativistic proper time have opposite character (positive-definite Riemannian versus indefinite Lorentzian) and run in opposite directions with motion. The connection to physical time dilation, if there is one, requires the indefinite-metric extension of Section~\ref{sec:signature_resolution} and is not established here.
+where $g_{\mathcal{B}}$ is the Fisher-Rao metric. This is the "information distance" traversed along the trajectory and is a positive-definite Riemannian length. Different agents following different trajectories accumulate different Fisher arc lengths, which we use as an internal information-geometric clock. We do not identify this quantity with relativistic proper time: Fisher arc length and special-relativistic proper time have opposite character (positive-definite Riemannian versus indefinite Lorentzian) and run in opposite directions with motion. The connection to physical time dilation, if there is one, requires the indefinite-metric extension of Section~\ref{sec:signature_resolution} and is not established here.
 
-The formalism thus provides a natural notion of observer-dependent time arising from information geometry, consistent with relational and emergent approaches to time in quantum gravity and foundations of physics. Time is not absolute background but rather emerges from the accumulated information updates each agent performs. This perspective, while speculative in its connection to physical time, provides rigorous mathematical structure for exploring how temporal flow might emerge from more fundamental information-theoretic dynamics.\subsection{Natural Gradient Dynamics on Statistical Manifolds}
+The formalism thus provides a natural notion of observer-dependent time arising from information geometry, consistent with relational and emergent approaches to time in quantum gravity and foundations of physics in sharing observer-dependence and a non-absolute character, while differing from each cited proposal in its direction-of-motion response. Time is not absolute background but rather emerges from the accumulated information updates each agent performs. This perspective, while speculative in its connection to physical time, provides rigorous mathematical structure for exploring how temporal flow might emerge from more fundamental information-theoretic dynamics.
+
+\subsection{Natural Gradient Dynamics on Statistical Manifolds}
 
 \subsubsection{Fisher Information for Gaussian Distributions}
 
@@ -2598,7 +2600,7 @@ g_{\mathcal{B}}(\delta q, \delta q) = \delta\mu^\top \Sigma^{-1} \delta\mu + \fr
 
 This metric is intrinsic to the space of probability distributions, existing independently of any base manifold structure. It measures statistical distinguishability between nearby distributions through the Fisher information.
 
-\subsubsection{A Bundle Metric on the Associated Bundle}
+\subsubsection{A Bundle Metric on the Associated Bundle (in a Fixed Gauge)}
 
 A common informal construction takes the induced metric on $\mathcal{C}$ to be the $L^2$ pullback of score functions along the parameterized family $c \mapsto q_i(c)$. This is correct as far as it goes but does not earn the name "pullback of a fiber-bundle metric" because no metric on the total space $E$ has been specified. We now provide such a metric and show that the score-function expression below is the pullback of a bona-fide bundle metric, not merely an $L^2$ pullback of densities.
 
@@ -2606,7 +2608,7 @@ The associated bundle $\mathcal{E}_{\mathrm{state}} = P \times_G \mathcal{B}_{\m
 \begin{equation}
 T_{(c, q)} E_q = H_{(c, q)} \oplus V_{(c, q)},
 \end{equation}
-where $V_{(c, q)} \cong T_q \mathcal{B}$ is the tangent space to the fiber and $H_{(c, q)}$ is the horizontal lift of $T_c \mathcal{C}$ specified by the connection one-form $A^{(i)} = U_i^{-1}dU_i \in \mathfrak{g}$ associated to the gauge frame $\phi_i$ (Section~\ref{sec:cognitive_reference_frames}). Define the bundle metric
+where $V_{(c, q)} \cong T_q \mathcal{B}$ is the tangent space to the fiber and $H_{(c, q)}$ is the horizontal lift of $T_c \mathcal{C}$ specified by the connection one-form $A^{(i)} = U_i^{-1}dU_i \in \mathfrak{g}$ associated to the gauge frame $\phi_i$ (Section~\ref{sec:cognitive_reference_frames}). Define the bundle metric (within an agent's gauge fixing $U_i$; the gauge non-invariance is disclosed below at the paragraph "Gauge-invariance disclosure for the horizontal block")
 \begin{equation}
 g_{E_q}\big|_{(c, q)}\big(X_H + X_V, Y_H + Y_V\big) := g_{\mathcal{C}}^{\mathrm{tw}}(\pi_* X_H, \pi_* Y_H) + g_{\mathcal{B}}(X_V, Y_V),
 \label{eq:bundle_metric}
