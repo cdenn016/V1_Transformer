@@ -198,12 +198,12 @@ where $q_i = \mathcal{N}(\mu_i, \Sigma_i)$, $p_i = \mathcal{N}(\mu_{p,i}, \Sigma
 
 \subsubsection{Gaussian KL Divergence under $\mathrm{GL}(K)$ Gauge Transport}
 
-The alignment term $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ involves KL divergences between Gaussians related by gauge transport $\Omega_{ij} = e^{\phi_i}e^{-\phi_j} \in \mathrm{GL}^+(K)$. The standard Gaussian KL divergence is
+The alignment term $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ involves KL divergences between Gaussians related by gauge transport $\Omega_{ij} = e^{\phi_i}e^{-\phi_j} \in \mathrm{GL}^+(K)$. The standard Gaussian KL divergence \citep{bishop2006pattern,murphy2012machine,CoverThomas2006} is
 
 \begin{align}
 D_{\mathrm{KL}} \left(
 \mathcal{N}(\mu_1, \Sigma_1)
- \| 
+ \|
 \mathcal{N}(\mu_2, \Sigma_2)
 \right)
 &=
@@ -221,7 +221,7 @@ D_{\mathrm{KL}} \left(
 \end{align}
 
 
-and differentiating w.r.t.\ $\Sigma_1$ (holding $\mu_1,\mu_2,\Sigma_2$ fixed) gives
+Differentiating w.r.t.\ $\Sigma_1$ (holding $\mu_1,\mu_2,\Sigma_2$ fixed), using the standard identities $\partial \log|\Sigma|/\partial \Sigma = \Sigma^{-\top}$ and $\partial \mathrm{tr}(A\Sigma)/\partial \Sigma = A^\top$ \citep{petersen2012matrix}, gives
 
 \begin{equation}
 \frac{\partial D_{\mathrm{KL}}}{\partial \Sigma_1}
@@ -231,7 +231,7 @@ and differentiating w.r.t.\ $\Sigma_1$ (holding $\mu_1,\mu_2,\Sigma_2$ fixed) gi
 \right].
 \end{equation}
 
-Applying this to each term in $\mathcal{F}_i$, where the alignment KL involves the $\mathrm{GL}(K)$-transported belief $\Omega_{ij} q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$:
+The push-forward $\Omega_{ij} q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ used below is the standard linear-transformation rule for a Gaussian random variable under $\Omega \in \mathrm{GL}(K)$ \citep[\S2.3.3]{bishop2006pattern}. Applying the above derivative to each term in $\mathcal{F}_i$:
 
 \begin{align}
 \frac{\partial}{\partial \Sigma_i}
@@ -272,7 +272,7 @@ D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j).
 
 The first line contains the ``direct'' gradient terms (differentiating each $K_{ij}$ at fixed $\beta_{ij}$). The second line is the attention weight gradient, analogous to the $\partial \beta_{ij}/\partial \mu_i$ term in the mean gradient. This $\partial\beta/\partial\Sigma$ term arises from differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ via the product rule; it is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}} = -\tau\log Z_i + \cdots$ by the envelope theorem (see main text, Section~3.5). From the softmax structure, $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$, so this correction vanishes when the KL divergences are uniform across neighbors, and also in both the $\tau \to 0$ and $\tau \to \infty$ limits.
 
-The coefficient of $\Sigma_i^{-1}$ is $-(1 + \sum_j \beta_{ij}) = -2$, since the entropy of $q_i$ contributes $-\frac{1}{2}\Sigma_i^{-1}$ to both the prior KL (once, with unit coefficient $\alpha_i = 1$) and the attention-weighted alignment KL (once, weighted by $\sum_j \beta_{ij} = 1$).
+The coefficient of $\Sigma_i^{-1}$ is $-(1 + \sum_j \beta_{ij}) = -2$, since the entropy of $q_i$ contributes $-\frac{1}{2}\Sigma_i^{-1}$ to both the prior KL (once, with the self-coupling weight $\alpha_i$ on the prior term held at its canonical default $\alpha_i = 1$; see main paper Section~\ref{sec:state_dependent_precision} for the state-dependent generalization) and the attention-weighted alignment KL (once, weighted by $\sum_j \beta_{ij} = 1$).
 
 \subsection{Fixed-Point Equation and Symmetric Solution}
 
@@ -334,7 +334,7 @@ D_{\mathrm{KL}} \big(q_i \| \Omega_{ik} q_k\big)
 \right]}.
 \end{equation}
 
-As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ best agrees (after transport). Small $\tau$ alone sharpens the $\beta$ distribution but does not change the coefficient on $\Sigma_i^{-1}$ in the fixed-point equation \eqref{eq:sigma_fixed_point_beta}, which remains $\frac{1}{2}$. To obtain a coefficient of $1$ on the alignment term, one requires the state-dependent prior coupling $\alpha_i \ll 1$ (cf.\ main text, Section~3.6), which changes the coefficient from $-(1+\alpha_i)$ to approximately $-1$. In the alignment-dominated regime where both $\alpha_i \ll 1$ and $\tau$ is small, the fixed point becomes:
+As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ best agrees (after transport). Small $\tau$ alone sharpens the $\beta$ distribution but does not change the coefficient on $\Sigma_i^{-1}$ in the fixed-point equation \eqref{eq:sigma_fixed_point_beta}, which remains $\frac{1}{2}$. To obtain a coefficient of $1$ on the alignment term, one requires the state-dependent prior coupling $\alpha_i \ll 1$ (cf.\ main text Section~\ref{sec:state_dependent_precision}), which changes the coefficient from $-(1+\alpha_i)$ to approximately $-1$. In the alignment-dominated regime where both $\alpha_i \ll 1$ and $\tau$ is small, the fixed point becomes:
 
 \begin{equation}
 \boxed{
@@ -349,7 +349,7 @@ As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ b
 
 Here $\langle \cdot \rangle_{\beta}$ denotes a $\beta$-weighted expectation over neighbors.
 
-In this regime, agent $i$'s precision matrix becomes the $\beta$-weighted average of its neighbors' transported precisions. The two conditions play complementary roles: small $\alpha_i$ suppresses the prior term and changes the coefficient to unity, while small $\tau$ concentrates $\beta$ on the most aligned neighbors.
+In this regime, agent $i$'s precision matrix becomes the $\beta$-weighted average of its neighbors' transported precisions. The two conditions play complementary roles: small $\alpha_i$ suppresses the prior term and changes the coefficient to unity, while small $\tau$ concentrates $\beta$ on the most aligned neighbors. This regime is studied as a theoretical limit; the canonical experimental configuration of the main paper uses $\alpha_i = 1$, in which case the prior term remains present at coefficient $\frac{1}{2}$ and the fixed-point form \eqref{eq:sigma_fixed_point_beta} applies.
 
 When, additionally, all agents already have approximately equal covariances and the transports are near-identity, i.e. $\Sigma_i \approx \Sigma_j$ and $\Omega_{ij} \approx I$, then \eqref{eq:beta_weighted_precision} implies
 
@@ -372,17 +372,19 @@ Finally, consider the gradient flow
 \qquad\eta_\Sigma > 0.
 \end{equation}
 
-Local stability of the equilibrium \eqref{eq:sigma_fixed_point_beta} follows from the positive-definiteness of the Hessian. For the Gaussian KL terms $D_{\mathrm{KL}}(\mathcal{N}(\mu_1,\Sigma_1) \| \mathcal{N}(\mu_2,\Sigma_2))$ viewed as a function of $\Sigma_1$ at fixed $\Sigma_2$,
+Local stability of the equilibrium \eqref{eq:sigma_fixed_point_beta} follows from the positive-definiteness of the Hessian. For the Gaussian KL terms $D_{\mathrm{KL}}(\mathcal{N}(\mu_1,\Sigma_1) \| \mathcal{N}(\mu_2,\Sigma_2))$ viewed as a function of $\Sigma_1$ at fixed $\Sigma_2$, the second-variation acts on symmetric tangent vectors $H \in \mathrm{Sym}(K)$ as
 
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}}{\partial \Sigma_1 \partial \Sigma_1}
+\left.\frac{\partial^2 D_{\mathrm{KL}}}{\partial \Sigma_1 \partial \Sigma_1}\right[H, H]
 =
-\tfrac{1}{2} \Sigma_1^{-1} \boxtimes_{\mathrm{sym}} \Sigma_1^{-1},
+\tfrac{1}{2} \mathrm{tr}\big(\Sigma_1^{-1} H \Sigma_1^{-1} H\big)
+=
+\tfrac{1}{2} \big\|\Sigma_1^{-1/2} H \Sigma_1^{-1/2}\big\|_F^2 \geq 0,
 \end{equation}
 
-where $\boxtimes_{\mathrm{sym}}$ denotes the symmetrized Kronecker product acting on $\mathrm{Sym}(K)$. The Hessian depends only on $\Sigma_1$ (the $\mathrm{tr}(\Sigma_2^{-1}\Sigma_1)$ term is linear in $\Sigma_1$ and contributes no $\Sigma_2$-dependent second derivative), and is manifestly positive definite for $\Sigma_1 \succ 0$.
+with equality iff $H = 0$. The Hessian depends only on $\Sigma_1$ (the $\mathrm{tr}(\Sigma_2^{-1}\Sigma_1)$ term is linear in $\Sigma_1$ and contributes no $\Sigma_2$-dependent second derivative), and is manifestly positive definite for $\Sigma_1 \succ 0$. The full Hessian of $\mathcal{F}_i$ extends to a $\beta$-weighted convex combination of single-KL Hessians at the joint $(\beta, \Sigma)$ stationary point; the envelope-theorem identity of Eq.~\eqref{eq:autograd_envelope_gap} (main paper) suppresses the $\partial\beta/\partial \Sigma$ contributions at the fixed point.
 
-Hence the covariance alignment fixed-point is an attractor of the variational dynamics under the standing assumptions $\sum_j \beta_{ij}=1$, $\Omega_{ij}$ invertible, and $\Lambda_o$ negligible relative to the inter-agent coupling.
+Hence the covariance alignment fixed-point is an attractor of the variational dynamics under the standing assumptions $\sum_j \beta_{ij}=1$, $\Omega_{ij}$ invertible, and the observation precision $R^{-1}$ negligible relative to the inter-agent coupling (cf.\ Eq.~\eqref{eq:Sigma_gradient_final}).
 
 Under these assumptions the alignment $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ is consistent with the variational dynamics; we do not claim a contractive proof of global uniqueness here.
 
