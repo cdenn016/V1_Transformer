@@ -437,6 +437,94 @@ class TestPullbackNaturalGradient:
         assert nat_grad.shape == (4, 3)
         assert torch.isfinite(nat_grad).all()
 
+    def test_metric_matches_frobenius_pullback_noncompact(self):
+        """The metric G(φ) matches the direct Frobenius pullback of D_φ exp.
+
+        For non-compact φ ∈ gl(K), the position-dependent factor
+        ``exp(φ) exp(φ)^T`` is non-trivial and must be included. This test
+        verifies the corrected formula in `build_pullback_metric_tensor`
+        against the canonical Frobenius pullback computed directly from
+        Higham 2008's block-matrix identity for D_φ exp[T_a].
+
+        Uses the full elementary basis ``{E_{ij}}`` of gl(K) so the basis is
+        closed under the Lie bracket. A partial basis (e.g., sym + skew alone
+        without sym off-diagonal) would leave commutators outside the
+        spanning subspace and break the structure-constant projection.
+        """
+        from transformer.core.gauge_preconditioner import (
+            build_structure_constants, build_pullback_metric_tensor,
+        )
+        K = 3
+        # Full gl(K) elementary basis: E_{ij}, n_gen = K². Closed under [·,·].
+        gens = []
+        for i in range(K):
+            for j in range(K):
+                T = torch.zeros(K, K)
+                T[i, j] = 1.0
+                gens.append(T)
+        gens = torch.stack(gens)  # (K², K, K) = (9, 3, 3) for K=3.
+        n_gen = gens.shape[0]
+        struct = build_structure_constants(gens)
+
+        torch.manual_seed(42)
+        # Small ||phi|| so the Taylor truncation in build_pullback_metric_tensor
+        # converges to machine precision for the test comparison.
+        phi = torch.randn(n_gen) * 0.1
+        G_code = build_pullback_metric_tensor(
+            phi, gens, struct, series_order=20,
+        )
+
+        # Direct Frobenius pullback via Higham 2008 block-matrix identity:
+        #   exp([[phi, T_a], [0, phi]]) = [[exp(phi), D_phi exp[T_a]], [0, exp(phi)]]
+        # The (1,2) block is the full Frechet derivative D_phi exp[T_a].
+        phi_mat = torch.einsum('a,aij->ij', phi, gens)  # (K, K)
+        D_exp = torch.zeros(n_gen, K, K)
+        for a in range(n_gen):
+            block = torch.zeros(2 * K, 2 * K)
+            block[:K, :K] = phi_mat
+            block[K:, K:] = phi_mat
+            block[:K, K:] = gens[a]
+            block_exp = torch.matrix_exp(block)
+            D_exp[a] = block_exp[:K, K:]
+        # Direct Frobenius metric: G_canon[a,b] = tr(D_exp[a]^T @ D_exp[b]).
+        G_canon = torch.einsum('aij,bij->ab', D_exp, D_exp)
+        # Compare without the 1e-6 * I regularizer.
+        G_clean = G_code - 1e-6 * torch.eye(n_gen)
+        torch.testing.assert_close(G_clean, G_canon, atol=1e-3, rtol=1e-3)
+
+    def test_metric_compact_reduces_to_psi_gram_psi(self):
+        """On the compact subalgebra so(K), the new metric reduces to Ψ^T gram Ψ.
+
+        For skew-symmetric ``phi``, exp(phi) ∈ SO(K) so ``exp(phi) exp(phi)^T = I``
+        and the position-dependent factor H(phi) = gram. The new metric must
+        match the legacy ``Ψ^T gram Ψ`` form bit-exactly on this subalgebra.
+        """
+        from transformer.core.gauge_preconditioner import (
+            build_structure_constants, build_pullback_metric_tensor,
+        )
+        gens = _make_so_generators(3)
+        struct = build_structure_constants(gens)
+        gram = torch.einsum('aij,bij->ab', gens, gens)
+
+        torch.manual_seed(7)
+        phi = torch.randn(3) * 0.4  # skew-only — so(3) only has skew generators
+        G_code = build_pullback_metric_tensor(
+            phi, gens, struct, series_order=10,
+        )
+
+        # Reconstruct the legacy form: Ψ^T gram Ψ + 1e-6 I.
+        ad = torch.einsum('a,abc->bc', phi, struct)
+        I = torch.eye(3)
+        psi = I.clone()
+        ad_power = ad.clone()
+        for k in range(1, 10):
+            psi = psi + (1.0 / math.factorial(k + 1)) * ad_power
+            if k < 9:
+                ad_power = ad_power @ ad
+        G_legacy = psi.T @ gram @ psi + 1e-6 * I
+
+        torch.testing.assert_close(G_code, G_legacy, atol=1e-5, rtol=1e-5)
+
 
 # ===========================================================================
 # TestSLKProjection

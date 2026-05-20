@@ -32,12 +32,16 @@ Three preconditioning modes (controlled by phi_natural_gradient config):
     No free parameters; metric determined entirely by algebra structure.
 
 4. 'pullback': Full pullback natural gradient (position-dependent).
-    Uses the Riemannian metric on φ-space pulled back through exp:
-        G_ab(φ) = ⟨ Ψ(ad_X)(T_a), Ψ(ad_X)(T_b) ⟩_gram
-    where X = Σ_a φ^a T_a, Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
-    This is the theoretically exact natural gradient on the Lie group.
-    It captures the exponential amplification in non-compact directions
-    that the position-independent metrics miss.
+    Uses the Riemannian metric on φ-space pulled back from the Frobenius
+    metric on Mat(K) through the right-trivialised Fréchet derivative
+        D_φ exp[T_a] = Ψ(ad_φ)(T_a) · exp(φ),  Ψ(z) = (e^z - 1)/z,
+    giving
+        G_ab(φ) = tr( Ψ(ad_φ)(T_a)^T · Ψ(ad_φ)(T_b) · exp(φ) exp(φ)^T ).
+    For compact φ ∈ so(K) the position-dependent factor exp(φ) exp(φ)^T = I
+    and the metric reduces to the Ψ^T gram Ψ form valid on compact subgroups.
+    For non-compact symmetric directions exp(φ) exp(φ)^T = exp(2φ) grows
+    exponentially, capturing the exponential amplification of D exp that the
+    position-independent Killing-form preconditioner does not see.
     Cost: O(n_gen³) per token per step (expensive but principled).
 
 Also implements:
@@ -538,25 +542,31 @@ def apply_pullback_natural_gradient(
     gram: Optional[torch.Tensor] = None, # (n_gen, n_gen) precomputed gram matrix
     series_order: int = 6,               # Taylor series order for Ψ(ad_X)
 ) -> torch.Tensor:
-    """
+    r"""
     Apply position-dependent natural gradient using the pullback metric through exp.
 
-    The Riemannian metric on φ-space is pulled back from the bi-invariant
-    Frobenius metric on GL(K) through the exponential map:
+    The Riemannian metric on φ-space is the pullback of the Frobenius metric on
+    Mat(K) through the exponential map. The right-trivialised Fréchet derivative
+    of exp at φ ∈ gl(K) in direction T_a is (Hall 2015 §2.7 / Theorem 5.4):
 
-        dexp_X(T_a) = exp(X) · Ψ(ad_X)(T_a)
+        D_φ exp[T_a] = Ψ(ad_φ)(T_a) · exp(φ),   Ψ(z) = (e^z - 1)/z
 
-    where Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+    The pullback of the Frobenius inner product ⟨X, Y⟩_F = tr(X^T Y) on Mat(K)
+    through D_φ exp is
 
-    Left-translating back to the identity gives the metric:
-        G_ab(φ) = ⟨ Ψ(ad_X)(T_a), Ψ(ad_X)(T_b) ⟩_gram
+        G_ab(φ) = ⟨ D_φ exp[T_a], D_φ exp[T_b] ⟩_F
+                = tr( Ψ(ad_φ)(T_a)^T · Ψ(ad_φ)(T_b) · exp(φ) exp(φ)^T )
 
-    where ⟨A, B⟩_gram = A^T @ gram @ B in generator coordinates.
+    using cyclic invariance of trace. In generator coordinates with the matrix
+    of Ψ(ad_φ) written Ψ_{ca} = (Ψ(ad_φ))^c_a, this reduces to G = Ψ^T H(φ) Ψ
+    with H_{cd}(φ) = tr(T_c^T T_d · exp(φ) exp(φ)^T).
 
-    At φ = 0: Ψ = I, so G = gram (Frobenius inner product).
-    At large ||φ|| in symmetric directions: G grows exponentially,
-    so the natural gradient (G^{-1} · ∂F/∂φ) automatically shrinks —
-    exactly compensating the exponential amplification through matrix_exp.
+    At φ = 0: Ψ = I and exp(φ) exp(φ)^T = I, so G(0) = gram (Frobenius Gram
+    matrix). For φ in the compact subalgebra so(K) ⊂ gl(K), exp(φ) ∈ SO(K) and
+    exp(φ) exp(φ)^T = I, so H(φ) = gram (the metric reduces to the legacy
+    expression Ψ^T gram Ψ that was correct on compact subgroups). For non-
+    compact symmetric directions, exp(φ) exp(φ)^T = exp(2φ) grows exponentially,
+    automatically compensating the exponential amplification of D exp.
 
     Args:
         grad_phi: Euclidean gradient ∂F/∂φ^a, shape (..., n_gen)
@@ -593,30 +603,34 @@ def build_pullback_metric_tensor(
     r"""Build the per-token pullback metric tensor G(φ) on the Lie algebra.
 
     Constructs the metric
-        G_{ab}(φ) = ⟨ Ψ(ad_φ) T_a, Ψ(ad_φ) T_b ⟩_gram
-                  = (Ψ T)^T · gram · (Ψ T) in generator coordinates
-    via the Taylor expansion Ψ(z) = (e^z − 1)/z = Σ_{k≥0} z^k/(k+1)!.
 
-    This is the pullback of the bi-invariant Frobenius metric on GL(K)
-    through the exponential map, restricted to the Lie algebra at the
-    identity and left-translated back.  It is the same tensor whose
-    inverse :func:`apply_pullback_natural_gradient` applies to a gradient;
-    exposed as a standalone helper so both the natural-gradient path and
-    the Riemannian norm-for-clipping path share one implementation.
+        G_{ab}(φ) = ⟨ D_φ exp[T_a], D_φ exp[T_b] ⟩_F
+                  = tr( Ψ(ad_φ)(T_a)^T · Ψ(ad_φ)(T_b) · exp(φ) exp(φ)^T )
+                  = (Ψ^T · H(φ) · Ψ)_{ab}     in generator coordinates,
 
-    At φ = 0: Ψ = I, so G = gram (Frobenius inner product).
-    At large ‖φ‖ in symmetric directions: G grows exponentially, so the
-    natural norm ``sqrt(ξᵀ G ξ)`` grows correspondingly — exactly the
-    factor by which a fixed Euclidean step of ``ξ`` maps to a larger
-    geodesic step on the group.
+    where Ψ(ad_φ) is expanded via Ψ(z) = (e^z − 1)/z = Σ_{k≥0} z^k/(k+1)! and
+    H_{cd}(φ) = tr(T_c^T T_d · exp(φ) exp(φ)^T) is the φ-dependent Gram matrix
+    of the generators under the position-dependent factor exp(φ) exp(φ)^T from
+    the right-trivialised Fréchet derivative D_φ exp[T] = Ψ(ad_φ)(T) · exp(φ)
+    (Hall 2015 §2.7 / Theorem 5.4).
+
+    At φ = 0: exp(φ) exp(φ)^T = I, so H(0) = gram and G(0) = gram (Frobenius
+    inner product). For φ in the compact subalgebra so(K), exp(φ) ∈ SO(K) and
+    exp(φ) exp(φ)^T = I, so H(φ) = gram (the metric reduces to the legacy
+    Ψ^T gram Ψ form that was correct on compact subgroups). For non-compact
+    symmetric directions in gl(K), exp(φ) exp(φ)^T = exp(2φ) grows
+    exponentially, so the natural norm ``sqrt(ξᵀ G ξ)`` grows correspondingly
+    — exactly the factor by which a fixed Euclidean step of ``ξ`` maps to a
+    larger geodesic step on the group.
 
     Args:
         phi: ``(..., n_gen)`` current gauge coordinates.
         generators: ``(n_gen, K, K)`` Lie algebra generators.
         structure_constants: ``(n_gen, n_gen, n_gen)`` constants
             :math:`f^c_{ab}` from :func:`build_structure_constants`.
-        gram: Optional precomputed Frobenius Gram matrix.  If None,
-            computed from ``generators`` on the fly.
+        gram: Optional precomputed Frobenius Gram matrix.  Used only at φ = 0
+            as a sanity check; the position-dependent H(φ) is recomputed from
+            ``generators`` and exp(φ) for non-zero φ.
         series_order: Number of Taylor terms in the Ψ(ad_φ) expansion.
             Default ``6`` matches :func:`apply_pullback_natural_gradient`.
 
@@ -624,14 +638,10 @@ def build_pullback_metric_tensor(
         ``(..., n_gen, n_gen)`` positive-definite metric tensor, batched
         over the same leading axes as ``phi``.
     """
-    n_gen = generators.shape[0]
+    n_gen, K, _ = generators.shape
     batch_shape = phi.shape[:-1]
     device = phi.device
     dtype = phi.dtype
-
-    if gram is None:
-        # Frobenius inner product: <T_a, T_b> = tr(T_a^T T_b)
-        gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Compute ad_X: [ad_X]_bc = Σ_a φ^a f^c_{ab}
     ad_X = torch.einsum('...a,abc->...bc', phi, structure_constants)
@@ -648,10 +658,27 @@ def build_pullback_metric_tensor(
         if k < series_order - 1:
             ad_power = torch.matmul(ad_power, ad_X)
 
-    # Metric: G = Ψ^T @ gram @ Ψ (positive definite by construction)
-    gram_expanded = gram.expand(*batch_shape, n_gen, n_gen)
-    G = torch.matmul(psi.transpose(-2, -1), torch.matmul(gram_expanded, psi))
+    # Position-dependent factor M(φ) = exp(φ) · exp(φ)^T in matrix space.
+    # Reconstruct φ as a K×K matrix from generator coordinates: φ_mat = Σ_a φ^a T_a.
+    phi_mat = torch.einsum('...a,aij->...ij', phi, generators)
+    exp_phi = torch.matrix_exp(phi_mat)                              # (..., K, K)
+    M = torch.matmul(exp_phi, exp_phi.transpose(-2, -1))              # (..., K, K)
 
-    # Regularize for numerical stability
+    # H_{cd}(φ) = tr(T_c^T · T_d · M)
+    #           = Σ_{i,j,l} T_c[i,l] · T_d[i,j] · M[j,l]
+    # At M = I, H = gram (Frobenius); verified at φ = 0.
+    H = torch.einsum('cil,dij,...jl->...cd', generators, generators, M)
+
+    # Metric: G[a,b] = Σ_{c,d} psi[a,c] · H[c,d] · psi[b,d] = (psi @ H @ psi^T)[a,b].
+    # The convention `psi[a,c]` = c-th coordinate of Ψ(ad_φ)(T_a) follows from
+    # the code's `ad_X[b,c]` = c-th coordinate of ad_φ(T_b), which is the
+    # transpose of the standard operator-matrix convention. The matrix product
+    # ordering is therefore `psi @ H @ psi^T`, NOT `psi^T @ H @ psi`. Verified
+    # against the canonical Frobenius pullback via Higham 2008 Algorithm 10.27
+    # block-matrix Fréchet derivative in
+    # `tests/transformer/test_gauge_preconditioner.py::TestPullbackNaturalGradient::test_metric_matches_frobenius_pullback_noncompact`.
+    G = torch.matmul(psi, torch.matmul(H, psi.transpose(-2, -1)))
+
+    # Regularize for numerical stability.
     G = G + 1e-6 * I_expanded
     return G
