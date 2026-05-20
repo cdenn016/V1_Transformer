@@ -17,7 +17,6 @@ from transformer.vfe.e_step import VFEEStep
 from transformer.vfe.block import VFEBlock
 from transformer.vfe.stack import VFEStack
 from transformer.vfe.model import VFEModel
-from transformer.vfe.active_inference import VFEActiveInference
 from transformer.vfe.efe import VFEExpectedFreeEnergy
 
 
@@ -263,25 +262,7 @@ class TestVFEModel:
 
 
 # ---------------------------------------------------------------------------
-# 8. VFEActiveInference
-# ---------------------------------------------------------------------------
-
-class TestVFEActiveInference:
-
-    def test_callback_produces_gradients(self, model, cfg):
-        ai = VFEActiveInference(cfg, model.prior_bank)
-        B, N, K = 2, 8, cfg.embed_dim
-        mu = torch.randn(B, N, K)
-        sigma = torch.ones(B, N, K)
-
-        grad_mu, grad_sigma = ai(mu, sigma)
-
-        assert grad_mu.shape == (B, N, K)
-        assert grad_sigma.shape == (B, N, K)
-
-
-# ---------------------------------------------------------------------------
-# 9. VFEExpectedFreeEnergy
+# 8. VFEExpectedFreeEnergy
 # ---------------------------------------------------------------------------
 
 class TestVFEExpectedFreeEnergy:

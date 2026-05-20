@@ -58,12 +58,12 @@ config = {
     'alpha_divergence':         1.0,
     'include_attention_entropy': True,
 
-    'e_mu_lr':                  0.4,
+    'e_mu_lr':                  0.5,
     'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.05,
    
     'alpha':                    1.0,
-    'lambda_align':             4,
+    'lambda_align':             2.45,
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
@@ -100,9 +100,7 @@ config = {
     'phi_scale':                0.001,
     'sigma_init':               0.4,
 
-    # === Active inference ===
-    'active_inference':         False,
-    'pragmatic_weight':         1.0,
+    # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
     'epistemic_weight':         0.5,
     'epistemic_samples':        4,
     'decode_tau':               1.0,
@@ -128,12 +126,12 @@ config = {
 
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
-    'm_mu_lr':                  0.2,
-    'm_sigma_lr':               0.015,
-    'm_phi_lr':                 0.025,
+    'm_mu_lr':                  0.015,
+    'm_sigma_lr':               0.004,
+    'm_phi_lr':                 0.015,
     'm_hyper_lr':               0.001,
-    'm_other_lr':               0.05,
-    'weight_decay':             0.01,
+    'm_other_lr':               0.035,
+    'weight_decay':             0.075,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,

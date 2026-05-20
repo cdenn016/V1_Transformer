@@ -116,36 +116,19 @@ class VFEModel(nn.Module):
         # layer prior is the natural reference. See VFEBlock.forward.
         self.final_norm = _resolve_vfe_norm(cfg.norm_type, cfg.embed_dim)
 
-        # Active inference callback (Section 10)
-        self._active_inference_fn: "Optional[VFEActiveInference]" = None
-        if cfg.active_inference:
-            from transformer.vfe.active_inference import VFEActiveInference
-            self.active_inference_module = VFEActiveInference(cfg, self.prior_bank)
-            self._active_inference_fn = self.active_inference_module
 
-    def forward(
+    def _encode_step_decode(
         self,
         token_ids: torch.Tensor,
-        targets: Optional[torch.Tensor] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        r"""Full forward pass: encode → positional → stack → norm → decode.
+    ) -> Tuple[torch.Tensor, BeliefState]:
+        r"""Shared core: encode → positional → stack → norm → decode.
 
-        The E-step infers beliefs from context only. Targets are used
-        exclusively for the M-step cross-entropy loss (never enter the E-step).
-
-        Args:
-            token_ids: ``(B, N)`` input token IDs.
-            targets: ``(B, N)`` target token IDs for loss computation.
-                If provided, returns ``(logits, loss, ce_for_log)``. If None,
-                returns ``logits``.
-
-        Returns:
-            logits: ``(B, N, V)`` token logit predictions.
-            loss: Optimizer scalar (CE plus any active regularizers); only
-                returned when ``targets`` is provided.
-            ce_for_log: Unscaled, regularizer-free cross-entropy detached
-                for reporting (``PPL = exp(ce_for_log)``,
-                ``BPC = ce_for_log / ln 2``); only returned with ``targets``.
+        Returns ``(logits, beliefs)`` where ``beliefs`` is the post-final-norm
+        BeliefState with ``mu`` replaced by the normalized ``mu_final``. The
+        loss-bearing ``forward`` wraps this with the optional CE branch; the
+        AIF-facing ``forward_with_beliefs`` returns the converged belief tuple
+        directly so downstream policy-rollout code can score futures without
+        re-encoding (closes the double-encode pattern at vfe/efe.py:191-196).
         """
         B, N = token_ids.shape
 
@@ -190,10 +173,7 @@ class VFEModel(nn.Module):
         mask = mask.unsqueeze(0).expand(B, -1, -1)  # (B, N, N)
 
         # 5. VFE stack: L layers of E-step + normalization (Sections 4-7)
-        beliefs = self.stack(
-            beliefs, initial_priors, mask,
-            active_inference_fn=self._active_inference_fn,
-        )
+        beliefs = self.stack(beliefs, initial_priors, mask)
 
         # 6. Final normalization (Section 8)
         mu_final = beliefs.mu
@@ -213,6 +193,62 @@ class VFEModel(nn.Module):
             # No KL geometry at the decode boundary; only the encode + E-step
             # paths remain gauge-aware.
             logits = self.output_proj(mu_final)
+
+        # Return beliefs with mu_final substituted so downstream consumers
+        # (mass_phi penalty, AIF policy rollout) see the post-norm μ used by
+        # the decode call.
+        beliefs_out = beliefs._replace(mu=mu_final)
+        return logits, beliefs_out
+
+    def forward_with_beliefs(
+        self,
+        token_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, BeliefState]:
+        r"""Forward pass that returns the converged belief tuple alongside logits.
+
+        Used by ``transformer/aif/`` to avoid the redundant re-encode pattern
+        that ``vfe/efe.py`` carries at lines 191-196. The returned BeliefState
+        is the post-final-norm state — ``mu`` is ``mu_final`` (after the
+        configured ``norm_type`` is applied), ``sigma`` and ``phi`` are the
+        E-step's converged values.
+
+        Note: this method does NOT accept ``targets``. Law 1 (E-step blindness)
+        is preserved structurally — no inference path can leak target tokens.
+
+        Args:
+            token_ids: ``(B, N)`` input token IDs.
+
+        Returns:
+            logits: ``(B, N, V)`` token logit predictions.
+            beliefs: ``BeliefState`` with ``mu = mu_final``.
+        """
+        return self._encode_step_decode(token_ids)
+
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        r"""Full forward pass: encode → positional → stack → norm → decode.
+
+        The E-step infers beliefs from context only. Targets are used
+        exclusively for the M-step cross-entropy loss (never enter the E-step).
+
+        Args:
+            token_ids: ``(B, N)`` input token IDs.
+            targets: ``(B, N)`` target token IDs for loss computation.
+                If provided, returns ``(logits, loss, ce_for_log)``. If None,
+                returns ``logits``.
+
+        Returns:
+            logits: ``(B, N, V)`` token logit predictions.
+            loss: Optimizer scalar (CE plus any active regularizers); only
+                returned when ``targets`` is provided.
+            ce_for_log: Unscaled, regularizer-free cross-entropy detached
+                for reporting (``PPL = exp(ce_for_log)``,
+                ``BPC = ce_for_log / ln 2``); only returned with ``targets``.
+        """
+        logits, beliefs = self._encode_step_decode(token_ids)
 
         if targets is not None:
             ce_loss = F.cross_entropy(

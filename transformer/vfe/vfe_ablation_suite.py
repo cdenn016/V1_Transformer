@@ -121,7 +121,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'e_phi_lr':                 0.05,
    
     'alpha':                    1.0,
-    'lambda_align':             4,
+    'lambda_align':             2.45,
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
@@ -158,9 +158,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'phi_scale':                0.001,
     'sigma_init':               0.4,
 
-    # === Active inference ===
-    'active_inference':         False,
-    'pragmatic_weight':         1.0,
+    # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
     'epistemic_weight':         0.5,
     'epistemic_samples':        4,
     'decode_tau':               1.0,
@@ -181,12 +179,12 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
-    'm_mu_lr':                  0.01,
-    'm_sigma_lr':               0.015,
-    'm_phi_lr':                 0.025,
+    'm_mu_lr':                  0.015,
+    'm_sigma_lr':               0.004,
+    'm_phi_lr':                 0.015,
     'm_hyper_lr':               0.001,
-    'm_other_lr':               0.05,
-    'weight_decay':             0.01,
+    'm_other_lr':               0.035,
+    'weight_decay':             0.075,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,
@@ -228,7 +226,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'e_mu_lr': {
         'description': 'E-step natural-gradient step size for mu_q',
         'param': 'e_mu_lr',
-        'values': [0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
+        'values': [0.4, 0.6, 0.7, 0.8],
         'baseline_value': 0.1,
     },
 
@@ -263,7 +261,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'lambda_align': {
         'description': 'Boltzmann GLU weight in F: beta_ij * grad_theta KL(q_i || Omega_ij q_j)',
         'param': 'lambda_align',
-        'values': [0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
+        'values': [2.25, 2.45, 2.65],
         'baseline_value': 1.0,
     },
 
@@ -340,21 +338,21 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'm_mu_lr': {
         'description': 'M-step LR for PriorBank.base_mu',
         'param': 'm_mu_lr',
-        'values': [0.001, 0.005, 0.0075,  0.01, 0.0125, 0.015],
-        'baseline_value': 0.2,
+        'values': [0.001, 0.0125, 0.015, 0.02, 0.025, 0.03],
+        'baseline_value': 0.002,
     },
 
     'm_sigma_lr': {
         'description': 'M-step LR for PriorBank.base_log_sigma and decode_log_scale',
         'param': 'm_sigma_lr',
-        'values': [0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
+        'values': [0.001, 0.0025, 0.004, 0.005, 0.006, 0.0075],
         'baseline_value': 0.05,
     },
 
     'm_phi_lr': {
         'description': 'M-step LR for PriorBank.phi_embed and Positional.pos_phi',
         'param': 'm_phi_lr',
-        'values': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+        'values': [0.001, 0.015, 0.02,  0.035, 0.04],
         'baseline_value': 0.01,
     },
 
@@ -375,7 +373,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'weight_decay': {
         'description': 'M-step AdamW weight decay',
         'param': 'weight_decay',
-        'values': [0.0, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1],
+        'values': [0.001, 0.005, 0.0075, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1],
         'baseline_value': 0.001,
     },
 }
@@ -383,19 +381,19 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
 
 # Sweep execution order (cheap-to-expensive; keep in sync with user priorities).
 SWEEP_ORDER: List[str] = [
-  #  'e_mu_lr',
+    'e_mu_lr',
    # 'e_sigma_lr',
    # 'e_phi_lr',
   # 'alpha_divergence',
-   'm_mu_lr',
-    'm_sigma_lr',
-    'm_phi_lr',
-    'm_hyper_lr',
-    'm_other_lr',
+  # 'm_mu_lr',
+  #  'm_sigma_lr',
+  # 'm_phi_lr',
+ #   'm_hyper_lr',
+  #  'm_other_lr',
 
-    'weight_decay',
+  #  'weight_decay',
     
-    'lambda_align',
+   # 'lambda_align',
    # 'lambda_softmax',
    
    # 'rope_base',

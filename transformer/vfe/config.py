@@ -232,16 +232,15 @@ class VFEConfig:
     #   only, not for prior construction. Per-token capacity = V × (2K + n_gen).
     gauge_fixed_priors: bool = True
 
-    # === Active inference (off by default) ===
-    active_inference: bool = False
-    pragmatic_weight: float = 1.0
+    # === Decode and generation-time EFE (canonical path) ===
+    # decode_tau is the temperature passed to PriorBank.decode for both the
+    # training-time forward (model.py:209) and the canonical EFE generation-time
+    # candidate scoring (vfe/efe.py). epistemic_weight / epistemic_samples are
+    # consumed by VFEExpectedFreeEnergy at generation; the canonical /aif module
+    # carries its own copies in AIFConfig for the multi-step build-out.
     epistemic_weight: float = 0.5
     epistemic_samples: int = 4
-    decode_tau: float = 1.0              # Temperature for PriorBank.decode in AI
-    # NOTE: learnable_decode_tau was removed because the AI gradient architecture
-    # computes gradients inside a fresh autograd graph with detached mu/sigma leaves.
-    # tau doesn't enter this graph, so gradients cannot flow to a learnable tau.
-    # Making it truly learnable requires restructuring the AI gradient computation.
+    decode_tau: float = 1.0
 
     # === Normalization ===
     # 'layernorm' is gauge-blind (ablation-only); 'none' disables normalization.
