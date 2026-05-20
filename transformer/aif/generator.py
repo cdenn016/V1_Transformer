@@ -3,18 +3,25 @@ AIFGenerator: canonical Expected Free Energy generation for a VFEModel.
 
 Wraps a trained ``VFEModel`` by composition and emits token sequences by
 softminning the policy posterior :math:`q(\\pi) \\propto \\exp(-\\gamma G(\\pi))`
-over horizon-D futures. At ``horizon_D=1`` the generator reduces bitwise
-to the existing single-step path in ``transformer/vfe/efe.py``; at
-``horizon_D > 1`` it runs beam-search tree expansion.
+over horizon-D futures. Calls :func:`tree_search.beam_expand` for every
+``horizon_D >= 1``:
 
-Phase 1 supports ``horizon_D=1`` only (the reduction anchor). Phase 2
-will extend `_expand_tree` to multi-step beam search. Phase 3 will add
-the [Friston2021SophisticatedInference] recursive form.
+- ``horizon_D = 1``: the beam expansion runs one level and returns the
+  root's children with ``G_cum = G_local`` (no back-propagation). Matches
+  the depth-1 reduction anchor that ``transformer/vfe/efe.py`` provided
+  before this build-out.
+- ``horizon_D > 1``: full per-branch beam tree with mean back-propagation
+  of leaf ``G_cum`` to root children. Per-commit cache re-keying enables
+  prefix sharing across emit steps.
+
+Phase 3 will switch to ``branching_strategy='sophisticated'`` (the Friston
+2021 recursive form); ``AIFConfig.__post_init__`` already rejects that
+strategy so callers fail fast.
 
 Law 1 (E-step blindness) is structurally preserved: the generator only
-calls ``model.forward_with_beliefs`` which has no ``targets`` parameter.
-The wrapped ``VFEModel`` never sees a token it has not committed to or
-been prompted with.
+calls ``model.forward_with_beliefs`` and ``model.prior_bank.decode``, both
+of which have no ``targets`` parameter. The wrapped ``VFEModel`` never
+sees a token it has not committed to or been prompted with.
 """
 
 from __future__ import annotations
@@ -25,10 +32,9 @@ import torch
 import torch.nn.functional as F
 
 from transformer.aif.belief_cache import BeliefStateCache
-from transformer.aif.efe_score import compute_G_at_node
 from transformer.aif.policy import PolicyNode
 from transformer.aif.preferences import Preference, build_preference
-from transformer.aif.tree_search import pick_top_candidates, sophisticated_expand
+from transformer.aif.tree_search import beam_expand
 
 if TYPE_CHECKING:
     from transformer.aif.config import AIFConfig
@@ -67,48 +73,6 @@ class AIFGenerator:
         self.cache = BeliefStateCache(max_entries=cfg.belief_cache_max_entries)
 
     @torch.no_grad()
-    def _score_root_children(
-        self,
-        context_ids: torch.Tensor,
-    ) -> List[PolicyNode]:
-        r"""Build and score the root's children at the current context.
-
-        Returns a list of ``beam_width`` scored ``PolicyNode`` children.
-        Each child carries its own ``EFEComponents`` and its ``G_cum``
-        equals its local G (depth-1 path; multi-step aggregation enters
-        in Phase 2).
-        """
-        # Get the model's predictive at the current context to choose candidates.
-        logits, _ = self.model.forward_with_beliefs(context_ids)
-        last_probs = F.softmax(
-            logits[:, -1, :] / max(self.cfg.decode_tau, 1e-12),
-            dim=-1,
-        ).squeeze(0)  # (V,)
-        candidates = pick_top_candidates(last_probs, self.cfg.beam_width)
-
-        root = PolicyNode(action_seq=(), depth=0, parent=None)
-        children: List[PolicyNode] = []
-        for action in candidates:
-            components, beliefs = compute_G_at_node(
-                context_ids=context_ids,
-                candidate_action=action,
-                model=self.model,
-                preference=self.preference,
-                cfg=self.cfg,
-            )
-            # Cache the converged belief under the action-prefix key. Phase 2
-            # reads this when expanding deeper into the tree.
-            child = root.child(
-                action=action,
-                components=components,
-                G_cum=components.G_local,
-            )
-            self.cache.put(child.belief_cache_key, beliefs)
-            children.append(child)
-
-        return children
-
-    @torch.no_grad()
     def _commit_action(
         self,
         children: List[PolicyNode],
@@ -135,9 +99,15 @@ class AIFGenerator:
     ) -> torch.Tensor:
         r"""Generate ``max_new_tokens`` tokens by EFE-weighted policy sampling.
 
-        At ``horizon_D=1`` this is the depth-1 reduction anchor: for each
-        new token, score the top-`beam_width` candidates by `G`, softmin
-        over them, sample (or argmin), commit, and recurse.
+        At each step:
+
+        1. Run :func:`beam_expand` to build a depth-``cfg.horizon_D`` tree
+           and back-propagate leaf G_cum to root children.
+        2. Softmin :math:`q(a) \propto \exp(-\gamma G_{\text{cum}}(a))` over
+           the root children; pick the committed action.
+        3. Append the action to ``ids``; re-key the cache via
+           :meth:`BeliefStateCache.commit_action` so the subtree under the
+           committed action survives for cross-commit prefix sharing.
 
         Args:
             prompt_ids: ``(1, N_prompt)`` or ``(N_prompt,)`` prompt token IDs.
@@ -145,17 +115,9 @@ class AIFGenerator:
 
         Returns:
             ``(1, N_prompt + max_new_tokens)`` token IDs (truncated to
-            ``model.cfg.max_seq_len`` per token if the cumulative length
-            would overflow).
+            ``model.cfg.max_seq_len`` per-step at the beam-expansion side
+            if the cumulative length would overflow).
         """
-        if self.cfg.horizon_D > 1:
-            raise NotImplementedError(
-                "AIFGenerator at horizon_D > 1 is Phase 2 of the build-out "
-                "(beam tree search). Phase 1 ships the depth-1 reduction "
-                "anchor. See "
-                "docs/plans/2026-05-19-aif-transformer-buildout/06_plan.md §6."
-            )
-
         if prompt_ids.dim() == 1:
             prompt_ids = prompt_ids.unsqueeze(0)
         ids = prompt_ids
@@ -163,15 +125,20 @@ class AIFGenerator:
 
         for _ in range(max_new_tokens):
             ids_cond = ids if ids.shape[1] <= max_len else ids[:, -max_len:]
-            children = self._score_root_children(ids_cond)
+            children = beam_expand(
+                prompt_ids=ids_cond,
+                model=self.model,
+                preference=self.preference,
+                cache=self.cache,
+                cfg=self.cfg,
+            )
             action = self._commit_action(children)
             ids = torch.cat(
                 [ids, torch.tensor([[action]], device=ids.device)], dim=1,
             )
-            # Per-commit cache pruning: depth-1 children become stale once
-            # an action is committed. With horizon_D=1 the cache is always
-            # at depth 1, so we evict everything at depth < 1 (no-op since
-            # nothing is shallower than the cached entries) and clear when
-            # the cache grows past the LRU cap (already handled by `put`).
+            # Re-key the cache so the subtree under the committed action
+            # survives for the next step. Entries under non-committed
+            # siblings are evicted (no longer reachable).
+            self.cache.commit_action(action)
 
         return ids
