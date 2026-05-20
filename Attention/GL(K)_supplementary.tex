@@ -468,22 +468,22 @@ For $\theta < \epsilon$ (numerically $\epsilon \sim 10^{-4}$), Taylor expansions
 
 \subsubsection{$\mathrm{GL}(K)$ specialization.}
 
-For $\mathrm{GL}(K)$, the gauge frame $\phi \in \mathfrak{gl}(K) \cong \mathbb{R}^{K \times K}$ is a general $K \times K$ matrix. The differential of the matrix exponential does not simplify to a Rodrigues-like formula, and is instead computed via the integral representation of the Fr\'{e}chet derivative $D_\phi(\exp)[\xi]$:
+For $\mathrm{GL}(K)$, the gauge frame $\phi \in \mathfrak{gl}(K) \cong \mathbb{R}^{K \times K}$ is a general $K \times K$ matrix. The right-trivialised differential of the exponential does not simplify to a Rodrigues-like formula. The full Fr\'{e}chet derivative $D_\phi(\exp)[\xi] = \mathrm{dexp}_\phi(\xi) \cdot e^\phi$ admits an integral representation \citep[Eq.~10.15]{Higham2008}:
 
 \begin{equation}
-\mathrm{dexp}_\phi(\xi) = \int_0^1 e^{t\phi} \xi e^{(1-t)\phi} dt,
+D_\phi(\exp)[\xi] = \int_0^1 e^{t\phi} \xi e^{(1-t)\phi} dt,
 \label{eq:dexp_integral}
 \end{equation}
 
-or equivalently through the $(2K \times 2K)$ block matrix identity \citep{Higham2008}:
+or equivalently through the $(2K \times 2K)$ block matrix identity \citep[Algorithm~10.27]{Higham2008}:
 
 \begin{equation}
 \exp \begin{pmatrix} \phi & \xi \\ 0 & \phi \end{pmatrix}
-= \begin{pmatrix} e^\phi & \mathrm{dexp}_\phi(\xi) \\ 0 & e^\phi \end{pmatrix}.
+= \begin{pmatrix} e^\phi & D_\phi(\exp)[\xi] \\ 0 & e^\phi \end{pmatrix}.
 \label{eq:dexp_block}
 \end{equation}
 
-In practice, automatic differentiation through \texttt{torch.matrix\_exp} provides the $\mathrm{GL}(K)$ differential without explicit computation of \eqref{eq:dexp_integral} or \eqref{eq:dexp_block}.
+These give the full Fr\'{e}chet derivative directly; the right-trivialised generator $\mathrm{dexp}_\phi(\xi)$ of Eq.~\eqref{eq:dexp_series} is recovered as $\mathrm{dexp}_\phi(\xi) = D_\phi(\exp)[\xi] \cdot e^{-\phi}$. In practice, automatic differentiation through \texttt{torch.matrix\_exp} provides the $\mathrm{GL}(K)$ differential without explicit computation of \eqref{eq:dexp_integral} or \eqref{eq:dexp_block}.
 
 \subsection{KL Gradient Through Transport}
 
@@ -553,7 +553,7 @@ where $\eta_\phi$ is the gauge frame learning rate. No metric correction (Fisher
 
 \paragraph{$\mathrm{SO}(N)$ retraction.} For compact groups such as $\mathrm{SO}(N)$, the exponential map is periodic. To ensure unique parameterization and avoid branch cuts, we retract to the principal ball $\|\phi\| < \pi - \epsilon$ (with $\epsilon \sim 10^{-2}$) after each update. If $\|\phi\| \geq \pi$, the angle is wrapped modulo $2\pi$ and, if necessary, the axis is flipped via antipodal identification ($\phi \to -\phi$ when $\theta > \pi$), exploiting the fact that $\exp(\phi) = \exp(\phi - 2\pi \hat{n})$ for $\mathrm{SO}(3)$.
 
-\paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, a single matrix exponential $\exp: \mathfrak{gl}(K) \to \mathrm{GL}^+(K)$ is not surjective onto the identity component \citep{culver1966existence}, but the pairwise transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ covers all of $\mathrm{GL}^+(K)$ via polar decomposition (see main text, Section~\ref{sec:glk_lm}). No retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
+\paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, a single matrix exponential $\exp: \mathfrak{gl}(K) \to \mathrm{GL}^+(K)$ is not surjective onto the identity component \citep{culver1966existence}, but the pairwise transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ covers all of $\mathrm{GL}^+(K)$ via polar decomposition \citep[\S8]{Higham2008}: for any $A \in \mathrm{GL}^+(K)$ with polar decomposition $A = UP$ ($U \in \mathrm{SO}(K)$, $P \in \mathrm{Sym}_{++}(K)$), the exponential map restricts to a surjection $\mathfrak{so}(K) \twoheadrightarrow \mathrm{SO}(K)$ on the compact factor and a bijection $\mathrm{Sym}(K) \xrightarrow{\sim} \mathrm{Sym}_{++}(K)$ on the symmetric factor, so choosing $\phi_i$ with $\exp(\phi_i) = UP^{1/2}$ and $\phi_j$ with $\exp(-\phi_j) = P^{1/2}$ realises $\Omega_{ij} = A$. No retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
 
 \subsection{Gauge Frame Preconditioning for $\mathrm{GL}(K)$}
 \label{sec:glk_preconditioning}
@@ -584,7 +584,7 @@ and the preconditioner is $M = I - (1 - \lambda_{\mathrm{sym}}) P_{\mathrm{sym}}
 \paragraph{3. Cartan-involution-modified bilinear form (compact-form metric).}
 The Killing form of $\mathfrak{gl}(K)$ is $B(X, Y) = 2K \operatorname{tr}(XY) - 2\operatorname{tr}(X)\operatorname{tr}(Y)$. On the trace-free subalgebra $\mathfrak{sl}(K) = \ker(\operatorname{tr})$ it reduces to $B|_{\mathfrak{sl}(K)}(X,Y) = 2K\operatorname{tr}(XY)$, and on the center $\mathbb{R}\cdot I$ it vanishes identically. The Killing form is \emph{indefinite} on real $\mathfrak{sl}(K)$ for $K\geq 2$: under the Cartan decomposition $\mathfrak{sl}(K) = \mathfrak{so}(K) \oplus \mathrm{Sym}_0(K)$ (skew $\oplus$ traceless-symmetric), $B$ is \emph{negative} on $\mathfrak{so}(K)$ and \emph{positive} on $\mathrm{Sym}_0(K)$~\citep{Hall2015,Gallier2020}.
 
-The metric used in this paper is therefore not the Killing form itself but the Cartan-involution-modified bilinear form $g(X, Y) = -\tfrac{1}{2}B(X, \theta(Y))$ with $\theta(X) = -X^\top$. Equivalently, in the generator basis:
+The metric used in this paper is therefore not the Killing form itself but the Cartan-involution-modified bilinear form $g(X, Y) = -B(X, \theta(Y))$ with $\theta(X) = -X^\top$ \citep[Prop.~1.93]{Knapp2002}. Equivalently, in the generator basis:
 
 \begin{equation}
 \tilde{g}_{ab} = 2K \operatorname{tr}(T_a^\top T_b) - 2\operatorname{tr}(T_a)\operatorname{tr}(T_b),
@@ -594,20 +594,22 @@ The metric used in this paper is therefore not the Killing form itself but the C
 which is positive definite on $\mathfrak{sl}(K)$ (the transpose flips the sign on $\mathfrak{so}(K)$, since $\operatorname{tr}(T_a^\top T_a) = -\operatorname{tr}(T_a^2) = \|T_a\|_F^2 > 0$ for skew $T_a$) and degenerate on the center $\mathbb{R} \cdot I$ (regularized by $\tilde{g} \to \tilde{g} + \epsilon I$ in practice). This is the compact-form metric familiar from Riemannian geometry on compact Lie groups; on the compact subgroup $\mathrm{SO}(K)$ it agrees with $-B$ up to scale. The natural gradient $\tilde{g}^{-1} \nabla_\phi \mathcal{F}$ has no free parameters: the metric is determined entirely by the algebra structure. This treatment of the compact/non-compact asymmetry assigns positive ``lengths'' to both rotations and shears, in contrast to the genuine Killing form which assigns opposite signs.
 
 \paragraph{4. Pullback natural gradient (position-dependent).}
-The most geometrically principled approach uses the pullback of the Gram metric through the exponential map. The differential of $\exp$ at $\phi \in \mathfrak{g}$ in direction $T_a$ is:
+The most geometrically principled approach uses the pullback of the Frobenius inner product on $\mathrm{Mat}(K)$ through the exponential map. The Fréchet derivative of $\exp$ at $\phi \in \mathfrak{g}$ in direction $T_a$ admits the right-trivialised form \citep[\S2.7 / Theorem 5.4]{Hall2015}:
 
 \begin{equation}
-d\exp_\phi(T_a) = \exp(\phi) \cdot \Psi(\mathrm{ad}_\phi)(T_a), \qquad \Psi(z) = \frac{e^z - 1}{z} = \sum_{k=0}^{\infty} \frac{z^k}{(k+1)!},
+D_\phi(\exp)[T_a] = \Psi(\mathrm{ad}_\phi)(T_a) \cdot \exp(\phi), \qquad \Psi(z) = \frac{e^z - 1}{z} = \sum_{k=0}^{\infty} \frac{z^k}{(k+1)!},
 \end{equation}
 
-where $\mathrm{ad}_\phi(X) = [\phi, X]$ is the adjoint action and $\Psi(z) = (e^z - 1)/z$ is the generating series for $d\exp$; its multiplicative inverse $z/(e^z-1)$ is the Bernoulli generating function whose Taylor coefficients are the Bernoulli numbers and which appears in $d\exp^{-1}$ and the Magnus expansion~\citep{Hall2015}. The pullback metric on $\mathfrak{g}$ is:
+where $\mathrm{ad}_\phi(X) = [\phi, X]$ is the adjoint action and $\Psi(z) = (e^z - 1)/z$ is the generating series for the right-trivialised differential; its multiplicative inverse $z/(e^z-1)$ is the Bernoulli generating function whose Taylor coefficients are the Bernoulli numbers and which appears in $d\exp^{-1}$ and the Magnus expansion~\citep{Hall2015}. The equivalent left-trivialised form is $D_\phi(\exp)[T_a] = \exp(\phi) \cdot ((I - e^{-\mathrm{ad}_\phi})/\mathrm{ad}_\phi)(T_a)$, related by the operator identity $\Psi_R(z) = e^z \Psi_L(z)$. The Frobenius pullback metric on $\mathfrak{g}$ is then:
 
 \begin{equation}
-\mathcal{G}_{ab}(\phi) = \left\langle \Psi(\mathrm{ad}_\phi)(T_a), \Psi(\mathrm{ad}_\phi)(T_b) \right\rangle_G,
+\mathcal{G}_{ab}(\phi)
+=\langle D_\phi(\exp)[T_a], D_\phi(\exp)[T_b]\rangle_F
+= \operatorname{tr}\bigl(\Psi(\mathrm{ad}_\phi)(T_a)^\top \cdot \exp(\phi)\exp(\phi)^\top \cdot \Psi(\mathrm{ad}_\phi)(T_b)\bigr),
 \label{eq:pullback_metric}
 \end{equation}
 
-where $\langle X, Y \rangle_G = \operatorname{tr}(X^\top Y)$ is the Frobenius inner product. At $\phi = 0$, $\mathcal{G}_{ab}(0) = G_{ab}$ (the Gram matrix). For large $\|\phi\|$ in symmetric directions, $\mathcal{G}$ grows exponentially, automatically compensating the exponential amplification of $d\exp$ in the non-compact sector. The natural gradient $\mathcal{G}(\phi)^{-1} \nabla_\phi \mathcal{F}$ is position-dependent and exact (up to series truncation of $\Psi$), requiring the structure constants $f^c_{ab}$ defined by $[T_a, T_b] = \sum_c f^c_{ab} T_c$.
+where $\langle X, Y \rangle_F = \operatorname{tr}(X^\top Y)$ is the Frobenius inner product on $\mathrm{Mat}(K)$. At $\phi = 0$, $\exp(\phi)\exp(\phi)^\top = I$ and $\mathcal{G}_{ab}(0) = G_{ab}$ (the Gram matrix). On the compact subalgebra $\mathfrak{so}(K) \subset \mathfrak{gl}(K)$, $\exp(\phi) \in \mathrm{SO}(K)$ so $\exp(\phi)\exp(\phi)^\top = I$ and the metric reduces to $\langle \Psi(\mathrm{ad}_\phi)(T_a), \Psi(\mathrm{ad}_\phi)(T_b)\rangle_F$. For non-compact (symmetric) $\phi$, $\exp(\phi)\exp(\phi)^\top = \exp(2\phi)$ grows exponentially, automatically compensating the exponential amplification of $D\exp$ in the non-compact sector. The natural gradient $\mathcal{G}(\phi)^{-1} \nabla_\phi \mathcal{F}$ is position-dependent and exact (up to series truncation of $\Psi$), requiring the structure constants $f^c_{ab}$ defined by $[T_a, T_b] = \sum_c f^c_{ab} T_c$.
 
 The computational cost of each mode scales as: clipping $O(n_{\mathrm{gen}})$, Cartan $O(n_{\mathrm{gen}}^2)$, Killing $O(n_{\mathrm{gen}}^2)$, pullback $O(n_{\mathrm{gen}}^3)$ (dominated by the linear solve $\mathcal{G}^{-1} g$). For the $\mathrm{GL}(10)$ model ($n_{\mathrm{gen}} = 100$), Killing form preconditioning adds negligible overhead. The pullback metric becomes advantageous when gauge frames develop large norms during training, as the position-dependent compensation prevents the gradient from overshooting in the symmetric directions where $\exp(\phi)$ amplifies exponentially.
 
