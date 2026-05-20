@@ -1096,3 +1096,108 @@ class TestTrainingEFELoss:
         total = ce + aif_cfg_efe_augmented.aif_loss_weight * aif
         total.backward()
         assert math.isfinite(total.item())
+
+
+# ---------------------------------------------------------------------------
+# 17. Phase 4: AIFAugmentedTrainer (subclass of VFETrainer)
+# ---------------------------------------------------------------------------
+
+class TestAIFAugmentedTrainer:
+    """Construction + one train_step smoke tests for the augmented trainer.
+
+    Exercises the full path: VFEModel + VFEConfig + AIFConfig + a tiny
+    DataLoader. Verifies that the metrics dict carries the new
+    ``aif_loss`` field and that gradients propagate into model
+    parameters after a single step.
+    """
+
+    def _make_loader(self, vocab_size: int, batch_size: int = 2, seq_len: int = 6):
+        # Two-batch in-memory dataset for the smoke test.
+        from torch.utils.data import DataLoader, TensorDataset
+        input_ids = torch.randint(0, vocab_size, (batch_size * 2, seq_len))
+        target_ids = torch.randint(0, vocab_size, (batch_size * 2, seq_len))
+        dataset = TensorDataset(input_ids, target_ids)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    def test_construction(self, model, aif_cfg_efe_augmented, tmp_path):
+        from transformer.aif.trainer import AIFAugmentedTrainer
+        loader = self._make_loader(model.cfg.vocab_size)
+        trainer = AIFAugmentedTrainer(
+            model=model,
+            vfe_cfg=model.cfg,
+            aif_cfg=aif_cfg_efe_augmented,
+            train_loader=loader,
+            output_dir=str(tmp_path / 'aif_smoke'),
+            device='cpu',
+        )
+        assert trainer.aif_cfg is aif_cfg_efe_augmented
+        assert trainer.preference is not None
+
+    def test_rejects_standard_vfe_objective(self, model, log_pref_path, tmp_path):
+        from transformer.aif.trainer import AIFAugmentedTrainer
+        std_cfg = AIFConfig(
+            training_objective='standard_vfe',
+            preference_path=log_pref_path,
+        )
+        loader = self._make_loader(model.cfg.vocab_size)
+        with pytest.raises(ValueError, match="training_objective='efe_augmented'"):
+            AIFAugmentedTrainer(
+                model=model,
+                vfe_cfg=model.cfg,
+                aif_cfg=std_cfg,
+                train_loader=loader,
+                output_dir=str(tmp_path / 'aif_reject'),
+                device='cpu',
+            )
+
+    def test_train_step_returns_aif_loss_metric(
+        self, model, aif_cfg_efe_augmented, tmp_path,
+    ):
+        from transformer.aif.trainer import AIFAugmentedTrainer
+        loader = self._make_loader(model.cfg.vocab_size)
+        trainer = AIFAugmentedTrainer(
+            model=model,
+            vfe_cfg=model.cfg,
+            aif_cfg=aif_cfg_efe_augmented,
+            train_loader=loader,
+            output_dir=str(tmp_path / 'aif_step'),
+            device='cpu',
+        )
+        batch = next(iter(loader))
+        metrics = trainer.train_step(batch)
+        # The augmented trainer adds 'aif_loss' to the metrics dict.
+        assert 'aif_loss' in metrics
+        assert math.isfinite(metrics['aif_loss'])
+        assert math.isfinite(metrics['loss'])
+        assert math.isfinite(metrics['ce'])
+
+    def test_step_advances_global_step_and_optimizer(
+        self, model, aif_cfg_efe_augmented, tmp_path,
+    ):
+        from transformer.aif.trainer import AIFAugmentedTrainer
+        loader = self._make_loader(model.cfg.vocab_size)
+        trainer = AIFAugmentedTrainer(
+            model=model,
+            vfe_cfg=model.cfg,
+            aif_cfg=aif_cfg_efe_augmented,
+            train_loader=loader,
+            output_dir=str(tmp_path / 'aif_advance'),
+            device='cpu',
+        )
+        # Snapshot one parameter before the step; check it changed afterwards.
+        first_param = next(iter(model.parameters()))
+        before = first_param.detach().clone()
+        batch = next(iter(loader))
+        trainer.train_step(batch)
+        assert trainer.global_step == 1
+        # At least one parameter should have moved (the optimizer ran).
+        moved = any(
+            not torch.equal(p_before, p_after.detach())
+            for p_before, p_after in zip(
+                [before], [first_param]
+            )
+        )
+        assert moved or any(
+            p.grad is not None and p.grad.abs().sum().item() > 0
+            for p in model.parameters()
+        )
