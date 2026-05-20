@@ -62,11 +62,11 @@ AIF_CONFIG = {
     'belief_cache_max_entries': 4096,
 
     # Training-time
-    'training_objective':   'standard_vfe',
+    'training_objective':   'efe_augmented',  #standard_vfe, efe_augmented
 }
 
 # === Checkpoint and prompt — click to run ===
-CHECKPOINT_PATH: Optional[str] = None  # SET ME — path to a trained VFEModel checkpoint
+CHECKPOINT_PATH: Optional[str] = "C:\Users\chris and christine\Desktop\V13_Gauge_Transformer\transformer\vfe\vfe_runs\136.25=test-PPL_K=20_GL(10)_baseline-best\checkpoints"  # SET ME — path to a trained VFEModel checkpoint
 PROMPT_TEXT: str = "The quick brown fox"
 MAX_NEW_TOKENS: int = 50
 
