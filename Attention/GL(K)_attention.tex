@@ -605,7 +605,7 @@ r_i(m_i) = \mathcal{N}(m_i ; \mu_{0,i}^{(p)}, \Sigma_{0,i}^{(p)}).
 \label{eq:base_priors}
 \end{equation}
 
-These priors are local in that they live within each agent's own gauge frame $\phi$ and need not be related across agents until transported via the gauge connection.
+These priors are local in that they live within each agent's own gauge frame $\phi$ and need not be related across agents until transported via the gauge connection. The fiber dimensions $K_q$ and $K_p$ are independent dimensional parameters of the scaffold; the present work operates entirely on the belief channel $(q_i, p_i, \beta_{ij}, \Omega_{ij})$, so $K_p$ plays no role in any equation of this section, and the model-channel scaffold is exercised in the companion treatment per the deferral following Eq.~\eqref{eq:single_agent_fep}.
 
 \subsection{Gauge Transport}
 
@@ -616,7 +616,7 @@ The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are pointwise g
 \label{eq:gauge_frame_rotation}
 \end{equation}
 
-where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle) and $\mathrm{GL}^+(K) = \{A \in \mathrm{GL}(K) : \det A > 0\}$ is the identity component of $\mathrm{GL}(K)$. Under orthogonal projection, $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$ rather than full $\mathrm{O}(K)$; the extension to the disconnected component via learnable reflections is discussed in Section~\ref{par:ok_transport}. These act on the latent variables as
+where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle) and $\mathrm{GL}^+(K) = \{A \in \mathrm{GL}(K) : \det A > 0\}$ is the identity component of $\mathrm{GL}(K)$. This vertex-frame parameterization restricts the framework to a globally trivial principal $G$-bundle (flat connection); the edge-relaxed non-flat extension \eqref{eq:edge_relaxed_omega_glk} is deferred to the companion paper \citep{Dennis2025it} and discussed in Section~\ref{sec:vanishing_holonomy} below. Under orthogonal projection, $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$ rather than full $\mathrm{O}(K)$; the extension to the disconnected component via learnable reflections is discussed in Section~\ref{par:ok_transport}. These act on the latent variables as
 
 \begin{equation}
 \begin{aligned}
@@ -911,14 +911,14 @@ This augmented free energy for agent $i$ is then:
 \label{eq:free_energy_adaptive}
 \end{equation}
 
-where $R(\alpha_i)$ is a precision regularizer. A natural choice is a log-barrier form such as:
+where $R(\alpha_i)$ is a precision regularizer. We choose
 
 \begin{equation}
-R(\alpha_i) = b_0 \alpha_i - c_0 \log \alpha_i, \qquad b_0 > 0, c_0 > 0.
+R(\alpha_i) = b_0 \alpha_i - c_0 \log \alpha_i, \qquad b_0 > 0, c_0 > 0,
 \label{eq:precision_regularizer}
 \end{equation}
 
-The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$), the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). 
+the negative log-density of a $\mathrm{Gamma}(\alpha_i; c_0 + 1, b_0)$ distribution — the conjugate prior for the precision parameter of a Gaussian likelihood \citep{bishop2006pattern, murphy2012machine}. The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$), the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). 
 
 \subsubsection{Optimal Precision}
 
@@ -938,6 +938,8 @@ which gives the optimal state-dependent precision:
 }
 \label{eq:state_dependent_alpha}
 \end{equation}
+
+This $\alpha_i^*$ is the MAP estimate of $\alpha_i$ under the Gamma prior $p(\alpha_i) \propto \alpha_i^{c_0} e^{-b_0 \alpha_i}$, with the linear-in-$\alpha$ self-coupling penalty $\alpha_i \cdot D_{\mathrm{KL}}(q_i \| p_i)$ playing the role of the sufficient statistic in the precision posterior.
 
 For example, when an agent is close to its prior ($D_{\mathrm{KL}}(q_i \| p_i) \approx 0$), $\alpha_i \approx c_0/b_0$ takes a large value determined by the hyper-parameters such that the agent trusts its prior and resists displacement by the alignment term. Conversely, when an agent is far from its prior (large $D_{\mathrm{KL}}(q_i \| p_i)$), $\alpha_i \to 0$, the prior's influence is reduced and the alignment and observation terms dominate. The agent becomes less influenced by its prior allowing contextual information to influence its belief.
 
