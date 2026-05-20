@@ -156,11 +156,17 @@ class VFEConfig:
     #                       gl(d_1) ⊕ ... ⊕ gl(d_H); block-diagonal in the
     #                       generator index, no cross-block coupling. Added
     #                       2026-05-19 to address audit-2026-05-18-v4 F6.1.
-    # 'pullback' is intentionally absent: the upstream call chain in
-    # `_update_phi` does not thread the `structure_constants` tensor that
-    # `apply_pullback_natural_gradient` requires, so selecting it raised
-    # TypeError at runtime. Re-enable only after wiring structure_constants
-    # through `VFEEStep.__init__` and `precondition_phi_gradient`.
+    # 'pullback' is intentionally absent from the inner E-step preconditioner
+    # path: the upstream call chain in `_update_phi` does not thread the
+    # `structure_constants` tensor that `apply_pullback_natural_gradient`
+    # requires, so selecting it raised TypeError at runtime. The metric math
+    # in `build_pullback_metric_tensor` was corrected on 2026-05-20 (the
+    # position-dependent factor `exp(phi) exp(phi)^T` is now included for
+    # non-compact gl(K) directions; see supplementary §C.5 debate verdict).
+    # The corrected metric is already in use via the outer optimizer
+    # `RiemannianAdamW(metric='pullback')`, which threads structure_constants
+    # itself. Re-enable here only after wiring structure_constants through
+    # `VFEEStep.__init__` and `precondition_phi_gradient`.
     # GL(K) determinant control (no-op for SO(N), tr(G)=0 already). Pick at most one:
     phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
     phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
@@ -594,9 +600,12 @@ class VFEConfig:
             raise ValueError(
                 f"phi_preconditioner={self.phi_preconditioner!r} is not supported. "
                 f"Valid options: 'clip', 'cartan', 'killing', 'killing_per_block'. "
-                f"'pullback' was removed because the call chain in "
-                f"`VFEEStep._update_phi` does not thread the structure_constants "
-                f"tensor that apply_pullback_natural_gradient requires."
+                f"'pullback' is gated here because the inner E-step call chain "
+                f"in `VFEEStep._update_phi` does not thread the structure_constants "
+                f"tensor that apply_pullback_natural_gradient requires. The metric "
+                f"math itself was corrected on 2026-05-20; the corrected formula is "
+                f"already available via the outer optimizer "
+                f"RiemannianAdamW(metric='pullback')."
             )
 
         # --- Cross-head coupling validation -------------------------------
