@@ -4151,7 +4151,7 @@ Hence the covariance alignment fixed-point is an attractor of the variational dy
 Therefore, we find that $\Sigma_i \approx\Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the dynamics itself rather than as an imposed constraint.
 
 \paragraph{Collapse to attention-weighted message passing.}
-The Fisher-preconditioned mean update derived in Section~\ref{sec:transformers} carries the per-edge alignment term $\beta_{ij} \Sigma_i (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)$. Substituting the covariance-alignment fixed point above into this expression cancels the inner $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ factor against the outer $\Sigma_i$, so the per-edge contribution collapses to
+The Fisher-preconditioned mean update derived in Section~\ref{sec:transformers} carries the per-edge alignment term $\beta_{ij} \Sigma_i (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)$. In the homogeneous near-identity regime where $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ holds per edge rather than only $\beta$-averaged (the per-edge strengthening of the $\beta$-averaged fixed point derived above), substituting the per-edge covariance-alignment identity into this expression cancels the inner $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ factor against the outer $\Sigma_i$, so the per-edge contribution collapses to
 \begin{equation}
 \beta_{ij} \Sigma_i (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j) \longrightarrow \beta_{ij}(\mu_i - \Omega_{ij}\mu_j),
 \end{equation}
@@ -4211,14 +4211,14 @@ Similarly for the model channel:
 \approx
 \frac{\tau^{(s)}_{ij}}{2}D_{\mathrm{KL}}(s_i\|\tilde{\Omega}_{ij}s_j)+\text{const}.
 \end{equation}
-\subsection{Defining normalized alignment weights}
-To obtain the standard form, we define normalized alignment weights
+\subsection{Defining raw alignment weights}
+To obtain the standard form, we define raw alignment weights
 \begin{equation}
-\beta_{ij}:=\frac{\tau^{(q)}_{ij}}{2},
+\tilde\beta_{ij}:=\frac{\tau^{(q)}_{ij}}{2},
 \qquad
-\gamma_{ij}:=\frac{\tau^{(s)}_{ij}}{2}.
+\tilde\gamma_{ij}:=\frac{\tau^{(s)}_{ij}}{2}.
 \end{equation}
-These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent, a constant global value which we set to 1.
+These raw couplings measure the bare belief- and model-alignment strengths between agents: $\tilde\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\tilde\gamma_{ij}$ measures model alignment strength. The normalized softmax weights $\beta_{ij}, \gamma_{ij}$ of the main text (which sum to one across the neighbors of each row) are obtained from these raw couplings by passing them through the entropy-regularized variational selection that yields the softmax form; the assignment $\beta_{ij} = \tilde\beta_{ij}$ holds only under the uniform-coupling, no-entropy-regularization specialization in which the raw couplings already satisfy the row-simplex constraint. In the limit $\tilde\beta_{ij} \to \infty$ with fixed $\tilde\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\tilde\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent, a constant global value which we set to 1; this is a notational anchor for the quadratic-form derivation, with the softmax-normalized $\beta_{ij}, \gamma_{ij}$ of the main text recovered via the variational selection above.
 
 \section*{Conditional Representation Theorem for the Forward KL Divergence via Variational Duality}
 \label{app:conditional_uniqueness}
