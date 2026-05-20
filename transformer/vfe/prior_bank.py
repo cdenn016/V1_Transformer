@@ -19,19 +19,26 @@ Decode: BeliefState -> logits = -c * KL(q* || pi_v) / tau
 
 Law 3 (same Gaussian manifold for encode, infer, decode) holds in both modes.
 
-Implementation note — decode rescales the canonical KL by a learnable scalar.
-=============================================================================
-The manuscript-canonical decode is `logits = -KL(q || pi_v) / tau`. This
-module instead computes `logits = -c * KL(q || pi_v) / tau` with a
-learnable scalar `c = exp(decode_log_scale)`, clamped to
-`[exp(-3), exp(3)] ~ [0.05, 20]` and initialised at 0 so that `c = 1` at
-construction (untrained models match the documented decode bitwise).
+Implementation note — `tau` in `logits = -KL/tau` is learnable.
+===============================================================
+The manuscript-canonical decode `logits = -KL(q || pi_v) / tau` is
+implemented with `tau` as the **learnable decode softmax temperature**,
+parameterized for positivity and bounded range as
 
-This is equivalent to a second softmax temperature stacked multiplicatively
-on `tau`: the entangled product `c / tau` controls the logit scale. The
-parameter is grouped with `m_sigma_lr` in the optimizer (see
-`transformer/training/config.py`), not with the temperature group with
-`kappa`. Document and tune accordingly.
+    tau = decode_tau * exp(-decode_log_scale),   decode_log_scale clamped to [-3, 3]
+
+so the effective temperature spans `[decode_tau · exp(-3), decode_tau · exp(3)]
+~ [0.05, 20]` when `decode_tau=1.0` (the default). `decode_log_scale` is
+an `nn.Parameter` initialised at 0, so untrained models match
+`logits = -KL/decode_tau` bitwise. This mirrors the learnable attention
+temperature `tau_attn = kappa * sqrt(K)` (kappa learnable when
+`learnable_kappa=True`): in both cases, the canonical `tau` symbol denotes
+the learnable parameter, the bare config float (`decode_tau` here, `1/sqrt(K)`
+for attention) is the dimension-fixed scaling.
+
+Internally the matmul collects `scale = exp(decode_log_scale)` so the
+softmax argument is `-scale/decode_tau * KL = -KL/tau`. The parameter is
+grouped with `m_sigma_lr` in the optimizer (`transformer/training/optimizer.py`).
 """
 
 from __future__ import annotations
@@ -103,6 +110,7 @@ class VFEPriorBank(nn.Module):
         self.irrep_dims: List[int] = cfg.effective_block_dims
         self._original_irrep_dims: List[int] = cfg.irrep_dims
         self.diagonal_covariance = cfg.diagonal_covariance
+        self.exact_full_cov_decode = getattr(cfg, 'exact_full_cov_decode', False)
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.sigma_max = cfg.sigma_max
         # Numerical floor for σ. The base-σ helper at `:base_sigma` uses
@@ -198,13 +206,13 @@ class VFEPriorBank(nn.Module):
         self.phi_embed = nn.Embedding(V, n_gen)
         nn.init.normal_(self.phi_embed.weight, mean=0.0, std=cfg.phi_scale)
 
-        # Learnable decode temperature. The canonical Gaussian-cluster
-        # decode is `logits = -KL(q || pi_v) / tau`. This module instead
-        # computes `logits = -c * KL(q || pi_v) / tau` with a learnable
-        # `c = exp(decode_log_scale)` clamped to `[exp(-3), exp(3)] ~ [0.05, 20]`.
-        # Equivalent to a learnable scalar softmax temperature on top of
-        # the canonical form. Initialised at 0 (c=1), so untrained models
-        # match the documented decode; the parameter drifts during training.
+        # Learnable decode softmax temperature.  The canonical decode is
+        # `logits = -KL(q || pi_v) / tau`, with tau learnable:
+        #     tau = decode_tau * exp(-decode_log_scale)
+        # decode_log_scale is clamped to [-3, 3] so tau spans
+        # [decode_tau * exp(-3), decode_tau * exp(3)] ~ [0.05, 20] when
+        # decode_tau=1.0.  Initialised at 0 so tau = decode_tau at
+        # construction (untrained models bitwise match `logits = -KL/decode_tau`).
         self.decode_log_scale = nn.Parameter(torch.zeros(1))
 
         # Decode cache (invalidated each forward pass)
@@ -424,6 +432,117 @@ class VFEPriorBank(nn.Module):
                 sigma_p = self._diag_to_full_block(sigma_diag)
         return BeliefState(mu=mu_p, sigma=sigma_p, phi=phi)
 
+    def _decode_exact_full_cov(
+        self,
+        mu_q: torch.Tensor,
+        sigma_q: torch.Tensor,
+        mu_p: torch.Tensor,
+        sigma_p: torch.Tensor,
+        tau: float,
+    ) -> torch.Tensor:
+        r"""Block-diagonal full-covariance KL decode.
+
+        Computes the exact per-block KL between a block-diagonal Gaussian
+        posterior :math:`q = \mathcal{N}(\mu_q, \Sigma_q)` and each per-token
+        prior :math:`\pi_v = \mathcal{N}(\mu_p^v, \Sigma_p^v)`, summed across
+        gauge blocks:
+
+        .. math::
+            \mathrm{KL}(q \| \pi_v) = \sum_h \mathrm{KL}_h(q_h \| \pi_v^h),
+            \qquad
+            \mathrm{KL}_h = \tfrac{1}{2}\bigl[\mathrm{tr}(\Sigma_{p,v}^{(h)-1}\Sigma_q^{(h)})
+              + \Delta\mu^\top \Sigma_{p,v}^{(h)-1} \Delta\mu
+              - d_h + \log|\Sigma_{p,v}^{(h)}|/|\Sigma_q^{(h)}|\bigr],
+
+        where :math:`d_h` is the block size and the v-invariant terms
+        :math:`-d_h` and :math:`\log|\Sigma_q^{(h)}|` are dropped (they cancel
+        under softmax over v). Implemented by feature-flattening each block's
+        contribution to a single matmul:
+        :math:`\text{lhs}_h = [\mathrm{vec}(\Sigma_q^{(h)} + \mu_q^{(h)}\mu_q^{(h)\top}),\,\mu_q^{(h)}]`,
+        :math:`\text{rhs}_h = [\mathrm{vec}(\Sigma_{p,v}^{(h)-1}),\,-2\Sigma_{p,v}^{(h)-1}\mu_p^{(h)}]`,
+        concatenated across h. Output:
+        :math:`\text{logits}_{i,v} = -\tfrac{c}{2\tau}(\text{combined} + \text{prior\_bias})`,
+        which equals :math:`-c \cdot \mathrm{KL}(q_i \| \pi_v)/\tau` modulo a
+        softmax-invariant row-only shift.
+
+        Args:
+            mu_q: ``(B, N, K)`` belief means.
+            sigma_q: ``(B, N, K, K)`` block-diagonal posterior covariance.
+            mu_p: ``(V, K)`` prior means (materialized by the caller).
+            sigma_p: ``(V, K, K)`` block-diagonal prior covariance (materialized
+                by the caller).
+            tau: Fixed decode temperature scaling (the learnable component
+                ``decode_log_scale`` is applied inside).
+
+        Returns:
+            logits: ``(B, N, V)`` unnormalized log-probabilities.
+        """
+        mu_q = mu_q.float()
+        sigma_q = sigma_q.float()
+        mu_p = mu_p.float()
+        sigma_p = sigma_p.float()
+
+        # Small diagonal ridge for Cholesky stability. Σ_p assembled in
+        # _apply_gauge_transform is already SPD (gauge_covariant_ridge or
+        # diag-clamp at self.eps), but the additional 1e-6·I floor is
+        # defensive against accumulated rounding in float32.
+        K = self.embed_dim
+        lhs_parts: List[torch.Tensor] = []
+        rhs_parts: List[torch.Tensor] = []
+        prior_bias_parts: List[torch.Tensor] = []
+
+        block_start = 0
+        for d_h in self.irrep_dims:
+            block_end = block_start + d_h
+
+            mu_q_h = mu_q[..., block_start:block_end]                          # (B, N, d_h)
+            sigma_q_h = sigma_q[..., block_start:block_end, block_start:block_end]  # (B, N, d_h, d_h)
+            mu_p_h = mu_p[:, block_start:block_end]                            # (V, d_h)
+            sigma_p_h = sigma_p[:, block_start:block_end, block_start:block_end]    # (V, d_h, d_h)
+
+            # Cholesky-based inverse and log-det of the per-block prior cov.
+            eye_h = torch.eye(d_h, device=sigma_p_h.device, dtype=sigma_p_h.dtype)
+            L_h = torch.linalg.cholesky(sigma_p_h + self.eps_small * eye_h)    # (V, d_h, d_h)
+            log_det_p_h = 2.0 * torch.log(
+                torch.diagonal(L_h, dim1=-2, dim2=-1)
+            ).sum(-1)                                                          # (V,)
+            sigma_p_inv_h = torch.cholesky_inverse(L_h)                        # (V, d_h, d_h)
+
+            # lhs feature block for position (b, n):
+            #   [vec(Σ_q + μ_q μ_q^T)  (d_h²),   μ_q  (d_h)]
+            mu_outer_h = torch.einsum('bni,bnj->bnij', mu_q_h, mu_q_h)         # (B, N, d_h, d_h)
+            M_q_h = (sigma_q_h + mu_outer_h).flatten(-2, -1)                   # (B, N, d_h²)
+            lhs_parts.append(M_q_h)
+            lhs_parts.append(mu_q_h)
+
+            # rhs feature block for vocab v:
+            #   [vec(Σ_p_v^-1)  (d_h²),   -2 Σ_p_v^-1 μ_p  (d_h)]
+            M_p_inv_h = sigma_p_inv_h.flatten(-2, -1)                          # (V, d_h²)
+            sigma_p_inv_mu_p_h = torch.einsum(
+                'vij,vj->vi', sigma_p_inv_h, mu_p_h
+            )                                                                   # (V, d_h)
+            rhs_parts.append(M_p_inv_h)
+            rhs_parts.append(-2.0 * sigma_p_inv_mu_p_h)
+
+            # v-only contributions: μ_p^T Σ_p^-1 μ_p + log|Σ_p|. The -d_h is
+            # softmax-invariant across v and is dropped.
+            quad_p_h = (mu_p_h * sigma_p_inv_mu_p_h).sum(-1)                   # (V,)
+            prior_bias_parts.append(quad_p_h + log_det_p_h)
+
+            block_start = block_end
+
+        lhs = torch.cat(lhs_parts, dim=-1)                                     # (B, N, total_F)
+        rhs = torch.cat(rhs_parts, dim=-1)                                     # (V, total_F)
+        combined = torch.matmul(lhs, rhs.T)                                    # (B, N, V)
+        prior_bias = torch.stack(prior_bias_parts, dim=0).sum(dim=0)           # (V,)
+
+        # combined + prior_bias = 2 · KL_modulo_v_invariant, summed across blocks.
+        scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0))
+        logits = -0.5 * scale / tau * (
+            combined + prior_bias.unsqueeze(0).unsqueeze(0)
+        )
+        return logits
+
     def decode(
         self,
         mu_q: torch.Tensor,
@@ -431,6 +550,15 @@ class VFEPriorBank(nn.Module):
         tau: float = 1.0,
     ) -> torch.Tensor:
         r"""Compute logits via KL-to-prior: :math:`\ell_{i,v} = -\mathrm{KL}(q_i^\star \| \pi_v) / \tau`.
+
+        The ``tau`` symbol in this formula is the **learnable** decode softmax
+        temperature
+        :math:`\tau = \tau_{\text{cfg}} \cdot \exp(-s)`, where
+        :math:`\tau_{\text{cfg}}` is the ``tau`` keyword argument (the
+        ``decode_tau`` config float at the call site) and
+        :math:`s = ` ``decode_log_scale`` is an :class:`nn.Parameter` clamped
+        to ``[-3, 3]``.  At construction ``s = 0`` so :math:`\tau = \tau_{\text{cfg}}`
+        and the call bitwise matches ``logits = -KL / tau_cfg``.
 
         When beliefs are full-covariance ``(B, N, K, K)``, the decode uses
         diagonal projection for O(V·K) efficiency. This is a documented
@@ -472,6 +600,16 @@ class VFEPriorBank(nn.Module):
         else:
             mu_p, sigma_p = self._per_token_priors(self._all_token_ids)  # (V,K), (V,K)
             self._decode_cache = (mu_p, sigma_p)
+
+        # Exact per-block KL decode (opt-in). The diagonal projection at the
+        # decode boundary drops within-block off-diagonal mass that the
+        # sandwich product Ω Σ Ω^T generates when gauge_fixed_priors=True
+        # and diagonal_covariance=False. When the user opts in, route to the
+        # block-diagonal Cholesky-based decode that matches encode/E-step on
+        # the full Gaussian manifold (Law-3 pure path). Configuration validation
+        # in VFEConfig.__post_init__ guarantees the upstream invariants.
+        if self.exact_full_cov_decode and is_full_cov:
+            return self._decode_exact_full_cov(mu_q, sigma_q, mu_p, sigma_p, tau)
 
         # Extract diagonal for KL computation (decode always uses diagonal KL
         # for O(V*K) efficiency — full-cov KL over V tokens is O(V*K^3))

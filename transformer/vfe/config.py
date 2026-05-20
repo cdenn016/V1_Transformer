@@ -233,11 +233,19 @@ class VFEConfig:
     gauge_fixed_priors: bool = True
 
     # === Decode and generation-time EFE (canonical path) ===
-    # decode_tau is the temperature passed to PriorBank.decode for both the
-    # training-time forward (model.py:209) and the canonical EFE generation-time
-    # candidate scoring (vfe/efe.py). epistemic_weight / epistemic_samples are
-    # consumed by VFEExpectedFreeEnergy at generation; the canonical /aif module
-    # carries its own copies in AIFConfig for the multi-step build-out.
+    # decode_tau is the *fixed* component of the decode softmax temperature
+    # passed to PriorBank.decode (training-time forward at model.py:209; EFE
+    # candidate scoring in vfe/efe.py).  The full decode temperature is
+    # learnable:
+    #     tau = decode_tau * exp(-PriorBank.decode_log_scale)
+    # where decode_log_scale is an nn.Parameter clamped to [-3, 3], so the
+    # effective tau spans [decode_tau * exp(-3), decode_tau * exp(3)]
+    # ~ [0.05, 20] at decode_tau=1.0.  This mirrors the attention temperature
+    # tau_attn = kappa * sqrt(K) where kappa is learnable; here the
+    # learnable scalar is exp(-decode_log_scale) and the fixed scaling is
+    # decode_tau.  epistemic_weight / epistemic_samples are consumed by
+    # VFEExpectedFreeEnergy at generation; the canonical /aif module carries
+    # its own copies in AIFConfig for the multi-step build-out.
     epistemic_weight: float = 0.5
     epistemic_samples: int = 4
     decode_tau: float = 1.0
@@ -338,7 +346,12 @@ class VFEConfig:
     # === Decode head ===
     # True (default): PriorBank.decode computes logits = -KL(q || π_v) / τ,
     #   reusing the same gauge-orbit prior used for encode (Law 3 — same
-    #   manifold for encode/infer/decode). No additional decode parameters.
+    #   manifold for encode/infer/decode, exact when diagonal_covariance=True;
+    #   the full-covariance branch projects to diagonal at decode for O(V·K)
+    #   efficiency, see prior_bank.py:478-479).  τ here is the learnable
+    #   decode softmax temperature τ = decode_tau · exp(-decode_log_scale),
+    #   one nn.Parameter scalar (decode_log_scale, clamped to [-3, 3]).
+    #   No nn.Linear / MLP / activation on this path.
     # False: replace the decode head with a plain nn.Linear(K, V) projection
     #   on mu_final only (sigma is ignored). This is the one documented
     #   "neural" exception in CLAUDE.md ("The only retained neural component
@@ -346,6 +359,22 @@ class VFEConfig:
     #   Encode still uses the gauge-orbit PriorBank — the toggle controls
     #   only the decode side.
     use_prior_bank: bool = False
+
+    # === Exact full-covariance decode (Law 3 pure path) ===
+    # When True, replace the diagonal projection at decode (prior_bank.py:494)
+    # with the exact per-block KL between block-diagonal Gaussians. The decode
+    # then matches encode/E-step on the full block-diagonal Gaussian manifold,
+    # closing the Law-3 partial documented for the
+    # (gauge_fixed_priors=True, diagonal_covariance=False) combination.
+    # Cost is O(B*N*V*Σ_h d_h²) per forward — roughly 10–20× the diagonal
+    # decode at K=100, 5 blocks of d_h=20 — but a single Cholesky per (v,h)
+    # is cached for the forward.
+    # Validation (__post_init__): requires gauge_fixed_priors=True (otherwise
+    # Σ_p is structurally diagonal-embedded and the flag does no work),
+    # diagonal_covariance=False (otherwise Σ_p is a (K,) tensor and there is
+    # no off-diagonal mass to recover), and use_prior_bank=True (otherwise
+    # the decode is nn.Linear). Defaults to False.
+    exact_full_cov_decode: bool = False
 
     # === Training ===
     # Per-group M-step (outer AdamW) learning rates. Mirrors the e_*_lr style
@@ -435,6 +464,40 @@ class VFEConfig:
                     f"{_lr_field}={_v} must be >= 0. Use 0 only to deliberately "
                     f"freeze the corresponding param group; negative values are "
                     f"never valid."
+                )
+        # --- Exact full-cov decode validation ------------------------------
+        # exact_full_cov_decode=True is meaningful only when the prior bank
+        # carries non-zero off-diagonal mass within each gauge block AND the
+        # decode path is the prior-bank KL readout. The three prerequisites
+        # are gauge_fixed_priors=True (so Σ_p_v = A_v Σ_0 A_v^T has dense
+        # within-block structure), diagonal_covariance=False (so Σ_q is
+        # propagated as a (K, K) tensor through encode and E-step), and
+        # use_prior_bank=True (so decode is the KL readout rather than
+        # nn.Linear). A misconfigured flag raises here rather than silently
+        # falling back to the diagonal path.
+        if self.exact_full_cov_decode:
+            _ex_problems: List[str] = []
+            if not self.gauge_fixed_priors:
+                _ex_problems.append(
+                    "gauge_fixed_priors=False (per-token Σ_v is diagonal-"
+                    "embedded; no off-diagonal mass to recover)"
+                )
+            if self.diagonal_covariance:
+                _ex_problems.append(
+                    "diagonal_covariance=True (Σ is (K,) diagonal; no full-cov "
+                    "decode applies)"
+                )
+            if not self.use_prior_bank:
+                _ex_problems.append(
+                    "use_prior_bank=False (decode is nn.Linear; the flag is "
+                    "dead on this path)"
+                )
+            if _ex_problems:
+                raise ValueError(
+                    "exact_full_cov_decode=True is incompatible with: "
+                    + "; ".join(_ex_problems)
+                    + ". Set exact_full_cov_decode=False or fix the upstream "
+                    "flags."
                 )
         # --- Per-head kappa validation -------------------------------------
         # kappa_per_head requires both upstream flags: learnable_kappa

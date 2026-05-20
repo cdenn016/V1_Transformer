@@ -1325,6 +1325,125 @@ C_{ij}=D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)}
 is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By the GL($K$) invariance theorem (Theorem~1 in the main paper), the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
 
 
+\section{Derivation of the Prior-Bank Decode from Canonical Primitives}
+\label{sec:supp_decode_derivation}
+
+The prior-bank decode head computes per-token logits as
+\begin{equation}
+\ell_{i,v} = -\frac{D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)}{\tau},
+\qquad
+v \in \{1,\dots,V\},
+\label{eq:supp_decode_canonical}
+\end{equation}
+where $q_i^{\star} = \mathcal{N}(\mu_{q,i}, \Sigma_{q,i})$ is the converged variational posterior over the latent state at position $i$, $\pi_v = \mathcal{N}(\mu_{p,v}, \Sigma_{p,v})$ is the per-token prior carried in the prior bank, and $\tau$ is the decode softmax temperature. Equation~\eqref{eq:supp_decode_canonical} is the form used in the main paper (\S\ref{sec:embeddings}) and stated in the project's architectural constraints. This appendix derives it from two canonical primitives: the Bayes-optimal Gaussian generative classifier \cite[\S4.2]{Bishop2006}, and the accuracy-plus-complexity decomposition of the variational free energy \cite{Friston2010,Blei2017}. The derivation makes explicit which steps are textbook and which are the variational extension that distinguishes the prior-bank decode from a point-classifier readout.
+
+\subsection{Gaussian Generative Classifier in Bishop \S4.2}
+
+For a point observation $x \in \mathbb{R}^K$ and a finite set of classes $\{C_v\}_{v=1}^V$ with Gaussian class-conditional densities $p(x \mid C_v) = \mathcal{N}(x;\mu_{p,v}, \Sigma_{p,v})$ and class prior $p(C_v) = \omega_v$, the Bayes posterior is
+\begin{equation}
+\log p(C_v \mid x)
+= \log p(x \mid C_v) + \log \omega_v - \log \sum_{v'} p(x \mid C_{v'}) \omega_{v'},
+\label{eq:supp_bishop_bayes}
+\end{equation}
+and the unnormalized log-posterior reduces to
+\begin{equation}
+\log p(C_v \mid x) \propto_v -\tfrac{1}{2}(x - \mu_{p,v})^{\top} \Sigma_{p,v}^{-1} (x - \mu_{p,v})
+- \tfrac{1}{2}\log|\Sigma_{p,v}|
++ \log \omega_v,
+\label{eq:supp_bishop_discriminant}
+\end{equation}
+modulo additive terms that do not depend on $v$ (the normalization constant and $-\tfrac{K}{2}\log 2\pi$). Equation~\eqref{eq:supp_bishop_discriminant} is the standard quadratic discriminant of \cite[\S4.2.1]{Bishop2006}, recovering linear discriminant analysis under the tied-covariance specialization $\Sigma_{p,v} \equiv \Sigma_p$. The framework uses an isotropic class prior $\omega_v = 1/V$ so that $\log \omega_v$ is itself $v$-invariant and may be absorbed into the dropped constant.
+
+\subsection{Replacing the Point Observation with the Recognition Distribution}
+
+In the variational setting the model has access not to a point observation $x$ but to a recognition distribution $q_i^{\star}$ over the latent. The canonical substitution is to score class $v$ by the expected log-likelihood under $q_i^{\star}$ rather than by the log-likelihood at a single point,
+\begin{equation}
+\log p(C_v \mid q_i^{\star}) \propto_v \mathbb{E}_{q_i^{\star}}[\log p(x \mid C_v)].
+\label{eq:supp_q_substitution}
+\end{equation}
+This substitution is the standard variational plug-in: $x$ is no longer observed exactly, $q_i^{\star}$ is the inferential summary of what the system knows about it, and the predictive likelihood collapses to the expectation under that summary. The same construction underlies the predictive distribution in variational Bayes \cite[Eq.~5]{Blei2017} and the expected free energy decomposition in active inference.
+
+For Gaussian class conditionals the expectation in \eqref{eq:supp_q_substitution} is closed form. Writing
+\[
+\log p(x \mid C_v) = -\tfrac{1}{2}(x - \mu_{p,v})^{\top} \Sigma_{p,v}^{-1} (x - \mu_{p,v}) - \tfrac{1}{2}\log|\Sigma_{p,v}| - \tfrac{K}{2}\log 2\pi,
+\]
+and taking $\mathbb{E}_{q_i^{\star}}[\cdot]$ term by term yields
+\begin{align}
+\mathbb{E}_{q_i^{\star}}[\log p(x \mid C_v)]
+= & -\tfrac{1}{2} \mathrm{tr}(\Sigma_{p,v}^{-1} \Sigma_{q,i})
+- \tfrac{1}{2} (\mu_{q,i} - \mu_{p,v})^{\top} \Sigma_{p,v}^{-1} (\mu_{q,i} - \mu_{p,v}) \notag \\
+& - \tfrac{1}{2}\log|\Sigma_{p,v}| - \tfrac{K}{2}\log 2\pi,
+\label{eq:supp_expected_loglik}
+\end{align}
+where the trace term arises from $\mathbb{E}_q[(x-\mu_p)^{\top} A (x-\mu_p)] = \mathrm{tr}(A \Sigma_q) + (\mu_q-\mu_p)^{\top} A (\mu_q-\mu_p)$ with $A = \Sigma_{p,v}^{-1}$.
+
+\subsection{Identification with $-D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)$}
+
+The closed form for the Gaussian KL divergence \cite[App.~B]{Bishop2006} is
+\begin{equation}
+D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)
+=
+\tfrac{1}{2}\Bigl[
+\mathrm{tr}(\Sigma_{p,v}^{-1}\Sigma_{q,i})
++ (\mu_{q,i} - \mu_{p,v})^{\top} \Sigma_{p,v}^{-1} (\mu_{q,i} - \mu_{p,v})
+- K
++ \log\frac{|\Sigma_{p,v}|}{|\Sigma_{q,i}|}
+\Bigr].
+\label{eq:supp_gaussian_kl}
+\end{equation}
+Substituting \eqref{eq:supp_gaussian_kl} into \eqref{eq:supp_expected_loglik} gives the identity
+\begin{equation}
+\mathbb{E}_{q_i^{\star}}[\log p(x \mid C_v)]
+=
+-D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)
+- H(q_i^{\star})
++ C,
+\label{eq:supp_kl_decomposition}
+\end{equation}
+where $H(q_i^{\star}) = \tfrac{1}{2}\log\bigl((2\pi e)^K |\Sigma_{q,i}|\bigr)$ is the differential entropy of $q_i^{\star}$ and $C = -\tfrac{K}{2}\log 2\pi - \tfrac{K}{2}$ is a $v$-invariant scalar constant. Both $H(q_i^{\star})$ and $C$ depend on the row index $i$ but not on the column index $v$. Under the softmax over $v$,
+\begin{equation}
+\frac{e^{\mathbb{E}_{q_i^{\star}}[\log p(x \mid C_v)]/\tau}}
+     {\sum_{v'} e^{\mathbb{E}_{q_i^{\star}}[\log p(x \mid C_{v'})]/\tau}}
+=
+\frac{e^{-D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)/\tau}}
+     {\sum_{v'} e^{-D_{\mathrm{KL}}(q_i^{\star} \| \pi_{v'})/\tau}},
+\label{eq:supp_softmax_cancellation}
+\end{equation}
+the row-only contributions $-H(q_i^{\star}) + C$ cancel between numerator and denominator. The resulting decoding distribution depends on $i$ only through $q_i^{\star}$, and the per-token logit (up to a $v$-invariant shift that the softmax absorbs) is
+\begin{equation}
+\ell_{i,v} = -\frac{D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)}{\tau},
+\label{eq:supp_decode_recovered}
+\end{equation}
+which is the formula \eqref{eq:supp_decode_canonical} in the main text.
+
+\subsection{Identification with the Accuracy Term of $\mathcal{F}$}
+
+The same expression admits a second canonical reading, via the accuracy-plus-complexity decomposition of the variational free energy \cite{Friston2010,Blei2017}:
+\begin{equation}
+\mathcal{F}[q,o] = \mathbb{E}_{q}[-\log p(o \mid s)] + D_{\mathrm{KL}}(q(s) \| p(s)),
+\label{eq:supp_form3_free_energy}
+\end{equation}
+where the first summand is the expected inaccuracy under the recognition distribution and the second is the complexity of the deviation from the prior. With observation space identified with the vocabulary, $o = v \in \{1,\dots,V\}$, and the per-token observation likelihood specified as a Gaussian template on the latent state,
+\begin{equation}
+p(o = v \mid s) = \frac{\mathcal{N}(s;\mu_{p,v}, \Sigma_{p,v})}{\sum_{v'} \mathcal{N}(s;\mu_{p,v'}, \Sigma_{p,v'})},
+\label{eq:supp_token_likelihood}
+\end{equation}
+the expected inaccuracy summand becomes
+\begin{equation}
+\mathbb{E}_{q_i^{\star}}[-\log p(o = v \mid s)]
+=
+-\mathbb{E}_{q_i^{\star}}[\log \mathcal{N}(s;\mu_{p,v}, \Sigma_{p,v})]
++ \mathbb{E}_{q_i^{\star}}[\log Z(s)],
+\end{equation}
+with $Z(s) = \sum_{v'} \mathcal{N}(s;\mu_{p,v'}, \Sigma_{p,v'})$. The first term is the negative of \eqref{eq:supp_expected_loglik} and equals $D_{\mathrm{KL}}(q_i^{\star} \| \pi_v) + H(q_i^{\star}) - C$ by \eqref{eq:supp_kl_decomposition}; the second is $v$-invariant. The decode logit \eqref{eq:supp_decode_recovered} is therefore the $v$-dependent portion of the accuracy summand of $\mathcal{F}$ under the per-token Gaussian observation model.
+
+\subsection{What this Derivation Establishes and What it Does Not}
+
+The derivation establishes that \eqref{eq:supp_decode_canonical} is the composition of two canonical pieces: the Bishop quadratic discriminant for Gaussian class-conditionals \cite[\S4.2.1]{Bishop2006}, and the standard variational plug-in $\mathbb{E}_q[\cdot]$ for point observations \cite{Blei2017}. The intermediate quantity $\mathbb{E}_{q_i^{\star}}[\log p(x \mid C_v)]$ is in textbook form; the identity to $-D_{\mathrm{KL}}(q_i^{\star} \| \pi_v)$ up to row-only constants follows from the closed-form Gaussian KL \cite[App.~B]{Bishop2006}; the equivalence under softmax follows from the cancellation in \eqref{eq:supp_softmax_cancellation}. Under the Gaussian token likelihood \eqref{eq:supp_token_likelihood} the same logit is the $v$-dependent portion of the accuracy term of $\mathcal{F}$ \cite{Friston2010}.
+
+Three scopes are worth stating explicitly. First, the derivation justifies the form of the readout, not its training objective: the M-step in the prior-bank implementation minimizes cross-entropy against the per-position target token, not the full free energy $\mathcal{F}$ summed over $i$ and $v$, so the variational interpretation is structural (the readout is the accuracy term) rather than dynamical (training does not descend $\mathcal{F}$ directly). Second, the derivation is exact only when $q_i^{\star}$ and the $\{\pi_v\}$ lie on the same statistical submanifold; under the diagonal-covariance specialization the diagonal Gaussian submanifold is closed under the operations involved, but the full-covariance branch's diagonal projection at decode is an approximation rather than a strict instance of the identity. Third, the temperature $\tau$ in \eqref{eq:supp_decode_canonical} is parameterized in the implementation as $\tau = \tau_{\mathrm{cfg}} \cdot e^{-s}$ with a learnable scalar $s$, mirroring the learnable attention temperature $\tau_{\mathrm{attn}} = \kappa\sqrt{K}$ of the main paper; this learnable component is a single scalar on top of the canonical scaling and does not alter the derivation, but it should be reported when the formula is quoted as a comparison baseline.
+
+
 \bibliographystyle{plainnat}
 \bibliography{references}
 
