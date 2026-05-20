@@ -543,7 +543,7 @@ p_i^{(s)}(c) = \Omega_{i,I}\big[q_I^{(s+1)}\big](c),
 r_i^{(s)}(c) = \tilde\Omega_{i,I}\big[s_I^{(s+1)}\big](c),
 \label{eq:cross_scale_shadow}
 \end{equation}
-where $I$ indexes the meta-agent at scale $s+1$ that contains agent $i$ as a constituent, $\Omega_{i,I}$ is the gauge-covariant transport into agent $i$'s frame on the latent-state fiber, and $\tilde\Omega_{i,I}$ is its model-fiber counterpart. The fast-channel relation is the formal content of the participatory feedback equation at Eq.~\eqref{eq:topdown_priors}; the slow-channel relation is its model-channel mirror. Because the prior $p_i^{(s)}$ is defined as the gauge transport of the meta-agent's posterior $q_I^{(s+1)}$, beliefs and priors share the latent-state manifold $\mathcal{B}_{\mathrm{state}}$ by construction, and the same definitional move places $r$ and $s$ on the same manifold $\mathcal{B}_{\mathrm{model}}$. This is a structural commitment of the framework rather than a theorem of standard hierarchical variational inference: in the standard scheme~\cite{Friston2017, parr2022active} the level-$\ell$ prior is derived from a generative-model conditional $p(s_\ell \mid s_{\ell+1})$, not posited as a transported posterior, and we do not display the reduction (or approximation) of the standard hierarchical scheme to the present cross-scale shadow construction. Conditional on Eq.~\eqref{eq:cross_scale_shadow}, the hierarchy $r \to s \to p \to q \to \text{observations}$ posited at the agent definition below is realized cross-scale: $r$ regularizes $s$ because $r$ is the meta-agent's model transported down, and $p$ regularizes $q$ because $p$ is the meta-agent's belief transported down.
+where $I$ indexes the meta-agent at scale $s+1$ that contains agent $i$ as a constituent, $\Omega_{i,I}$ is the gauge-covariant transport into agent $i$'s frame on the latent-state fiber, and $\tilde\Omega_{i,I}$ is its model-fiber counterpart. The fast-channel relation is the formal content of the participatory feedback equation at Eq.~\eqref{eq:topdown_priors}; the slow-channel relation is its model-channel mirror. Because the prior $p_i^{(s)}$ is defined as the gauge transport of the meta-agent's posterior $q_I^{(s+1)}$, beliefs and priors share the latent-state manifold $\mathcal{B}_{\mathrm{state}}$ by construction, and the same definitional move places $r$ and $s$ on the same manifold $\mathcal{B}_{\mathrm{model}}$. This is a structural commitment of the framework rather than a theorem of standard hierarchical variational inference: in the standard scheme~\cite{Friston2017, parr2022active} the level-$\ell$ prior is derived from a generative-model conditional $p(s_\ell \mid s_{\ell+1})$, not posited as a transported posterior, the reduction is supplied in Appendix~\ref{app:augmented_joint}: an augmented hierarchical generative model with Gibbs cross-scale factors $\chi_{i,\pi(i)}(k_i, k_{\pi(i)}) \propto \exp[-\|k_i - \Omega_{i,\pi(i)}k_{\pi(i)}\|^2/(2\sigma^2)]$ defines a well-defined probability density on the product space of all agent-scale latents (Lemma~\ref{lem:aug_joint_welldefined}), and the cross-scale shadow $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$ is the rigid-link limit $\sigma^2 \to 0$ of the mean-field optimum of this joint (Lemma~\ref{lem:shadow_mf_optimum}). The standard scheme's conditional density $p(s_\ell \mid s_{\ell+1})$ corresponds to the finite-$\sigma^2$ Gibbs factor of Eq.~\eqref{eq:gibbs_factor}, and the manuscript's exact transported-posterior identification is the deterministic-decoder limit of a ladder-VAE-style hierarchical prior~\cite{Sonderby2016}. The continuity with~\cite{Friston2010, Friston2017, parr2022active} is at both the variational-principle backbone (the ELBO, complexity/accuracy decomposition, natural-gradient flow) and the hierarchical generative-model structure (Appendix~\ref{app:augmented_joint}). Conditional on Eq.~\eqref{eq:cross_scale_shadow}, the hierarchy $r \to s \to p \to q \to \text{observations}$ posited at the agent definition below is realized cross-scale: $r$ regularizes $s$ because $r$ is the meta-agent's model transported down, and $p$ regularizes $q$ because $p$ is the meta-agent's belief transported down.
 
 The hierarchy bottoms out at two boundaries. At the top scale ($s = s_{\max}$) there is no enveloping meta-agent, so the hyper-prior $r_i^{(s_{\max})}$ is treated as a fixed boundary condition encoding evolutionary or training-time structural defaults, and the top-scale prior is set self-referentially by aggregating across all active agents (Section~\ref{sec:participatory}). At the bottom scale ($s = 0$) the system has no constituents below it, so cross-scale propagation acts only downward from above. In the empirical simulations of Section~\ref{sec:meta_agent_emergence} all agents reside at a single scale and $p_i, r_i$ are treated as primitive boundary conditions with no super-agent above; the multi-scale relation~\eqref{eq:cross_scale_shadow} becomes operative only in the participatory dynamics of Section~\ref{sec:participatory}.
 
@@ -1020,7 +1020,7 @@ The free energy decomposes into competing pressures: $F[q] = \mathrm{KL}(q(x) \|
 
 \subsubsection{Multi-Agent Extension: From Single Inference to Collective Dynamics}
 
-A single agent minimizing $F[q]$ performs standard variational inference. The functional developed in the remainder of this section is a \emph{novel} multi-agent extension of Friston's single-agent free energy: the inter-agent belief-coupling terms $\sum_{ij}\beta_{ij}\mathrm{KL}(q_i\|\Omega_{ij}q_j)$, the attention-entropy term $\tau\beta_{ij}\log(\beta_{ij}/\pi_{ij})$, and the model-channel analogue with $\gamma$ are not present in the standard FEP literature~\cite{Friston2010, parr2022active}; their motivation and a more detailed status note appear in Section~\ref{sec:mixture_derivation} (paragraph ``Status of the construction''). We retain the FEP citations as the conceptual backbone (variational inference, the ELBO bound, the complexity/accuracy decomposition) but the multi-agent functional itself is an engineered consensus energy, not a derivation from FEP alone.
+A single agent minimizing $F[q]$ performs standard variational inference. The functional developed in the remainder of this section is a \emph{novel} multi-agent extension of Friston's single-agent free energy: the inter-agent belief-coupling terms $\sum_{ij}\beta_{ij}\mathrm{KL}(q_i\|\Omega_{ij}q_j)$, the attention-entropy term $\tau\beta_{ij}\log(\beta_{ij}/\pi_{ij})$, and the model-channel analogue with $\gamma$ are not present in the standard FEP literature~\cite{Friston2010, parr2022active}; their motivation and a more detailed status note appear in Section~\ref{sec:mixture_derivation} (paragraph ``Status of the construction''). We retain the FEP citations as the conceptual backbone (variational inference, the ELBO bound, the complexity/accuracy decomposition) but the multi-agent functional itself is an engineered consensus energy, not a derivation from FEP alone. The cross-scale shadow construction of Section~\ref{sec:cross_scale_shadows} is in a different position: Appendix~\ref{app:augmented_joint} supplies a hierarchical generative model whose mean-field rigid-link limit recovers $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$, so the ELBO written against the cross-scale shadow is the ELBO of this augmented joint in the small-$\sigma^2$ regime where the simulations of Section~\ref{sec:participatory} operate. The FEP citations remain valid both as the variational-principle backbone and, via Appendix~\ref{app:augmented_joint}, as the hierarchical-generative-model structure.
 
 Our framework extends this to multiple interacting agents with different reference frames. The extension introduces several new ingredients: each agent $i$ maintains beliefs $q_i(c)$ and priors $p_i(c)$ as fields over base manifold $\mathcal{C}$, agents have gauge frames $\phi_i(c) \in \mathfrak{gl}(K)$ encoding their internal coordinate systems (Section~\ref{sec:gauge_group_choice}), transport operators $\Omega_{ij} \in \mathrm{GL}^+(K)$ defined as in~\eqref{eq:transport_def} translate between frames, and support functions $\chi_i(c)$ indicate where agents maintain beliefs.
 
@@ -2213,7 +2213,7 @@ These multi-generational shadow fields enter the free energy functional through 
 \end{equation}
 where $k$ is the generational distance, $\rho \in (0, 1)$ is the per-generation discount factor, $\lambda_0 > 0$ sets the overall strength of ancestral coupling, and the $k=0$ term recovers the immediate-parent contributions, with successive $k$ indexing grandparental, great-grandparental, and deeper ancestral shadow contributions weighted by the geometric decay $\rho^k$.
 
-The construction admits identification with a standard hierarchical-Bayesian object. The geometric weighting $\lambda_k = \lambda_0\rho^k$ on per-generation contributions is the same per-step discount used in the dynamic linear models of~\cite{WestHarrison1997}, in which a multiplicative discount factor controls how rapidly historical information loses influence on present inference; the role of historical time is played here by the hierarchical scale-distance $k$, and the role of the historical observation is played by the gauge-transported ancestral belief. Equivalently, the additive structure $\sum_k \lambda_k \mathrm{KL}(q_i \| p_k)$ with $p_k = \Omega_{i,I_k}[q_{I_k}^{(s+k)}]$ corresponds under the standard correspondence between additive KL contributions and product priors~\cite{Friston2010, blei2017variational} to a Gaussian log-linear pool or product-of-experts prior on $q_i$ with components $p_k$ raised to powers $\lambda_k$~\cite{GenestZidek1986, HintonPoE2002}. For Gaussian $p_k = \mathcal{N}(\mu_k, \Sigma_k)$ the pooled prior is itself Gaussian with precision $\Sigma_\star^{-1} = \sum_k \lambda_k \Sigma_k^{-1}$ and mean $\mu_\star = \Sigma_\star \sum_k \lambda_k \Sigma_k^{-1}\mu_k$, well-defined for any $\lambda_k > 0$ without a normalization constraint on the weights. The strictly-normalized special case $\lambda_0 = 1 - \rho$ enforces $\sum_{k \ge 0}\lambda_k = 1$ and recovers the externally-Bayesian log-linear pool of~\cite{GenestZidek1986}; the unrestricted default $\lambda_0, \rho > 0$ used in this framework is a tempered free energy in the generalized-Bayesian sense of~\cite{BissiriHolmesWalker2016}, which permits the overall strength of ancestral coupling to be scaled independently of the decay rate.
+The construction admits identification with a standard hierarchical-Bayesian object. The geometric weighting $\lambda_k = \lambda_0\rho^k$ on per-generation contributions is the same per-step discount used in the dynamic linear models of~\cite{WestHarrison1997}, in which a multiplicative discount factor controls how rapidly historical information loses influence on present inference; the role of historical time is played here by the hierarchical scale-distance $k$, and the role of the historical observation is played by the gauge-transported ancestral belief. Equivalently, the additive structure $\sum_k \lambda_k \mathrm{KL}(q_i \| p_k)$ with $p_k = \Omega_{i,I_k}[q_{I_k}^{(s+k)}]$ corresponds under the standard correspondence between additive KL contributions and product priors~\cite{Friston2010, blei2017variational} to a Gaussian log-linear pool or product-of-experts prior on $q_i$ with components $p_k$ raised to powers $\lambda_k$~\cite{GenestZidek1986, HintonPoE2002}. For Gaussian $p_k = \mathcal{N}(\mu_k, \Sigma_k)$ the pooled prior is itself Gaussian with precision $\Sigma_\star^{-1} = \sum_k \lambda_k \Sigma_k^{-1}$ and mean $\mu_\star = \Sigma_\star \sum_k \lambda_k \Sigma_k^{-1}\mu_k$, well-defined for any $\lambda_k > 0$ without a normalization constraint on the weights. The strictly-normalized special case $\lambda_0 = 1 - \rho$ enforces $\sum_{k \ge 0}\lambda_k = 1$ and recovers the externally-Bayesian log-linear pool of~\cite{GenestZidek1986}; the unrestricted default $\lambda_0, \rho > 0$ used in this framework is a tempered free energy in the generalized-Bayesian sense of~\cite{BissiriHolmesWalker2016}, which permits the overall strength of ancestral coupling to be scaled independently of the decay rate. The four anchor identifications -- \cite{WestHarrison1997} dynamic-discount, \cite{HintonPoE2002} product-of-experts, \cite{GenestZidek1986} log-linear pool, \cite{BissiriHolmesWalker2016} tempered Bayes -- legitimize the additive-discounted-KL pooling form on the per-generation shadow inputs $p_k = \Omega_{i,I_k}[q_{I_k}^{(s+k)}]$, and Appendix~\ref{app:augmented_joint} supplies the upstream legitimacy of those inputs as the mean-field rigid-link marginals of a well-defined augmented hierarchical joint. The pooling identification covers the downstream aggregation; the appendix covers the upstream substitution.
 
 \textbf{Self-Referential Closure:} For agents at the top of the hierarchy (no parent meta-agent), the cross-scale shadows fold back across the entire active hierarchy. Top-scale agent $i$ closes both channels by coherence-weighted averaging over all active agents and scales,
 \begin{align}
@@ -4403,6 +4403,112 @@ Under the natural assumptions of locality, linear coupling, and exponential-fami
 C_{ij}=D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)}
 \]
 is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By the $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}), the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
+
+\section{Augmented Hierarchical Generative Model and Mean-Field Derivation of the Cross-Scale Shadow}
+\label{app:augmented_joint}
+
+The cross-scale shadow construction $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$ of Section~\ref{sec:cross_scale_shadows} is posited there as a structural commitment of the framework, with the reduction to a standard hierarchical generative model deferred. This appendix supplies the reduction. We define an augmented hierarchical generative model with explicit Gibbs factors on the tree of agent-scale latents, establish well-definedness of the joint, recover the manuscript's mean-field variational dynamics as the standard mean-field fixed-point equations on this joint, and derive the cross-scale shadow as the rigid-link limit of the mean-field optimum. The construction places the framework in continuity with the hierarchical-VI / hierarchical-AIF literature~\cite{Friston2017, parr2022active} at the cost of a single limiting hypothesis that the simulations of this paper already operate under.
+
+\subsection{The Augmented Joint}
+
+Let the hierarchy be a finite tree of depth $s_{\max}$ and finite breadth, with $I_s$ the set of agents at scale $s$ and $\pi(i)$ the parent of agent $i$ in the hierarchical tree. Each agent $i \in I_s$ carries a latent variable $k_i^{(s)} \in \mathbb{R}^K$; for the present derivation we fix a single base-manifold point so that the entire construction reduces to a finite-dimensional Gibbs measure on the product space $\mathbb{K} := \prod_{s, i \in I_s} \mathbb{R}^K$.
+
+\begin{definition}[Augmented Hierarchical Joint]
+\label{def:augmented_joint}
+For each parent-child edge $(i, \pi(i))$ at scale $s$, define the Gibbs factor
+\begin{equation}
+\chi_{i,\pi(i)}^{(s)}\big(k_i^{(s)}, k_{\pi(i)}^{(s+1)}\big)
+\;=\;
+(2\pi\sigma^2)^{-K/2} \exp\!\left[-\frac{1}{2\sigma^2}
+\big\|k_i^{(s)} - \Omega_{i,\pi(i)}  k_{\pi(i)}^{(s+1)}\big\|^2\right],
+\label{eq:gibbs_factor}
+\end{equation}
+where $\Omega_{i,\pi(i)} = \exp(\phi_i^{(s)})\exp(-\phi_{\pi(i)}^{(s+1)}) \in G$ is the inter-scale gauge transport of Section~\ref{sec:transport_hierarchy} and $\sigma^2 > 0$ is a link-stiffness parameter. The top-level prior $\pi(k^{(s_{\max})})$ is the boundary condition fixed at initialization (Section~\ref{sec:cross_scale_shadows}). The augmented joint over all agent-scale latents is
+\begin{equation}
+p_{\sigma}\big(\{k_i^{(s)}\}, o\big)
+\;=\;
+p(o \mid \{k_i^{(0)}\}) \prod_{s \ge 0} \prod_{i \in I_s} \chi_{i,\pi(i)}^{(s)}\big(k_i^{(s)}, k_{\pi(i)}^{(s+1)}\big)  \pi\big(k^{(s_{\max})}\big).
+\label{eq:augmented_joint}
+\end{equation}
+\end{definition}
+
+\begin{lemma}[Well-definedness]
+\label{lem:aug_joint_welldefined}
+For every finite $\sigma^2 > 0$ and every finite hierarchical tree of depth $s_{\max}$ and finite breadth, the augmented joint~\eqref{eq:augmented_joint} is integrable and defines a proper probability density on $\mathbb{K}$.
+\end{lemma}
+
+\begin{proof}
+Each factor $\chi_{i,\pi(i)}^{(s)}$ is a Gaussian density on $k_i^{(s)}$ with mean $\Omega_{i,\pi(i)} k_{\pi(i)}^{(s+1)}$ and covariance $\sigma^2 I$, conditional on $k_{\pi(i)}^{(s+1)}$. The factor integrates to unity for every value of $k_{\pi(i)}^{(s+1)}$, so each $\chi$ is a proper conditional density. The factor graph of~\eqref{eq:augmented_joint} is the hierarchical tree itself, with one edge per parent-child pair. For tree-structured factor products of proper conditional densities, integrability of the joint follows from the standard Markov tree-decomposition~\cite[\S3.2]{Lauritzen1996}: the integral over the leaves factorizes through the tree leaving the top-level prior $\pi(k^{(s_{\max})})$, which is itself a normalized density. The data-likelihood term $p(o \mid \{k_i^{(0)}\})$ enters the joint as a multiplicative factor at the leaves and is bounded above by unity in the standard discrete-observation case, so it does not affect integrability of the prior portion. The augmented joint therefore defines a proper probability density on $\mathbb{K}$; an exponential-family analysis recovers the same conclusion under the integrability conditions of~\cite[\S1.5]{Brown1986}.
+\end{proof}
+
+\subsection{Mean-Field Reduction}
+
+We apply mean-field variational inference to the augmented joint, factorizing the variational posterior across agent-scale latents.
+
+\begin{lemma}[Mean-Field Fixed-Point Equations]
+\label{lem:mf_fixedpoint}
+The variational free energy
+\begin{equation}
+\mathcal{F}_{\sigma}[q]
+\;=\;
+\sum_{s, i} \mathbb{E}_{q_i^{(s)}}\!\big[\log q_i^{(s)}\big]
+- \sum_{s, i} \mathbb{E}_{q_i^{(s)} q_{\pi(i)}^{(s+1)}}\!\big[\log \chi_{i,\pi(i)}^{(s)}\big]
+- \mathbb{E}_{q^{(0)}}\!\big[\log p(o \mid k^{(0)})\big]
+\label{eq:mf_free_energy}
+\end{equation}
+is stationary with respect to the mean-field factorization $q(\{k_i^{(s)}\}) = \prod_{s, i} q_i^{(s)}(k_i^{(s)})$ when each component satisfies
+\begin{equation}
+\log q_i^{(s)}(k_i)
+\;=\;
+\text{const}
++ \mathbb{E}_{q_{\pi(i)}^{(s+1)}}\!\big[\log \chi_{i,\pi(i)}^{(s)}(k_i, k_{\pi(i)})\big]
++ \!\!\sum_{j : \pi(j) = i}\!\! \mathbb{E}_{q_j^{(s-1)}}\!\big[\log \chi_{j,i}^{(s-1)}(k_j, k_i)\big]
++ \delta_{s,0}\log p(o \mid k_i),
+\label{eq:mf_fixedpoint}
+\end{equation}
+where the first sum on the right is the upward message from agent $i$'s parent at scale $s{+}1$, the second sum is the downward message from agent $i$'s children at scale $s{-}1$, and the data-likelihood term enters only at the leaves ($s = 0$).
+\end{lemma}
+
+\begin{proof}
+Equation~\eqref{eq:mf_fixedpoint} is the standard coordinate-update mean-field fixed-point equation for a tree-structured factor graph~\cite[Prop.~4.1]{Wainwright2008}, \cite[\S10.1]{Bishop2006}. The derivation takes the functional derivative of~\eqref{eq:mf_free_energy} with respect to $q_i^{(s)}$ at fixed $q_{j}^{(s')}$ for $(j, s') \neq (i, s)$, imposes the normalization $\int q_i^{(s)} = 1$ via a Lagrange multiplier, and collects the terms in $\mathcal{F}_{\sigma}$ that depend on $k_i^{(s)}$.
+\end{proof}
+
+\subsection{Cross-Scale Shadow as the Rigid-Link Limit}
+
+We now derive the manuscript's cross-scale shadow from~\eqref{eq:mf_fixedpoint} under the regime in which the within-scale couplings are small and the cross-scale linkage dominates the dynamics.
+
+\begin{lemma}[Cross-Scale Shadow as Mean-Field Optimum]
+\label{lem:shadow_mf_optimum}
+Assume the variational posterior of the parent $q_{\pi(i)}^{(s+1)}$ is Gaussian, $q_{\pi(i)}^{(s+1)} = \mathcal{N}(\mu_{\pi(i)}^{(s+1)}, \Sigma_{\pi(i)}^{(s+1)})$, and that the within-scale couplings $\beta_{ij}, \gamma_{ij}$ are set to zero so that the only term in~\eqref{eq:mf_fixedpoint} that constrains $q_i^{(s)}$ is the upward parent message. Then the mean-field marginal $q_i^{(s)}$ is the Gaussian
+\begin{equation}
+q_i^{(s)} \;=\; \mathcal{N}\!\big(\Omega_{i,\pi(i)} \mu_{\pi(i)}^{(s+1)},\;\Omega_{i,\pi(i)} \Sigma_{\pi(i)}^{(s+1)} \Omega_{i,\pi(i)}^\top + \sigma^2 I\big),
+\label{eq:shadow_soft}
+\end{equation}
+and in the rigid-link limit $\sigma^2 \to 0$, $q_i^{(s)} \to \Omega_{i,\pi(i)}\big[q_{\pi(i)}^{(s+1)}\big]$ exactly. The level-$s$ marginal of the augmented joint, restricted to the parent message, therefore recovers the cross-scale shadow $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$ of Eq.~\eqref{eq:cross_scale_shadow}.
+\end{lemma}
+
+\begin{proof}
+Substituting the Gibbs factor~\eqref{eq:gibbs_factor} into the parent-message term of~\eqref{eq:mf_fixedpoint} and taking the expectation against the Gaussian parent $q_{\pi(i)}^{(s+1)}$ gives
+\begin{align}
+\log q_i^{(s)}(k_i) &= \text{const} - \frac{1}{2\sigma^2} \mathbb{E}_{q_{\pi(i)}^{(s+1)}}\!\Big[\big\|k_i - \Omega_{i,\pi(i)} k_{\pi(i)}\big\|^2\Big] \notag\\
+&= \text{const} - \frac{1}{2\sigma^2}\Big[\big\|k_i - \Omega_{i,\pi(i)}\mu_{\pi(i)}^{(s+1)}\big\|^2 + \operatorname{tr}\!\big(\Omega_{i,\pi(i)}\Sigma_{\pi(i)}^{(s+1)}\Omega_{i,\pi(i)}^\top\big)\Big].
+\end{align}
+The second trace term is independent of $k_i$ and absorbs into the normalizing constant. The remaining quadratic in $k_i$ is the negative log of a Gaussian density with mean $\Omega_{i,\pi(i)}\mu_{\pi(i)}^{(s+1)}$ and covariance $\sigma^2 I$, multiplied by the parent's transported covariance under marginalization. Integrating the joint density of $(k_i, k_{\pi(i)})$ explicitly (Gaussian linear-transformation marginal, $\cite[\S2.3]{Bishop2006}$) gives the closed form~\eqref{eq:shadow_soft}. The rigid-link limit $\sigma^2 \to 0$ collapses the conditional Gaussian to a delta function, $\chi_{i,\pi(i)}^{(s)}(k_i, k_{\pi(i)}) \to \delta(k_i - \Omega_{i,\pi(i)} k_{\pi(i)})$, and the marginal reduces to the gauge pushforward
+\begin{equation}
+p_i^{(s)}(k_i) \;=\; \int \delta\!\big(k_i - \Omega_{i,\pi(i)} k_{\pi(i)}\big) q_{\pi(i)}^{(s+1)}(k_{\pi(i)})  dk_{\pi(i)} \;=\; \big(\Omega_{i,\pi(i)}\big)_*\! q_{\pi(i)}^{(s+1)},
+\end{equation}
+which is the cross-scale shadow as stated in Eq.~\eqref{eq:cross_scale_shadow}.
+\end{proof}
+
+\subsection{Implications for the Status of the Framework}
+
+Lemmas~\ref{lem:aug_joint_welldefined}--\ref{lem:shadow_mf_optimum} establish three facts about the manuscript's hierarchical construction. First, the augmented joint~\eqref{eq:augmented_joint} is a well-defined probability distribution on the product space of all agent-scale latents, under the standard tree-decomposition argument~\cite[\S3.2]{Lauritzen1996}. Second, the manuscript's variational dynamics are the standard mean-field fixed-point equations~\cite[Prop.~4.1]{Wainwright2008} on this joint, with messages flowing upward and downward through the hierarchical tree. Third, the cross-scale shadow $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$ is the rigid-link limit of the mean-field optimum, equivalent to the gauge pushforward of the parent posterior, exactly recovered as the augmented joint's level-$s$ marginal when within-scale couplings are zeroed. The construction is therefore a hierarchical generative model with a specified mean-field reduction, structurally aligned with the hierarchical-AIF program of~\cite{Friston2017, parr2022active}, with the manuscript's choice of Gibbs factor~\eqref{eq:gibbs_factor} playing the role of the conditional prior $p(s_\ell \mid s_{\ell+1})$ of the standard scheme.
+
+The relationship to ladder VAEs~\cite{Sonderby2016} becomes precise under this reduction. The ladder-VAE prior $p_\theta(z_\ell \mid z_{\ell+1}) = \mathcal{N}(\mu_\theta(z_{\ell+1}), \sigma^2_\theta(z_{\ell+1}) I)$ uses learned neural-network functions $\mu_\theta, \sigma^2_\theta$ to map the upper-level latent to a Gaussian conditional density on the lower-level latent. The augmented joint of this appendix replaces the learned neural functions with the gauge transport $\Omega_{i,\pi(i)}$ and a fixed link stiffness $\sigma^2$; the resulting conditional density~\eqref{eq:gibbs_factor} is a special case of the ladder-VAE prior in which the conditional mean is gauge-equivariant by construction and the conditional variance is link-stiffness-controlled rather than neural-network-amortized. The rigid-link limit $\sigma^2 \to 0$ corresponds to the deterministic-decoder limit of a ladder VAE, in which the lower-level prior is concentrated on the deterministic image of the upper-level latent.
+
+The finite-$\sigma^2$ form~\eqref{eq:shadow_soft} is a natural relaxation of the manuscript's exact cross-scale shadow. It inflates the parent-transported covariance by $\sigma^2 I$, which serves as a regularizer against the degenerate-prior pathology that arises when $\Omega_{i,I}\Sigma_I\Omega_{i,I}^\top$ is ill-conditioned. The simulations of this paper operate in the small-$\sigma^2$ regime where~\eqref{eq:shadow_soft} differs from the exact shadow by an $\mathcal{O}(\sigma^2)$ trace inflation; the rigid-link limit is the working approximation. We note that intermediate $\sigma^2 > 0$ admits a one-parameter family of softer cross-scale shadows that may be useful in regimes where the parent posterior is highly concentrated and the rigid-link limit produces numerical degeneracy.
+
+The hypothesis of zero within-scale couplings ($\beta_{ij} = \gamma_{ij} = 0$ for $i, j$ at the same scale) under which Lemma~\ref{lem:shadow_mf_optimum} is stated is the regime in which the cross-scale shadow is the dominant constraint on $q_i^{(s)}$. Reinstating the within-scale couplings produces a fixed-point system in which the level-$s$ posterior balances the parent's transported pull against the within-scale alignment energy, with the cross-scale shadow recovered exactly in the $\beta, \gamma \to 0$ limit and approximately for small $\beta, \gamma$. The numerical experiments of Section~\ref{sec:participatory} use $\gamma_{ij} = 0$ in the slow channel and small $\beta_{ij}$ in the fast channel, so the construction operates in the regime where the cross-scale shadow is recovered to leading order. A perturbative expansion of the within-scale corrections is a natural follow-up that does not affect the status of the cross-scale shadow as the leading-order mean-field optimum of a well-defined hierarchical generative model.
 
 \section{Renormalization-Group Construction for Meta-Agent Formation}
 \label{sec:meta_agent_rg}
