@@ -679,7 +679,7 @@ The first term regularizes beliefs toward the prior and the second couples belie
 \subsection{Deriving Attention from a Mixture-of-Sources Model}
 \label{sec:mixture_derivation}
 
-We will derive the agent-agent interaction terms and their softmax attention weights from first principles by formulating each agent's inference as a source selection over their gauge-transported neighbors.
+We construct the agent-agent interaction terms and their softmax attention weights by positing each agent's local inference problem as an entropy-regularized soft-assignment functional over its gauge-transported neighbors, in the style of \citet{Cuturi2013}. The alignment free energy below is engineered to make the softmax form of $\beta$ its exact KKT stationary point on the probability simplex, following the standard treatment of \citet{Boyd2004}.
 
 \subsubsection{Mixture-of-Sources Generative Model}
 
@@ -694,7 +694,7 @@ where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the
 
 This construction leads to a generative model consistent with our required gauge structure. Agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of what agent $j$ believes, as seen by agent $i$. The categorical variable $z$ endows the model with probabilistic source selection whereby attention is considered as posterior inference over which neighbor generated agent $i$'s state.
 
-To clarify, the component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors $q_j$ of other agents, making the generative model itself a function of variational quantities. This construction can be understood via two complementary points. First, as an augmented model whereby the full system has a joint generative model over all agents' latent states, and the pairwise KL terms emerge as variational couplings in the mean-field decomposition of the joint ELBO. Second, as a consensus energy whereby the alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ can be viewed as an engineered energy functional that penalizes belief disagreement after gauge transport, motivated by the KL term of a fixed generative model. In either framing, the resulting update equations are the same. At the fixed point of the joint optimization (over all $\{q_i\}$ simultaneously), the pairwise objectives are mutually consistent.
+The component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors of other agents and are held fixed during the inner minimization over $(q_i, \beta)$, with the $\{q_j\}_{j\neq i}$ updated by the variational steps of the other agents on a slower cycle. The alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ is therefore an engineered consensus functional that penalizes belief disagreement after gauge transport, with the entropy term $\tau \beta_{ij}\log(\beta_{ij}/\pi_j)$ added to make the softmax form of $\beta$ its exact stationary point on the simplex \citep{Cuturi2013, Boyd2004}. At the joint fixed point over all $\{q_i\}$, the pairwise objectives are mutually consistent.
 
 \subsubsection{Variational Posterior}
 
@@ -731,7 +731,7 @@ Therefore, we may define an alignment energy $E_{ij} \equiv D_{\mathrm{KL}}[q_i 
 \label{eq:mixture_energy_entropy}
 \end{equation}
 
-This has the usual "energy minus entropy" form $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
+This has the usual "energy minus entropy" form $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \langle -\log \pi \rangle_\beta$, where $H(\beta) = -\sum_j \beta_{ij}\log\beta_{ij}$ is the entropy of the attention distribution. Under the uniform prior $\pi_j = 1/N$ the last term reduces to the constant $\log N$; under non-uniform $\pi$ it enters the softmax solution as a prior bias on the logits, as Eq.~\eqref{eq:mixture_softmax_general} below makes explicit.
 
 \subsubsection{Minimization and the Softmax Solution}
 
@@ -740,6 +740,8 @@ Next, we minimize $\mathcal{F}_{\text{align}}$ with respect to $\beta_{ij}$ subj
 \begin{equation}
 \mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
 \end{equation}
+
+The functional $f(\beta) = \sum_j \beta_{ij}(E_{ij} + \log\beta_{ij} - \log\pi_j)$ is strictly convex on the open simplex: its Hessian is the diagonal matrix $\mathrm{diag}(1/\beta_k)$ with strictly positive entries. The inequality constraints $\beta_j \geq 0$ are non-binding at any interior stationary point because $\log\beta_k \to -\infty$ at the boundary, so the interior KKT system reduces to the equality-Lagrangian above and any solution to it is the unique global minimum \citep{Boyd2004, Wainwright2008}.
 
 Requiring $\partial \mathcal{L} / \partial \beta_{ik} = 0$ produces:
 
@@ -1320,19 +1322,21 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 \subsubsection{Complete Attention Formula}
 
-Under our assumptions, framework, and limits, our gauge-theoretic message communication:
+Standard scaled dot-product attention is recovered under three preconditions established in the preceding paragraphs: constant gauge $\Omega_{ij} = \Omega$ for all agent pairs, isotropic covariance $\Sigma_i = \sigma^2 I$ with the joint factor $\sigma^{-2}\Omega^{-\top}$ absorbed into the learned projections so that $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$, and key-norm constancy supplied either by layer normalization or by high-dimensional concentration of $\|\mu_j\|^2$. The first two preconditions are exact algebraic specializations of the general framework: constant gauge renders the geometric bias $S(\Omega)$ pair-independent and cancels it under softmax shift invariance, and the $\sigma^{-2}\Omega^{-\top}$ absorption is a literal change of parameterization rather than an analytic $\sigma \to 0$ limit. The third precondition is the chain's one approximate step, recorded with $\approx$ at the layer-normalization equation derived above; it is an exact softmax-shift cancellation only when key-norm fluctuations across the keys vanish, and approximate otherwise.
+
+Under these three preconditions, the gauge-theoretic message communication
 
 \begin{equation}
 \beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad \hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
 
-reduces to:
+reduces to
 
 \begin{equation}
-\boxed{\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V}.
+\boxed{\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V},
 \end{equation}
 
-This is the canonical dot-product attention mechanism in transformers.
+the canonical scaled dot-product attention of \citet{vaswani2017attention}. The gauge identification operates on the invertible $\mathrm{GL}(d_{\text{head}})$ head-space factor $M_h^a$ of the rectangular per-head projections (Eq.~\eqref{eq:head_space_kernel}); the ambient transformer kernel $W_Q^a (W_K^a)^\top$, of rank at most $d_{\text{head}}$, is the low-rank lift of this head-space kernel through the isometric subspace embeddings $U_Q^a, U_K^a$.
 
 The limits are deliberately aggressive. They collapse the statistical manifold into a basic Euclidean space and absorb the gauge parameters into the learned matrices. 
 
