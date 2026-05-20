@@ -1,0 +1,54 @@
+# Blue Rebuttal — ffn-softmax-gradient-correction
+
+## Concession
+
+I concede sub-claim A in the form the user stated it. Red is correct on the canonical form of the envelope theorem ([Milgrom-Segal 2002, Econometrica 70:583–601, Theorem 1]; [Boyd-Vandenberghe 2004 §5.5.4]): the envelope identity is pointwise in the parameter of the outer problem, not a statement that holds only at joint stationarity. The hypothesis is block-stationarity of the eliminated variable for the *current* outer parameter, not joint stationarity of both. Coordinate-ascent VB ([Wainwright-Jordan 2008 §3.2]; [Bishop 2006 §10.1.1]) constructs exactly this sequence of block-stationary iterates: each `q_i^{(t+1)}` is by definition the stationary point of `F` in the `i`-th block for the current `{q_{j≠i}}`. Applied to the user's framework: at every inner-loop step `t`, `β_t := softmax(-KL(μ_t)/τ)` is the unique stationary point of the row-Lagrangian `F_align(β; μ_t) = Σ_j β_j E_{ij}(μ_t) + τ Σ_j β_j log(β_j/π_j)` on the simplex (the row Lagrangian is strictly convex in β over the simplex; KKT gives a single interior fixed point). The envelope hypothesis `∂F/∂β|_{β=β_t} = 0` therefore holds at every iterate by construction. The user's framing "envelope theorem is exact only at the joint stationary point `(μ*, β*(μ*))`" conflates joint stationarity (where both `μ` and `β` are at their fixed points) with partial stationarity in `β` for the current `μ_t`. The envelope theorem only requires the latter.
+
+I also concede that the boxed Eq. (eq:vfe_glu, `Attention/GL(K)_attention.tex:1903`) is a structural factorization of `β_ij · e_ij` as gate × residual that does not require `β` to be at any particular point. The derivation chain from Eq. (eq:glu_message) at line 1888 to Eq. (eq:vfe_glu) at line 1903 reads `Δμ_i|_j = -η̃ Σ_i β_ij (Ω_ij Σ_j Ω_ij^⊤)^{-1} e_ij` and rewrites this with the explicit softmax form of `β_ij`; no envelope step is invoked. The "softmax-gradient correction" parenthetical at line 1938 *labels* the correction term's status under `F_red` versus autograd; it does not justify the GLU identification. Sub-claim B as stated — that §5.3 uses the envelope theorem to identify the GLU form — is a misreading of the derivation.
+
+## Core attack
+
+Red's position is correct on the envelope geometry and on the structural status of Eq. (eq:vfe_glu), but it has one weakness worth pressing: red's framing that "the manuscript already integrates the correction into the per-iteration FFN map" (red opening, evidence bullet 4) overstates what lines 1947 and 1949–1950 actually accomplish.
+
+Line 1947 reads "the composition of these channels within each VFE iteration produces a richer non-linear map than any single channel alone." Line 1949–1950 reads "Each iteration applies the GLU map [eq:vfe_glu] composed with the softmax-gradient correction [eq:softmax_gradient_nonlinearity]." These are textual statements of composition, but the manuscript does not write down the composed map. The boxed equation at line 1903 — the only displayed equation labeled as "the FFN nonlinearity" — is the GLU alone. Eq. (eq:softmax_gradient_nonlinearity) at line 1941 displays only `∂β_ij/∂μ_i`, not its product `(∂β_ij/∂μ_i) E_{ij}` with the energy that produces the centered-covariance contribution to the μ-update. The reader who wants the explicit per-iteration map of the form
+
+`∇_{μ_i} ⟨E⟩_{β_t} = Σ_j β_{ij}(t) ∂E_{ij}/∂μ_i + Σ_j (∂β_{ij}(t)/∂μ_i) E_{ij} = Σ_j β_{ij}(t) ∂E_{ij}/∂μ_i - τ^{-1} Cov_{β_t}(E_{ij}, ∂E_{ij}/∂μ_i)`
+
+— which is the actual gradient field the autograd-convention dynamics descend at iterate `t`, and the object red claims is "what §5.3 identifies as the FFN" — must reconstruct it from §4.7 (Eq. eq:autograd_envelope_gap at line 870) and the parenthetical at line 1938. The reader cannot read it off §5.3 directly. This is the kernel of truth in the user's intuition: the §5.3 *narrative* presents the GLU as headline (boxed) and the correction as an "additional" non-linearity (paragraph-level, with only the `∂β/∂μ` term displayed, not the product `(∂β/∂μ) E`). The mathematics is all present; the editorial framing makes the GLU look load-bearing and the correction look auxiliary, when both terms enter the autograd μ-gradient at the same order.
+
+The decisive code citation: `transformer/vfe/e_step.py:1883` — `beta_d_in_graph = beta_g.detach()  # envelope at softmax fixed pt`. The trainer's autograd path explicitly *detaches* β to enforce the envelope-form gradient computationally. This is the same envelope-theorem move applied in code: the trainer drops the `(∂β/∂μ) E` term that line 1947 says is part of the per-iteration FFN map. If the manuscript's claim is that the FFN is the GLU composed with the softmax-gradient correction, the canonical trainer at `e_step.py:1883` is inconsistent with that claim — it descends the envelope-form gradient (only the gate-times-residual term), not the autograd composite. The manuscript at line 874 says "we adopt the [autograd] convention in the gradient expressions and algorithm below," but the code at `e_step.py:1883` adopts the envelope convention. Whichever is the truth, line 1947's "composition produces a richer non-linear map" is either incomplete (if the code is canonical) or unimplemented (if the manuscript is canonical).
+
+## Defense
+
+The salvageable load-bearing piece of the user's claim, after conceding sub-claim A and most of sub-claim B, is the following weaker statement, which the manuscript's own §4.7 supports verbatim and which red did not contest:
+
+**The joint trajectory of `(μ_t, β_t)` under autograd-form descent on `⟨E⟩_{β*(μ)}` differs off-equilibrium from the joint trajectory under reduced-form descent on `F_red(μ)` by exactly `-τ^{-1} Cov_{β*}(E_{ij}, ∂E_{ij}/∂μ_i)` at every iterate `t`, and the two coincide only at the joint stationary point.**
+
+Citation: `Attention/GL(K)_attention.tex:868–874`, Eq. (eq:autograd_envelope_gap), with the manuscript's own text at line 874: "The two objectives therefore share critical points only where this covariance vanishes; this holds at the joint stationary point of `F_red` in `x` and in the high-temperature limit `τ → ∞`, but not generically off-equilibrium." And at line 973: "the two vector fields coincide at joint stationary points and differ off-equilibrium by the softmax-gradient nonlinearity."
+
+This statement is the user's intuition restated correctly. The misstatement is the framing "envelope theorem applies only at joint stationarity" — what is actually true is the consequence: the two μ-update vector fields (envelope-form and autograd-form) coincide only at joint stationarity. The envelope theorem itself applies pointwise in `μ` at every iterate (red's concession), but its *consequence for the joint dynamics* — that ∇F_red and ∇⟨E⟩_{β*} are different vector fields off-equilibrium — is exactly the user's claim, and is asserted verbatim by the manuscript at line 874 and line 973.
+
+The defensible piece of sub-claim B is then: the §5.3 derivation, taken in isolation from §4.7, presents the GLU as the headline FFN map (line 1903, boxed) and the centered-covariance correction as paragraph-level "additional" non-linearity (line 1941, displayed equation is `∂β/∂μ`, not the full autograd μ-gradient). A reader who arrives at §5.3 with the envelope theorem in hand and stops at the boxed equation — which is what the editorial structure invites — will identify the FFN with the GLU. The full autograd μ-gradient as the composition of GLU + centered-covariance correction is asserted in text at lines 1947, 1949–1950, but it is not displayed. A more careful presentation would either (i) display the composed map `Σ_j β_{ij}(t) ∂E_{ij}/∂μ_i - τ^{-1} Cov_{β_t}(E_{ij}, ∂E_{ij}/∂μ_i)` as the boxed FFN map, with the GLU and centered-covariance correction read off as the two terms; or (ii) box the GLU as the envelope-form FFN map and label the correction explicitly as the autograd-extension term, citing §4.7 (eq:autograd_envelope_gap) inline.
+
+This is the calibrated form of the user's intuition: the mathematics is in the manuscript (split across §4.7 and §5.3), but the §5.3 *presentation* invites the reader to conflate the GLU with the autograd-convention FFN map. The "more careful formulation" the user asked for is editorial, not mathematical — but the editorial gap is real, and the boxed equation at line 1903 is the artifact that creates it.
+
+## Falsification of this weaker claim
+
+The weaker blue position is wrong if any of the following can be cited:
+
+1. A displayed equation between `Attention/GL(K)_attention.tex:1878` and line 1950 that writes the full autograd-convention μ-update `Σ_j β_{ij}(t) ∂E_{ij}/∂μ_i + Σ_j (∂β_{ij}(t)/∂μ_i) E_{ij}` as the per-iteration FFN map. Eq. (eq:vfe_glu) at line 1903 is the GLU alone; Eq. (eq:softmax_gradient_nonlinearity) at line 1941 is `∂β/∂μ` alone. If a displayed composite map exists in §5.3, the editorial-gap claim is false.
+
+2. A demonstration that `transformer/vfe/e_step.py:1883` (`beta_d_in_graph = beta_g.detach()  # envelope at softmax fixed pt`) does not in fact drop the `(∂β/∂μ) E` term from the autograd μ-gradient — i.e., that the trainer descends the autograd-convention gradient as the manuscript claims at line 874. If the code-level inconsistency between line 874 ("we adopt the autograd convention") and the detach at `e_step.py:1883` is illusory, the editorial-gap claim still stands at the manuscript level but loses its code-level reinforcement.
+
+3. A canonical reference establishing that the envelope-form μ-gradient `∇F_red(μ)` and the autograd-form `∇⟨E⟩_{β*(μ)}(μ)` are equal off the joint stationary point. [Milgrom-Segal 2002 Theorem 1] establishes the pointwise envelope identity for `dV/dx` at the eliminated-variable's stationary point, but does not establish equality of the *full chain-rule gradient* with `∂F/∂x|_{β*}`. The two differ by the centered-covariance term exactly when `∂F/∂β ≠ 0`-weighted contributions vanish, which by the envelope theorem they do at the block-stationary β — leaving the product-rule extra term `(∂β*/∂x) E` to be the centered covariance (Eq. eq:autograd_envelope_gap at line 870). If a canonical reference contradicts this, the entire user-intuition claim collapses.
+
+Sources:
+- [Milgrom-Segal 2002, "Envelope Theorems for Arbitrary Choice Sets", Econometrica 70:583–601, Theorem 1]
+- [Boyd-Vandenberghe 2004 §5.5.4 "Sensitivity Analysis via the Dual"]
+- [Wainwright-Jordan 2008 §3.2, coordinate-ascent VB]
+- [Bishop 2006 §10.1.1, mean-field VB]
+- `Attention/GL(K)_attention.tex:859-874` (§4.7 envelope-vs-autograd)
+- `Attention/GL(K)_attention.tex:967-973` (§5 belief dynamics adopting autograd form)
+- `Attention/GL(K)_attention.tex:1878-1950` (§5.3 FFN derivation)
+- `transformer/vfe/e_step.py:1883` (envelope-form detach in trainer)
+- `transformer/vfe/e_step.py:899-905` (lambda_softmax=0 envelope branch)
