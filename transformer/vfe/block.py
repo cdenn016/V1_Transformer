@@ -16,7 +16,6 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
-    from transformer.vfe.stack import ActiveInferenceFn
 
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, CenteredMahalanobisNorm, RMSNorm
@@ -159,7 +158,6 @@ class VFEBlock(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: "Optional[ActiveInferenceFn]" = None,
     ) -> BeliefState:
         """Forward pass: E-step + normalization.
 
@@ -167,12 +165,11 @@ class VFEBlock(nn.Module):
             beliefs: Current beliefs ``(mu, sigma, phi)``.
             priors: Layer priors ``(mu_p, sigma_p, phi_p)``.
             mask: ``(B, N, N)`` causal mask.
-            active_inference_fn: Optional callback for active inference gradients.
 
         Returns:
             Updated BeliefState.
         """
-        beliefs = self.e_step(beliefs, priors, mask, active_inference_fn)
+        beliefs = self.e_step(beliefs, priors, mask)
 
         # Head mixer (optional, opt-in). Applies (μ, Σ) ↦ (Mμ, MΣM^T) per type.
         # Skipped when disabled; mixer.is_identity() short-circuit isn't used

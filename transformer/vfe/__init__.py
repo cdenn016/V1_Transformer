@@ -14,7 +14,6 @@ from transformer.vfe.e_step import VFEEStep
 from transformer.vfe.block import VFEBlock
 from transformer.vfe.stack import VFEStack
 from transformer.vfe.model import VFEModel
-from transformer.vfe.active_inference import VFEActiveInference
 from transformer.vfe.efe import VFEExpectedFreeEnergy
 from transformer.vfe.trainer import VFETrainer
 
@@ -27,7 +26,6 @@ __all__ = [
     'VFEBlock',
     'VFEStack',
     'VFEModel',
-    'VFEActiveInference',
     'VFEExpectedFreeEnergy',
     'VFETrainer',
 ]

@@ -36,7 +36,7 @@ desired) to recover the canonical scheme.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -46,14 +46,6 @@ if TYPE_CHECKING:
 
 from transformer.core.types import BeliefState
 from transformer.vfe.block import VFEBlock
-
-# Active-inference callback signature: takes the current (μ, Σ) and
-# returns optional (Δμ, ΔΣ) corrections. Concrete implementation is
-# `VFEActiveInference.forward` (transformer/vfe/active_inference.py).
-ActiveInferenceFn = Callable[
-    [torch.Tensor, torch.Tensor],
-    Tuple[Optional[torch.Tensor], Optional[torch.Tensor]],
-]
 
 
 class VFEStack(nn.Module):
@@ -78,7 +70,6 @@ class VFEStack(nn.Module):
         beliefs: BeliefState,
         initial_priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: Optional[ActiveInferenceFn] = None,
     ) -> BeliefState:
         r"""Forward through all blocks with cross-layer prior handoff.
 
@@ -94,7 +85,6 @@ class VFEStack(nn.Module):
             initial_priors: Same as beliefs at layer 0. Sigma and phi from
                 this are frozen across all layers.
             mask: ``(B, N, N)`` causal mask.
-            active_inference_fn: Optional callback for active inference.
 
         Returns:
             Final beliefs after all L layers.
@@ -102,7 +92,7 @@ class VFEStack(nn.Module):
         priors = initial_priors
 
         for block in self.blocks:
-            beliefs = block(beliefs, priors, mask, active_inference_fn)
+            beliefs = block(beliefs, priors, mask)
 
             # Cross-layer prior handoff (Section 7):
             # Full (μ, Σ, φ) handoff with per-component damping

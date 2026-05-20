@@ -78,7 +78,6 @@ import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
-    from transformer.vfe.stack import ActiveInferenceFn
 
 from transformer.core.types import BeliefState
 from transformer.core.vfe_gradients import (
@@ -727,7 +726,6 @@ class VFEEStep(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor] = None,
-        active_inference_fn: "Optional[ActiveInferenceFn]" = None,
     ) -> BeliefState:
         r"""Run the iterative E-step.
 
@@ -738,7 +736,6 @@ class VFEEStep(nn.Module):
             beliefs: Current Gaussian beliefs :math:`(\mu, \Sigma, \phi)`.
             priors: Layer priors :math:`(\mu_p, \Sigma_p, \phi_p)`.
             mask: ``(B, N, N)`` causal mask.
-            active_inference_fn: Optional callback ``(mu, sigma) -> (grad_mu, grad_sigma)``.
 
         Returns:
             Updated BeliefState after E-step convergence.
@@ -775,9 +772,7 @@ class VFEEStep(nn.Module):
         # Dispatch to the omega-direct iteration when the gauge state is
         # group-level. Keeps the φ-mode loop below unchanged.
         if self.gauge_parameterization == 'omega_direct':
-            return self._forward_omega_direct(
-                beliefs, priors, mask, active_inference_fn,
-            )
+            return self._forward_omega_direct(beliefs, priors, mask)
 
         mu = beliefs.mu
         sigma = beliefs.sigma
@@ -1160,14 +1155,6 @@ class VFEEStep(nn.Module):
                         iter_idx=t,
                         label="E-step",
                     )
-
-            # 3. Optional: add active inference gradients
-            if active_inference_fn is not None:
-                ai_grad_mu, ai_grad_sigma = active_inference_fn(mu, sigma)
-                if ai_grad_mu is not None:
-                    grad_mu = grad_mu + ai_grad_mu
-                if ai_grad_sigma is not None:
-                    grad_sigma = grad_sigma + ai_grad_sigma
 
             # 4. Natural gradient projection
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
@@ -1996,7 +1983,6 @@ class VFEEStep(nn.Module):
         beliefs: BeliefState,
         priors: BeliefState,
         mask: Optional[torch.Tensor],
-        active_inference_fn: "Optional[ActiveInferenceFn]",
     ) -> BeliefState:
         # Same guard as _compute_mu_sigma_grad_autograd: the omega-direct
         # path reconstructs standard KL and would silently drop the Rényi α.
@@ -2203,14 +2189,6 @@ class VFEEStep(nn.Module):
                         iter_idx=t,
                         label="E-step (omega-direct)",
                     )
-
-            # 4. Active inference (callback returns Euclidean grads on μ, σ).
-            if active_inference_fn is not None:
-                ai_grad_mu, ai_grad_sigma = active_inference_fn(mu, sigma)
-                if ai_grad_mu is not None:
-                    grad_mu = grad_mu + ai_grad_mu
-                if ai_grad_sigma is not None:
-                    grad_sigma = grad_sigma + ai_grad_sigma
 
             # 5. Natural gradient projection for (μ, σ).
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
