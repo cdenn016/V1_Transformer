@@ -30,7 +30,12 @@ from transformer.aif.preferences import (
     TaskConditionedPreference,
     build_preference,
 )
-from transformer.aif.tree_search import beam_expand, _build_extended_context
+from transformer.aif.tree_search import (
+    _backprop_V,
+    _build_extended_context,
+    _make_aggregator,
+    beam_expand,
+)
 from transformer.core.types import BeliefState
 from transformer.vfe.config import VFEConfig
 from transformer.vfe.model import VFEModel
@@ -112,12 +117,13 @@ class TestAIFConfig:
                 preference_path=log_pref_path,
             )
 
-    def test_rejects_sophisticated_branching(self, log_pref_path):
-        with pytest.raises(NotImplementedError, match='sophisticated'):
-            AIFConfig(
-                branching_strategy='sophisticated',
-                preference_path=log_pref_path,
-            )
+    def test_accepts_sophisticated_branching(self, log_pref_path):
+        """Phase 3 accepts the sophisticated-inference branching strategy."""
+        cfg = AIFConfig(
+            branching_strategy='sophisticated',
+            preference_path=log_pref_path,
+        )
+        assert cfg.branching_strategy == 'sophisticated'
 
     def test_requires_preference_path_for_empirical_marginal(self):
         with pytest.raises(ValueError, match='preference_path'):
@@ -665,3 +671,228 @@ class TestBuildExtendedContext:
         out = _build_extended_context(prompt, action_seq=(6, 7, 8), max_seq_len=5)
         # Expected: trailing 5 tokens = [4, 5, 6, 7, 8].
         assert torch.equal(out, torch.tensor([[4, 5, 6, 7, 8]]))
+
+
+# ---------------------------------------------------------------------------
+# 13. Phase 3: _make_aggregator (canonical recursive back-propagation)
+# ---------------------------------------------------------------------------
+
+class TestMakeAggregator:
+    """Verifies the aggregator dispatch and limit behavior of the
+    softmax-weighted child posterior used by sophisticated inference."""
+
+    def test_beam_aggregator_is_mean(self):
+        agg = _make_aggregator('beam', gamma=1.0)
+        assert agg([1.0, 2.0, 3.0]) == pytest.approx(2.0)
+        assert agg([5.0, 5.0]) == pytest.approx(5.0)
+
+    def test_top_k_aggregator_is_also_mean(self):
+        agg = _make_aggregator('top_k', gamma=1.0)
+        assert agg([1.0, 2.0, 3.0]) == pytest.approx(2.0)
+
+    def test_sophisticated_at_small_gamma_matches_mean(self):
+        """gamma → 0 limit: softmax approaches uniform, expectation → mean."""
+        agg = _make_aggregator('sophisticated', gamma=1e-8)
+        values = [1.0, 2.0, 3.0, 4.0]
+        assert agg(values) == pytest.approx(sum(values) / len(values), abs=1e-6)
+
+    def test_sophisticated_at_large_gamma_matches_argmin(self):
+        """gamma → ∞ limit: q concentrates on argmin V; expectation → min."""
+        agg = _make_aggregator('sophisticated', gamma=1e6)
+        values = [3.0, 1.0, 5.0, 2.0]
+        # min(values) = 1.0; under -gamma * V softmax the lowest V dominates.
+        assert agg(values) == pytest.approx(min(values), abs=1e-3)
+
+    def test_sophisticated_intermediate_gamma_between_mean_and_min(self):
+        """At intermediate gamma, the aggregated value sits between min and mean."""
+        values = [1.0, 2.0, 3.0, 4.0]
+        agg = _make_aggregator('sophisticated', gamma=1.0)
+        result = agg(values)
+        mean_val = sum(values) / len(values)
+        min_val = min(values)
+        assert min_val <= result <= mean_val
+
+    def test_sophisticated_empty_returns_zero(self):
+        """Defensive: empty child list returns 0 (no expansion to aggregate)."""
+        agg = _make_aggregator('sophisticated', gamma=1.0)
+        assert agg([]) == 0.0
+        agg_mean = _make_aggregator('beam', gamma=1.0)
+        assert agg_mean([]) == 0.0
+
+    def test_unknown_strategy_raises(self):
+        with pytest.raises(ValueError, match='unknown branching_strategy'):
+            _make_aggregator('garbage', gamma=1.0)
+
+
+# ---------------------------------------------------------------------------
+# 14. Phase 3: sophisticated-inference recursion via beam_expand
+# ---------------------------------------------------------------------------
+
+class TestSophisticatedExpand:
+
+    def test_sophisticated_at_d1_matches_beam_at_d1(self, model, log_pref_path):
+        """At horizon_D=1 there are no internal nodes — both strategies
+        produce the same root children (V = G_local at the leaf-root-child)."""
+        prompt = torch.randint(0, model.cfg.vocab_size, (1, 5))
+        pref = EmpiricalMarginalPreference.from_path(log_pref_path)
+        cfg_beam = AIFConfig(
+            horizon_D=1, beam_width=4, epistemic_samples=2,
+            branching_strategy='beam',
+            preference_path=log_pref_path,
+        )
+        cfg_soph = AIFConfig(
+            horizon_D=1, beam_width=4, epistemic_samples=2,
+            branching_strategy='sophisticated',
+            preference_path=log_pref_path,
+        )
+        cache_beam = BeliefStateCache()
+        cache_soph = BeliefStateCache()
+        torch.manual_seed(0)
+        beam_children = beam_expand(prompt, model, pref, cache_beam, cfg_beam)
+        torch.manual_seed(0)
+        soph_children = beam_expand(prompt, model, pref, cache_soph, cfg_soph)
+        # Same action ordering and same G_cum values (no back-prop at D=1).
+        assert [c.action_seq for c in beam_children] == [c.action_seq for c in soph_children]
+        for cb, cs in zip(beam_children, soph_children):
+            assert cb.G_cum == pytest.approx(cs.G_cum, abs=1e-6)
+
+    def test_sophisticated_at_small_gamma_matches_beam(self, model, log_pref_path):
+        """At horizon_D > 1 with gamma → 0, sophisticated aggregation
+        approaches the uniform-mean aggregator that 'beam' uses."""
+        prompt = torch.randint(0, model.cfg.vocab_size, (1, 5))
+        pref = EmpiricalMarginalPreference.from_path(log_pref_path)
+        cfg_beam = AIFConfig(
+            horizon_D=2, beam_width=3, epistemic_samples=2,
+            branching_strategy='beam',
+            preference_path=log_pref_path,
+        )
+        cfg_soph = AIFConfig(
+            horizon_D=2, beam_width=3, epistemic_samples=2,
+            branching_strategy='sophisticated',
+            gamma=1e-6,
+            preference_path=log_pref_path,
+        )
+        cache_beam = BeliefStateCache()
+        cache_soph = BeliefStateCache()
+        torch.manual_seed(0)
+        beam_children = beam_expand(prompt, model, pref, cache_beam, cfg_beam)
+        torch.manual_seed(0)
+        soph_children = beam_expand(prompt, model, pref, cache_soph, cfg_soph)
+        # Action ordering should match (top-k from the same predictive).
+        assert [c.action_seq for c in beam_children] == [c.action_seq for c in soph_children]
+        # G_cum values agree closely (modulo MC noise in BALD ambiguity).
+        for cb, cs in zip(beam_children, soph_children):
+            assert cb.G_cum == pytest.approx(cs.G_cum, abs=5e-2), \
+                f"Sophisticated@gamma=1e-6 should match beam mean; got beam={cb.G_cum}, soph={cs.G_cum}"
+
+    def test_sophisticated_at_large_gamma_approaches_argmin(self, model, log_pref_path):
+        """At gamma → ∞, sophisticated aggregation collapses to argmin
+        over children. Verified at the aggregator level (deterministic) —
+        end-to-end equality is harder because BALD MC noise affects the
+        leaf-level G_local values across runs."""
+        cfg = AIFConfig(
+            horizon_D=2, beam_width=3, epistemic_samples=2,
+            branching_strategy='sophisticated',
+            gamma=1e4,
+            preference_path=log_pref_path,
+        )
+        # The aggregator-level test already covers the gamma → ∞ limit.
+        # Here we verify that the recursion runs end-to-end without numerical
+        # issues at large gamma.
+        prompt = torch.randint(0, model.cfg.vocab_size, (1, 5))
+        pref = EmpiricalMarginalPreference.from_path(log_pref_path)
+        cache = BeliefStateCache()
+        torch.manual_seed(0)
+        children = beam_expand(prompt, model, pref, cache, cfg)
+        assert len(children) == cfg.beam_width
+        for c in children:
+            assert math.isfinite(c.G_cum)
+
+    def test_aif_generator_sophisticated_end_to_end(self, model, log_pref_path):
+        """Smoke test: AIFGenerator with sophisticated branching runs."""
+        cfg = AIFConfig(
+            horizon_D=2, beam_width=2, epistemic_samples=2,
+            branching_strategy='sophisticated', gamma=1.0,
+            preference_path=log_pref_path,
+        )
+        gen = AIFGenerator(model=model, cfg=cfg)
+        prompt = torch.zeros((1, 4), dtype=torch.long)
+        out = gen.generate(prompt, max_new_tokens=2)
+        assert out.shape == (1, 6)
+
+
+# ---------------------------------------------------------------------------
+# 15. Phase 3: _backprop_V direct unit tests
+# ---------------------------------------------------------------------------
+
+class TestBackpropV:
+    """Hand-computed verification of the recursive V computation against
+    a synthetic 2-level tree. Bypasses the full beam_expand pipeline."""
+
+    def _build_tree(self, root_local: float, mid_local: float, leaf_local: float):
+        """Build a D=2 tree: 1 root, 1 internal child, 1 leaf grandchild.
+        Each node carries a stub EFEComponents with G_local set as given."""
+        root = PolicyNode(action_seq=(), depth=0, parent=None)
+        mid_components = EFEComponents(
+            pragmatic=0.0, ambiguity=0.0, epistemic=0.0, G_local=mid_local,
+        )
+        mid = PolicyNode(
+            action_seq=(0,), depth=1, parent=root,
+            components=mid_components, G_cum=mid_local,
+        )
+        leaf_components = EFEComponents(
+            pragmatic=0.0, ambiguity=0.0, epistemic=0.0, G_local=leaf_local,
+        )
+        leaf = PolicyNode(
+            action_seq=(0, 1), depth=2, parent=mid,
+            components=leaf_components, G_cum=mid_local + leaf_local,
+        )
+        return root, mid, leaf
+
+    def test_beam_uniform_recursion(self):
+        root, mid, leaf = self._build_tree(0.0, 2.0, 5.0)
+        level_nodes = [[root], [mid], [leaf]]
+        agg = _make_aggregator('beam', gamma=1.0)
+        V = _backprop_V(level_nodes, horizon_D=2, discount=1.0, aggregator=agg)
+        # V(leaf) = G_local(leaf) = 5.
+        # V(mid)  = G_local(mid) + 1·mean({5}) = 2 + 5 = 7.
+        # V(root) = 0 + 1·mean({7}) = 7.
+        assert V[id(leaf)] == pytest.approx(5.0)
+        assert V[id(mid)] == pytest.approx(7.0)
+        assert V[id(root)] == pytest.approx(7.0)
+
+    def test_discount_halves_deeper_contribution(self):
+        root, mid, leaf = self._build_tree(0.0, 2.0, 4.0)
+        level_nodes = [[root], [mid], [leaf]]
+        agg = _make_aggregator('beam', gamma=1.0)
+        V = _backprop_V(level_nodes, horizon_D=2, discount=0.5, aggregator=agg)
+        # V(leaf) = 4.
+        # V(mid)  = 2 + 0.5·4 = 4.
+        # V(root) = 0 + 0.5·4 = 2.
+        assert V[id(leaf)] == pytest.approx(4.0)
+        assert V[id(mid)] == pytest.approx(4.0)
+        assert V[id(root)] == pytest.approx(2.0)
+
+    def test_sophisticated_two_children_argmin_at_large_gamma(self):
+        """Build root→{child_a, child_b}, child_b has lower G_local. At
+        large gamma the softmax-weighted V(root) should approach
+        G_local(root) + discount · G_local(child_b) (the argmin)."""
+        root = PolicyNode(action_seq=(), depth=0, parent=None)
+        comp_a = EFEComponents(pragmatic=0.0, ambiguity=0.0, epistemic=0.0, G_local=5.0)
+        comp_b = EFEComponents(pragmatic=0.0, ambiguity=0.0, epistemic=0.0, G_local=1.0)
+        child_a = PolicyNode(
+            action_seq=(0,), depth=1, parent=root,
+            components=comp_a, G_cum=5.0,
+        )
+        child_b = PolicyNode(
+            action_seq=(1,), depth=1, parent=root,
+            components=comp_b, G_cum=1.0,
+        )
+        level_nodes = [[root], [child_a, child_b]]
+        agg = _make_aggregator('sophisticated', gamma=1e6)
+        V = _backprop_V(level_nodes, horizon_D=1, discount=1.0, aggregator=agg)
+        # At horizon_D=1, leaves are root_children; their V = G_local.
+        assert V[id(child_a)] == pytest.approx(5.0)
+        assert V[id(child_b)] == pytest.approx(1.0)
+        # Root V = 0 + 1·sophisticated_aggregate([5, 1]) ≈ min = 1.
+        assert V[id(root)] == pytest.approx(1.0, abs=1e-3)

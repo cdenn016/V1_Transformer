@@ -57,16 +57,25 @@ class AIFConfig:
     number of top candidates scored at the root."""
 
     branching_strategy: Literal['beam', 'top_k', 'sophisticated'] = 'beam'
-    """Tree expansion strategy. ``'beam'`` keeps the top-`beam_width`
-    children by predictive probability at each node. ``'top_k'`` is an
-    alias that takes the top-`beam_width` candidates without re-ranking by
-    G. ``'sophisticated'`` runs the [Friston2021SophisticatedInference]
-    recursive form (Phase 3; raises NotImplementedError in Phase 1)."""
+    """Tree expansion strategy. All three use the same top-`beam_width`
+    candidate selection at every node; they differ only in the
+    back-propagation aggregator. ``'beam'`` and ``'top_k'`` use a uniform
+    child-action posterior (the mean over children's V — equivalent to
+    the :math:`\\gamma \\to 0` limit of sophisticated inference).
+    ``'sophisticated'`` implements the canonical
+    [Friston2021SophisticatedInference] recursion with a softmax-weighted
+    child posterior :math:`q(a' \\mid s) \\propto \\exp(-\\gamma\\, V(a'))`."""
 
     # === EFE weights and sampling ===
     gamma: float = 1.0
-    r"""Policy precision in :math:`q(\pi) \propto \exp(-\gamma G(\pi))`.
-    Fixed at construction; Gamma-hyperprior inference deferred."""
+    r"""Policy precision. Used in two places: (i) the root-level action
+    posterior :math:`q(\pi) \propto \exp(-\gamma G(\pi))` consumed by
+    :meth:`AIFGenerator._commit_action` under
+    ``sampling_strategy='multinomial'``, and (ii) the recursive
+    child-action posterior :math:`q(a' \mid s) \propto \exp(-\gamma V(a'))`
+    inside the sophisticated-inference back-propagation per
+    [Friston2021SophisticatedInference]. Fixed at construction;
+    Gamma-hyperprior inference deferred."""
 
     decode_tau: float = 1.0
     """Softmax temperature for the PriorBank decode used by AIF scoring.
@@ -167,12 +176,6 @@ class AIFConfig:
                 "docs/plans/2026-05-19-aif-transformer-buildout/06_plan.md "
                 "§6). Phase 1 ships generation-only AIF; training stays "
                 "standard variational F."
-            )
-        if self.branching_strategy == 'sophisticated':
-            raise NotImplementedError(
-                "AIFConfig.branching_strategy='sophisticated' is the "
-                "[Friston2021SophisticatedInference] recursive form, deferred "
-                "to Phase 3. Phase 1 ships 'beam' and 'top_k' only."
             )
 
     def validate_against_model(self, vfe_cfg: 'VFEConfig') -> None:

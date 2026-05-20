@@ -1,32 +1,45 @@
 """
 Tree-search policies for multi-step Expected Free Energy.
 
-Phase 1 shipped the depth-1 reduction anchor; Phase 2 adds the per-branch
-beam search at ``horizon_D > 1``. The expansion grows the tree
+Phase 1 shipped the depth-1 reduction anchor; Phase 2 added per-branch
+beam search at ``horizon_D > 1`` with mean back-propagation; Phase 3
+adds the canonical [Friston2021SophisticatedInference] recursion with a
+softmax-weighted child-action posterior. The expansion grows the tree
 level-by-level: at each level every node in the frontier is expanded by
-its top-``beam_width`` candidates from the model's predictive distribution
-at that node's position. Each child is scored via
-:func:`compute_G_at_node` (or :func:`score_components_from_beliefs` on a
-cache hit), and its ``G_cum`` is set to the geometric-discounted path-sum
-of ``G_local`` from the root.
+its top-``beam_width`` candidates from the model's predictive
+distribution at that node's position. Each child is scored via
+:func:`compute_G_at_node` (or :func:`score_components_from_beliefs` on
+a cache hit).
 
-Back-propagation aggregates leaves up to the root's immediate children.
-This Phase-2 implementation uses MEAN aggregation: a root child's
-back-propagated value is the average of ``G_cum`` over the
-``beam_width^(D-1)`` leaves reachable through it. Mean-over-beam is the
-uniform-policy expectation of the canonical Friston-2021 recursion (the
-softmax-weighted form is Phase 3 / sophisticated inference).
+Back-propagation walks the tree depth :math:`D \\to 0` computing a
+single recursive value :math:`V` at each node:
 
-Phase 3 (`branching_strategy='sophisticated'`) will replace the mean
-aggregation with the explicit child-action policy posterior:
-:math:`E_{q(a' | s_d)}[G_{d+1}]` per
-[Friston2021SophisticatedInference]. The stub :func:`sophisticated_expand`
-raises ``NotImplementedError``.
+.. math::
+    V(\\text{leaf}) = G_{\\text{local}}(\\text{leaf})
+
+.. math::
+    V(\\text{internal}, d) = G_{\\text{local}}(d) + \\gamma_{\\text{disc}}
+        \\sum_{a' \\in \\text{beam}(d+1)} q(a' \\mid s_d) \\, V(a').
+
+The choice of child posterior :math:`q(a' \\mid s_d)` is dispatched on
+``cfg.branching_strategy``:
+
+- ``'beam'`` and ``'top_k'``: uniform — :math:`q(a') = 1/|\\text{beam}|`.
+  Equivalent to the mean back-propagation; this is the
+  :math:`\\gamma \\to 0` limit of the sophisticated form. Under uniform
+  posterior the recursion unrolls to the geometric-discounted path-sum
+  averaged over leaves, matching Phase 2's behaviour bitwise (modulo
+  floating-point order).
+- ``'sophisticated'``: softmax-weighted —
+  :math:`q(a' \\mid s_d) \\propto \\exp(-\\gamma\\, V(a'))`. Implements
+  the canonical [Friston2021SophisticatedInference] recursion. At
+  :math:`\\gamma \\to 0` it converges to ``'beam'`` (uniform); at
+  :math:`\\gamma \\to \\infty` it converges to the argmin over the beam.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
@@ -260,33 +273,15 @@ def beam_expand(
         level_nodes.append(next_level)
         parent_predictives = next_predictives
 
-    # Back-propagation: mean over child V's, leaves contribute their G_cum.
-    # Use id(node) as the dict key because PolicyNode is frozen and hashable
-    # by value, but two distinct nodes with the same action_seq would
-    # collide; id() is safer.
-    node_V: Dict[int, float] = {}
-    for leaf in level_nodes[cfg.horizon_D]:
-        node_V[id(leaf)] = leaf.G_cum
+    # Back-propagation: canonical recursive V computation per
+    # [Friston2021SophisticatedInference]. Uses `id(node)` as the dict key
+    # because PolicyNode is frozen and hashable by value, but two distinct
+    # nodes with the same action_seq would collide on the path-sum
+    # interpretation; id() is the safe-by-construction choice.
+    aggregator = _make_aggregator(cfg.branching_strategy, cfg.gamma)
+    node_V = _backprop_V(level_nodes, cfg.horizon_D, cfg.discount, aggregator)
 
-    # Build child-list per parent to support the mean aggregation.
-    children_of: Dict[int, List[PolicyNode]] = {}
-    for level_idx in range(1, cfg.horizon_D + 1):
-        for node in level_nodes[level_idx]:
-            parent_id = id(node.parent)
-            children_of.setdefault(parent_id, []).append(node)
-
-    # Compute V from depth (D-1) up to root.
-    for depth_back in range(cfg.horizon_D - 1, -1, -1):
-        for node in level_nodes[depth_back]:
-            children = children_of.get(id(node), [])
-            if children:
-                node_V[id(node)] = (
-                    sum(node_V[id(c)] for c in children) / len(children)
-                )
-            else:
-                node_V[id(node)] = node.G_cum
-
-    # Rebuild root children with backpropagated G_cum.
+    # Rebuild root children with the back-propagated V stored as G_cum.
     final_root_children: List[PolicyNode] = []
     for child in level_nodes[1]:
         v = node_V[id(child)]
@@ -301,16 +296,105 @@ def beam_expand(
     return final_root_children
 
 
-def sophisticated_expand(*_args, **_kwargs):
-    r"""Phase 3 stub for the [Friston2021SophisticatedInference] recursion.
+def _make_aggregator(
+    strategy: str,
+    gamma: float,
+) -> Callable[[List[float]], float]:
+    r"""Build the child-posterior expectation operator for back-propagation.
 
-    Raises ``NotImplementedError`` so any caller that selects
-    ``branching_strategy='sophisticated'`` fails fast.
-    ``AIFConfig.__post_init__`` raises the same error earlier; this stub
-    guards against a path that bypasses the config check.
+    Returns a callable that takes a list of child V values and returns the
+    aggregated value :math:`\sum_{a'} q(a') V(a')`. The shape of
+    :math:`q(a')` is determined by ``strategy``:
+
+    - ``'beam'`` / ``'top_k'``: uniform — equivalent to ``mean(child_Vs)``.
+    - ``'sophisticated'``: ``q(a') ∝ exp(-gamma · V(a'))`` (Friston 2021
+      sophisticated inference). Uses ``torch.logsumexp`` for numerical
+      stability.
     """
-    raise NotImplementedError(
-        "Sophisticated-inference recursion per [Friston2021SophisticatedInference] "
-        "is Phase 3 of the build-out and not yet implemented. Use "
-        "branching_strategy='beam' for the Phase 2 tree search."
+    if strategy in ('beam', 'top_k'):
+        def aggregate_uniform(child_Vs: List[float]) -> float:
+            if not child_Vs:
+                return 0.0
+            return sum(child_Vs) / len(child_Vs)
+        return aggregate_uniform
+
+    if strategy == 'sophisticated':
+        def aggregate_sophisticated(child_Vs: List[float]) -> float:
+            if not child_Vs:
+                return 0.0
+            # `q(c) ∝ exp(-gamma · V(c))`. Compute in log-space to avoid
+            # overflow at large gamma; fp64 to preserve precision for the
+            # gamma → ∞ argmin limit.
+            vs = torch.tensor(child_Vs, dtype=torch.float64)
+            log_q = -gamma * vs
+            log_q = log_q - torch.logsumexp(log_q, dim=0)
+            q = log_q.exp()
+            return float((q * vs).sum().item())
+        return aggregate_sophisticated
+
+    raise ValueError(
+        f"_make_aggregator: unknown branching_strategy={strategy!r}. "
+        "Accepted: 'beam', 'top_k', 'sophisticated'."
     )
+
+
+def _backprop_V(
+    level_nodes: List[List[PolicyNode]],
+    horizon_D: int,
+    discount: float,
+    aggregator: Callable[[List[float]], float],
+) -> Dict[int, float]:
+    r"""Compute :math:`V` bottom-up over the policy tree.
+
+    Leaves at depth ``horizon_D`` contribute ``V = components.G_local``.
+    Internal nodes at depth ``d < horizon_D`` compute
+    ``V = components.G_local + discount · aggregator([V(child) for child in beam])``.
+    The root (depth 0) has no ``components`` (no action taken yet); its
+    own V is not consumed downstream — only ``V(root_children)`` matters
+    for the policy posterior.
+
+    Args:
+        level_nodes: nested list with ``level_nodes[d]`` the nodes at depth d.
+        horizon_D: planning horizon (depth of leaves).
+        discount: geometric discount factor :math:`\gamma_{\text{disc}}`.
+        aggregator: pure function ``List[float] -> float`` that computes
+            the child-posterior-weighted expectation.
+
+    Returns:
+        Dict mapping ``id(node)`` to its back-propagated V value, for
+        every node at depths 0 through ``horizon_D``.
+    """
+    V: Dict[int, float] = {}
+
+    # Leaves.
+    for leaf in level_nodes[horizon_D]:
+        leaf_local = (
+            leaf.components.G_local if leaf.components is not None else leaf.G_cum
+        )
+        V[id(leaf)] = leaf_local
+
+    # Build child-list per parent for the recursion.
+    children_of: Dict[int, List[PolicyNode]] = {}
+    for level_idx in range(1, horizon_D + 1):
+        for node in level_nodes[level_idx]:
+            parent_id = id(node.parent)
+            children_of.setdefault(parent_id, []).append(node)
+
+    # Walk depth (D-1) up to 0.
+    for depth_back in range(horizon_D - 1, -1, -1):
+        for node in level_nodes[depth_back]:
+            children = children_of.get(id(node), [])
+            if children:
+                child_Vs = [V[id(c)] for c in children]
+                aggregated = aggregator(child_Vs)
+                local = (
+                    node.components.G_local if node.components is not None else 0.0
+                )
+                V[id(node)] = local + discount * aggregated
+            else:
+                # Defensive: every non-leaf should have children by construction
+                # of the tree. Fall back to G_local (or 0 at the root).
+                V[id(node)] = (
+                    node.components.G_local if node.components is not None else 0.0
+                )
+    return V
