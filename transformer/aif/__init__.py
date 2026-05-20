@@ -29,6 +29,7 @@ from transformer.aif.policy import PolicyNode, EFEComponents
 from transformer.aif.belief_cache import BeliefStateCache
 from transformer.aif.efe_score import compute_G_at_node
 from transformer.aif.generator import AIFGenerator
+from transformer.aif.training_loss import compute_training_efe_loss
 
 __all__ = [
     'AIFConfig',
@@ -42,4 +43,5 @@ __all__ = [
     'BeliefStateCache',
     'compute_G_at_node',
     'AIFGenerator',
+    'compute_training_efe_loss',
 ]

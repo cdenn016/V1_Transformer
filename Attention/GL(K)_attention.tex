@@ -964,12 +964,13 @@ By the envelope theorem (Section~\ref{sec:final_free_energy}) the explicit $\par
 
 \subsection{Belief Dynamics}
 
-The global free energy \eqref{eq:free_energy_final} is minimized by gradient descent on the beliefs $\{q_i\}$:
+The belief dynamics follow gradient descent on the attention-weighted alignment energy at $\beta = \beta^*$, the autograd-convention form adopted at the close of Section~\ref{sec:final_free_energy}:
 
 \begin{equation}
-\frac{\partial q_i}{\partial t} = -\eta_q \frac{\delta \mathcal{F}}{\delta q_i}
+\frac{\partial q_i}{\partial t} = -\eta_q \nabla_{q_i} \big[\textstyle\sum_j \beta_{ij}^* E_{ij} + \alpha_i D_{\mathrm{KL}}(q_i \| p_i) - \mathbb{E}_{q_i}[\log p(o_i \mid k_i)]\big].
 \label{eq:belief_dynamics}
 \end{equation}
+This differs from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ (Eq.~\ref{eq:free_energy_final}) by the covariance term $-\tau^{-1}\mathrm{Cov}_{\beta^*}(E_{ij}, \partial E_{ij}/\partial q_i)$ of Eq.~\ref{eq:autograd_envelope_gap}; the two vector fields coincide at joint stationary points and differ off-equilibrium by the softmax-gradient nonlinearity identified at Section~\ref{sec:ffn_nonlinearity}.
 
 The most general formulation includes additional model-channel terms ($s_i$, $r_i$, $\gamma_{ij}$) representing a slow meta-learning timescale (Supplementary Appendix~G, Model-Channel Formalism). In the present work we focus exclusively on the belief (fast) subsystem, studying how beliefs $\{q_i\}$ evolve under alignment. We posit that standard transformers operate entirely in this regime: they perform inference ($q_i$ updates) with frozen priors during a forward pass. As discussed in the appendix, the framework naturally supports hierarchical emergence of meta-agents through coarse-graining when groups of agents reach belief consensus (Supplementary Appendix~A).
 
@@ -1023,7 +1024,7 @@ the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$
 
 The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in the preceding section is already a complete attention mechanism. Standard transformer attention is recovered as a special case along either of two equivalent routes. The first route (Section~\ref{sec:untied_qk}) retains $\Omega_{ij} = U_iU_j^{-1}$ non-trivially throughout and exposes untied query-key projections $Q_i = U_i^{-1}\mu_i$, $K_j = U_j^\top\Sigma_j^{-1}\mu_j$ directly from the transported KL, with the implicit pair-dependent bilinear ranging over $\mathrm{GL}(d_k)$ as the per-token frames and precisions vary; this route is structurally minimal in the sense that no object beyond the existing belief and frame fields is introduced. The second route (Section~\ref{sec:dot_product_derivation}) takes three successive limits: isotropic covariances, shared frames giving trivial pairwise transport $\Omega_{ij} = I$, and a learned shared bilinear compatibility $M = W_QW_K^\top$ acting on the means. This yields the familiar $QK^\top / \sqrt{d_k}$ form with $M$ as a separate object that fills the cross-coupling slot vacated by the trivial transport. The two routes coincide on standard scaled dot-product attention; the first additionally captures the rotary positional structure of modern transformers without introducing extraneous fields. Our experiments (Section~\ref{sec:glk_lm}) implement the general gauge model without these limits.
 
-\paragraph{Deterministic Beliefs via Scaled Limit.}
+\paragraph{Scale-Absorbed Reparameterization (Implicit-Variance Form).}
 
 We consider a single-point base space $\mathcal{C}$ with a finite set of agents $\{1,\dots,N\}$ (tokens) with no particular ordering. 
 
@@ -1237,8 +1238,9 @@ The leading term in $\tilde{s}_{ij}$ is:
 We identify the product of $W_Q, W_K$ with the gauge transport:
 
 \begin{equation}
-W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
+W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k),
 \end{equation}
+where $d_k$ denotes the per-head dimension $d_{\text{head}}$ under the multi-head construction of Section~\ref{sec:multihead}; in the single-head case $d_k = d_{\text{head}}$ trivially.
 
 Such a factorization always exists for any invertible $\Omega$: any $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B \in \mathrm{GL}(d_k)$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$, where invertibility of $M$ ensures all singular values are positive, so $A$ and $B$ are themselves invertible).
 
@@ -1249,7 +1251,7 @@ M_h^a := A_Q^a (A_K^a)^\top \in \mathrm{GL}(d_{\text{head}}),
 \label{eq:head_space_kernel}
 \end{equation}
 %
-and the actual transformer logit kernel is its low-rank lift $W_Q^a (W_K^a)^\top = U_Q^a M_h^a (U_K^a)^\top$. The gauge-theoretic identification $\sigma^{-2}\Omega^{-\top} \leftrightarrow M_h^a$ operates at the level of the invertible head-space factor, not the ambient low-rank kernel. In the block-diagonal multihead gauge model (Section~\ref{sec:multihead}), the isometric factors $U_Q^a, U_K^a$ can be interpreted as selecting head subspaces, consistent with a $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$ decomposition.
+and the actual transformer logit kernel is its low-rank lift $W_Q^a (W_K^a)^\top = U_Q^a M_h^a (U_K^a)^\top$. The gauge-theoretic identification $\sigma^{-2}\Omega^{-\top} \leftrightarrow M_h^a$ operates at the level of the invertible head-space factor, not the ambient low-rank kernel. In the block-diagonal multihead gauge model (Section~\ref{sec:multihead}), the isometric factors $U_Q^a, U_K^a$ can be interpreted as selecting head subspaces, consistent with a $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$ decomposition. The identification is value-level on the head subspace: the bilinear form $\mu_i^\top M_h^a \mu_j$ equals the standard attention logit on the head subspace, and the SVD identity $W_Q^a (W_K^a)^\top = U_Q^a M_h^a (U_K^a)^\top$ is exact for any rectangular factorization. It does not assert parameter-level identity between the gauge framework's learned $(\sigma, \Omega)$ and the standard transformer's atomically-learned $W_Q^a, W_K^a$, which are different parameterizations of the same bilinear form under different optimizer geometries (natural gradient on the gauge manifold versus stochastic gradient on the rectangular projection space).
 
 Next, rather than completely taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ can then be considered to parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. Therefore, the full limit need not be taken.
 
@@ -1309,8 +1311,9 @@ Next, we define the value projection:
 \begin{equation}
 V_j \equiv W_V^{\top}\mu_j, \qquad W_V \in \mathbb{R}^{d_k \times d_k},
 \end{equation}
+where $d_k$ here denotes the per-head dimension $d_{\text{head}}$ under the multi-head construction of Section~\ref{sec:multihead}, paralleling the convention used at Eq.~\eqref{eq:head_space_kernel} above.
 
-where we absorb the gauge transport $\Omega$ into the learned matrix $W_V$.
+We absorb the gauge transport $\Omega$ into the learned matrix $W_V$ at the head-space level. The thin-SVD lift documented for the query and key projections at Eq.~\eqref{eq:head_space_kernel} applies to the value projection by parallel construction: the standard transformer's rectangular $W_V^a \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$ factors as $W_V^a = U_V^a A_V^a$ with $U_V^a \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$ an isometric subspace embedding and $A_V^a \in \mathrm{GL}(d_{\text{head}})$ the invertible head-space map, where the isometric factor is absorbed into the per-head slice of the multi-head output projection $W_O$ under the standard concat-then-$W_O$ construction.
 
 Then:
 
@@ -1959,7 +1962,7 @@ comprising a prior mean $\mu_p^c$, prior covariance $\Sigma_p^c$, and gauge fram
 
 \subsection{Summary}
 
-Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational natural-gradient descent on the gauge-equivariant free energy is:
+Under the successive reductions (the first two are exact algebraic specializations, the third a literal change of parameterization at finite $\sigma$): (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational natural-gradient descent on the free energy (which is $\mathrm{GL}(K)$-equivariant in the unrestricted framework by Theorem~\ref{thm:glk_invariance}) is:
 
 \begin{equation}
 \theta_{k+1} = \theta_k - \eta \tilde{\nabla}_\theta \mathcal{F}(\theta_k)
@@ -1975,7 +1978,7 @@ under the identifications: $\mathcal{F}$ (free energy) $\leftrightarrow$ $\mathc
 
 Beyond the core attention formula, the gauge-theoretic framework provides a unified account of key transformer architectural choices (Table~\ref{tab:fep_nn_correspondence}), each recovered under specific limits or identifications. Causal masking, ALiBi, relative position biases, and sliding window attention all emerge as special cases of the non-uniform attention prior $\pi_k$ in the mixture-of-sources model (Section~\ref{sec:nonuniform_priors}). Rotary position embeddings correspond to position-dependent gauge frames restricted to $\mathrm{SO}(2)^{d_k/2}$, partially relaxing the flat-bundle limit while retaining the learned constant gauge (Section~\ref{sec:rope}). Layer normalization is a projection onto the $\mathfrak{sl}(K)$ subalgebra that eliminates key-norm bias at its algebraic origin. Residual connections are the inherent structure of iterative variational gradient descent (Section~\ref{sec:residual_connections}), with the state-dependent precision $\alpha_i$ generalizing the fixed skip connection to a context-dependent gate. The FFN sublayer corresponds to multiple VFE iterations with recomputed attention weights, and the message-passing term derives a Boltzmann-gated linear unit (Eq.~\ref{eq:vfe_glu}) in the same exponential family as GELU and SiLU (Section~\ref{sec:ffn_nonlinearity}). Weight decay is the prior coupling $\alpha D_{\mathrm{KL}}(q_i \| p_i)$ in the deterministic limit.
 
-The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}) is essential as it guarantees that the learned projections $W_Q, W_K$ are valid gauge transformations, explaining why transformers can learn arbitrary (invertible) attention patterns. Each row of Table~\ref{tab:fep_nn_correspondence} represents a degree of freedom that the full gauge-theoretic framework retains and that standard transformers collapse into a simpler form. The framework thus provides not only an explanatory account of existing architectures but a taxonomy of generalizations, indexed by which simplifying limits are relaxed.
+The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}) is the equivariance statement for the unrestricted framework: the free energy is invariant under simultaneous push-forward of all agent representations by a common $\Omega \in \mathrm{GL}(K)$. After the constant-gauge specialization the per-pair $\Omega_{ij}$ collapse to a single learned element of $\mathrm{GL}(d_k)$, and the SVD identity at Eq.~\eqref{eq:head_space_kernel} places the head-space invertible factor in $\mathrm{GL}(d_{\text{head}})$. The learned projections $W_Q, W_K$ parameterize this head-space factor and thereby realize one orbit representative of the framework's gauge action, explaining why transformers can learn arbitrary (invertible) attention patterns on the head subspace. Each row of Table~\ref{tab:fep_nn_correspondence} represents a degree of freedom that the full gauge-theoretic framework retains and that standard transformers collapse into a simpler form. The framework thus provides not only an explanatory account of existing architectures but a taxonomy of generalizations, indexed by which simplifying limits are relaxed.
 
 
 \section{Simulations and Empirical Validation}
@@ -2003,13 +2006,13 @@ We report results for a $\mathrm{GL}(10)$ gauge VFE model with embedding dimensi
 \paragraph{Variational Inference Structure (E-step/M-step).}
 We utilize an expectation-maximization structure as follows:
 
-\textbf{E-step (Belief Inference):} Given current parameters, update agent beliefs $\{q_i\}$ via natural gradient descent on the free energy:
+\textbf{E-step (Belief Inference):} Given current parameters, compute the closed-form softmax $\beta = \beta^*$ at the current beliefs (the stationary point of $\mathcal{F}_{\mathrm{align}}$ in $\beta$, Eq.~\ref{eq:mixture_softmax_general}), then update agent beliefs $\{q_i\}$ via natural gradient descent on the attention-weighted alignment energy at $\beta = \beta^*$ (the autograd-convention form, cf.\ Section~\ref{sec:final_free_energy}):
 
 \begin{equation}
-q_i^{(t+1)} \leftarrow q_i^{(t)} - \eta_E \tilde{\nabla}_{q_i} \mathcal{F}\big|_{q_i = q_i^{(t)}},
+q_i^{(t+1)} \leftarrow q_i^{(t)} - \eta_E \tilde{\nabla}_{q_i} \big[\textstyle\sum_j \beta_{ij}^* E_{ij} + \alpha_i D_{\mathrm{KL}}(q_i \| p_i)\big]\Big|_{q_i = q_i^{(t)}},
 \end{equation}
 
-where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao metric. This corresponds to variational inference within the forward pass.
+where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao metric. The autograd gradient differs from $\nabla\mathcal{F}_{\mathrm{red}}$ by the covariance term of Eq.~\ref{eq:autograd_envelope_gap}, coinciding at joint stationarity. This corresponds to variational inference within the forward pass.
 
 \textbf{M-step (Learning):} After belief inference, gradients flow via backpropagation through the entire computation graph:
 

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from transformer.aif.belief_cache import BeliefStateCache
 from transformer.aif.config import AIFConfig
@@ -36,6 +37,7 @@ from transformer.aif.tree_search import (
     _make_aggregator,
     beam_expand,
 )
+from transformer.aif.training_loss import compute_training_efe_loss
 from transformer.core.types import BeliefState
 from transformer.vfe.config import VFEConfig
 from transformer.vfe.model import VFEModel
@@ -110,10 +112,27 @@ class TestAIFConfig:
         with pytest.raises(ValueError, match='gamma'):
             AIFConfig(gamma=-1.0, preference_path=log_pref_path)
 
-    def test_rejects_efe_augmented_training(self, log_pref_path):
-        with pytest.raises(NotImplementedError, match='efe_augmented'):
+    def test_accepts_efe_augmented_training(self, log_pref_path):
+        """Phase 4 accepts the efe_augmented training objective."""
+        cfg = AIFConfig(
+            training_objective='efe_augmented',
+            preference_path=log_pref_path,
+        )
+        assert cfg.training_objective == 'efe_augmented'
+        # Default field values for the Phase 4 augmentation.
+        assert cfg.aif_loss_weight == pytest.approx(0.1)
+        assert cfg.train_include_pragmatic is True
+        assert cfg.train_include_ambiguity is True
+        assert cfg.train_include_epistemic is True
+
+    def test_efe_augmented_with_no_terms_raises(self, log_pref_path):
+        """At least one EFE term must be enabled under efe_augmented."""
+        with pytest.raises(ValueError, match='at least one of'):
             AIFConfig(
                 training_objective='efe_augmented',
+                train_include_pragmatic=False,
+                train_include_ambiguity=False,
+                train_include_epistemic=False,
                 preference_path=log_pref_path,
             )
 
@@ -896,3 +915,184 @@ class TestBackpropV:
         assert V[id(child_b)] == pytest.approx(1.0)
         # Root V = 0 + 1·sophisticated_aggregate([5, 1]) ≈ min = 1.
         assert V[id(root)] == pytest.approx(1.0, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# 16. Phase 4: compute_training_efe_loss (training-time augmentation)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def aif_cfg_efe_augmented(log_pref_path):
+    return AIFConfig(
+        training_objective='efe_augmented',
+        aif_loss_weight=0.1,
+        epistemic_samples=2,
+        preference_path=log_pref_path,
+    )
+
+
+class TestTrainingEFELoss:
+
+    def test_returns_scalar_tensor(self, model, aif_cfg_efe_augmented):
+        pref = EmpiricalMarginalPreference.from_path(
+            aif_cfg_efe_augmented.preference_path,
+        )
+        token_ids = torch.randint(0, model.cfg.vocab_size, (2, 8))
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        loss = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref, prior_bank=model.prior_bank,
+            cfg=aif_cfg_efe_augmented,
+        )
+        assert loss.dim() == 0  # scalar
+        assert math.isfinite(loss.item())
+
+    def test_pragmatic_only_lower_cost(self, model, log_pref_path):
+        """With only the pragmatic term, the loss should be finite and
+        carry gradient. Ambiguity and epistemic do not enter."""
+        cfg = AIFConfig(
+            training_objective='efe_augmented',
+            epistemic_samples=1,
+            train_include_pragmatic=True,
+            train_include_ambiguity=False,
+            train_include_epistemic=False,
+            preference_path=log_pref_path,
+        )
+        pref = EmpiricalMarginalPreference.from_path(log_pref_path)
+        token_ids = torch.randint(0, model.cfg.vocab_size, (2, 6))
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        loss = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref, prior_bank=model.prior_bank, cfg=cfg,
+        )
+        assert math.isfinite(loss.item())
+
+    def test_gradient_flows_to_logits(self, model, aif_cfg_efe_augmented):
+        """Backward through compute_training_efe_loss should populate
+        gradients on the upstream parameters (PriorBank tables, etc.)."""
+        pref = EmpiricalMarginalPreference.from_path(
+            aif_cfg_efe_augmented.preference_path,
+        )
+        token_ids = torch.randint(0, model.cfg.vocab_size, (2, 6))
+        # Reset gradients on the PriorBank parameters before backward.
+        for p in model.prior_bank.parameters():
+            if p.grad is not None:
+                p.grad.zero_()
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        loss = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref, prior_bank=model.prior_bank,
+            cfg=aif_cfg_efe_augmented,
+        )
+        loss.backward()
+        # At least one PriorBank parameter should receive a non-zero
+        # gradient — pragmatic uses logits (which depend on the bank's
+        # tables) and BALD reparameterization uses mu/sigma which depend
+        # on the bank's mu / log-sigma embeddings.
+        has_grad = any(
+            p.grad is not None and p.grad.abs().sum().item() > 0
+            for p in model.prior_bank.parameters()
+        )
+        assert has_grad, \
+            "Expected gradient to flow into at least one PriorBank parameter."
+
+    def test_pragmatic_lower_when_preference_concentrated_on_predicted_token(
+        self, model, log_pref_path, tmp_path,
+    ):
+        """If the preference is concentrated on the token the model
+        predicts most strongly, the pragmatic value is lower. Construct
+        two preferences for the same predictive and compare."""
+        # Run model once to discover its argmax token.
+        token_ids = torch.randint(0, model.cfg.vocab_size, (1, 6))
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        argmax_token = int(F.softmax(logits[0, -1, :], dim=-1).argmax().item())
+
+        # Preference 1: concentrated on the predicted token.
+        V = model.cfg.vocab_size
+        pref_concentrated = torch.full((V,), 1.0 / V)
+        pref_concentrated[argmax_token] = 100.0
+        pref_concentrated = pref_concentrated / pref_concentrated.sum()
+        log_pref_concentrated = pref_concentrated.log()
+        path_c = tmp_path / 'pref_concentrated.pt'
+        torch.save(log_pref_concentrated, path_c)
+
+        # Preference 2: concentrated on a different token.
+        other = (argmax_token + 1) % V
+        pref_other = torch.full((V,), 1.0 / V)
+        pref_other[other] = 100.0
+        pref_other = pref_other / pref_other.sum()
+        log_pref_other = pref_other.log()
+        path_o = tmp_path / 'pref_other.pt'
+        torch.save(log_pref_other, path_o)
+
+        cfg_c = AIFConfig(
+            training_objective='efe_augmented',
+            train_include_pragmatic=True,
+            train_include_ambiguity=False,
+            train_include_epistemic=False,
+            preference_path=str(path_c),
+        )
+        cfg_o = AIFConfig(
+            training_objective='efe_augmented',
+            train_include_pragmatic=True,
+            train_include_ambiguity=False,
+            train_include_epistemic=False,
+            preference_path=str(path_o),
+        )
+        pref_c_obj = EmpiricalMarginalPreference.from_path(str(path_c))
+        pref_o_obj = EmpiricalMarginalPreference.from_path(str(path_o))
+
+        loss_c = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref_c_obj, prior_bank=model.prior_bank, cfg=cfg_c,
+        )
+        loss_o = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref_o_obj, prior_bank=model.prior_bank, cfg=cfg_o,
+        )
+        # The concentrated-on-argmax preference should give lower pragmatic
+        # (-log p* is small where the model agrees with the preference).
+        assert loss_c.item() < loss_o.item(), \
+            f"Concentrated-on-argmax should yield lower pragmatic: " \
+            f"got loss_c={loss_c.item()}, loss_o={loss_o.item()}."
+
+    def test_raises_when_training_objective_mismatched(self, model, log_pref_path):
+        """Defensive: calling compute_training_efe_loss with an AIFConfig
+        in 'standard_vfe' mode raises (the function is opt-in via the
+        training_objective flag)."""
+        cfg = AIFConfig(
+            training_objective='standard_vfe',
+            preference_path=log_pref_path,
+        )
+        pref = EmpiricalMarginalPreference.from_path(log_pref_path)
+        token_ids = torch.randint(0, model.cfg.vocab_size, (2, 6))
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        with pytest.raises(RuntimeError, match='efe_augmented'):
+            compute_training_efe_loss(
+                logits=logits, beliefs=beliefs,
+                preference=pref, prior_bank=model.prior_bank, cfg=cfg,
+            )
+
+    def test_compose_with_cross_entropy(self, model, aif_cfg_efe_augmented):
+        """Integration test: typical training step composes CE + AIF loss
+        and backwards once."""
+        pref = EmpiricalMarginalPreference.from_path(
+            aif_cfg_efe_augmented.preference_path,
+        )
+        token_ids = torch.randint(0, model.cfg.vocab_size, (2, 6))
+        targets = torch.randint(0, model.cfg.vocab_size, (2, 6))
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.zero_()
+        logits, beliefs = model.forward_with_beliefs(token_ids)
+        ce = F.cross_entropy(
+            logits.view(-1, model.cfg.vocab_size), targets.view(-1),
+        )
+        aif = compute_training_efe_loss(
+            logits=logits, beliefs=beliefs,
+            preference=pref, prior_bank=model.prior_bank,
+            cfg=aif_cfg_efe_augmented,
+        )
+        total = ce + aif_cfg_efe_augmented.aif_loss_weight * aif
+        total.backward()
+        assert math.isfinite(total.item())

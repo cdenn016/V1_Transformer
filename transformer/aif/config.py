@@ -136,12 +136,42 @@ class AIFConfig:
     states — well above the 72 MB budget for the recommended demo
     preset (D=2, b=4)."""
 
-    # === Training-time EFE ===
+    # === Training-time EFE (Phase 4 — Regime A: trajectory-as-policy) ===
     training_objective: Literal['standard_vfe', 'efe_augmented'] = 'standard_vfe'
-    """``'standard_vfe'`` is generation-only AIF; training stays cross-
-    entropy. ``'efe_augmented'`` is the research extension that adds
-    EFE-style loss to the training objective; raises
-    ``NotImplementedError`` in Phase 1."""
+    """``'standard_vfe'`` is generation-only AIF (Phases 1-3); training
+    stays standard cross-entropy. ``'efe_augmented'`` activates the
+    Phase-4 trajectory-as-policy augmentation:
+    :math:`L_{\\text{total}} = L_{\\text{CE}} + \\lambda_{\\text{AIF}}\\,
+    L_{\\text{AIF}}` where :math:`L_{\\text{AIF}}` is computed by
+    :func:`transformer.aif.training_loss.compute_training_efe_loss`. The
+    trajectory-as-policy interpretation treats the observed training
+    sequence as the agent's chosen policy; per-position EFE is computed
+    from the model's own forward outputs without target leakage."""
+
+    aif_loss_weight: float = 0.1
+    r"""Multiplier :math:`\lambda_{\text{AIF}}` on the AIF training
+    augmentation when ``training_objective='efe_augmented'``. Default
+    0.1 keeps the AIF term sub-dominant to the CE signal; raise toward
+    1.0 to emphasize preference alignment, lower toward 0 to recover
+    standard VFE training in the limit."""
+
+    train_include_pragmatic: bool = True
+    """Whether to include the pragmatic term in the training-time EFE
+    augmentation. Pragmatic value is the cross-entropy of the model's
+    predictive against the preference distribution; cheap (no extra
+    forward passes)."""
+
+    train_include_ambiguity: bool = True
+    """Whether to include the ambiguity term :math:`E_{q(s)}[H[p(o|s)]]`
+    in the training-time EFE augmentation. Requires BALD MC sampling
+    at every batch position — costs roughly :math:`S \times` the
+    model's existing decode memory."""
+
+    train_include_epistemic: bool = True
+    """Whether to include the epistemic (BALD MI) term in the training-
+    time EFE augmentation. Shares its MC sampling pass with the
+    ambiguity term, so adding it costs no extra forward passes when
+    ``train_include_ambiguity=True``."""
 
     def __post_init__(self) -> None:
         if self.horizon_D < 1:
@@ -170,13 +200,18 @@ class AIFConfig:
                 "tensor on disk)."
             )
         if self.training_objective == 'efe_augmented':
-            raise NotImplementedError(
-                "AIFConfig.training_objective='efe_augmented' is deferred to "
-                "Phase 4 of the build-out (see "
-                "docs/plans/2026-05-19-aif-transformer-buildout/06_plan.md "
-                "§6). Phase 1 ships generation-only AIF; training stays "
-                "standard variational F."
-            )
+            if not (
+                self.train_include_pragmatic
+                or self.train_include_ambiguity
+                or self.train_include_epistemic
+            ):
+                raise ValueError(
+                    "AIFConfig.training_objective='efe_augmented' requires "
+                    "at least one of train_include_pragmatic / "
+                    "train_include_ambiguity / train_include_epistemic to "
+                    "be True. With all three False the augmentation is a "
+                    "no-op; use training_objective='standard_vfe' instead."
+                )
 
     def validate_against_model(self, vfe_cfg: 'VFEConfig') -> None:
         r"""Validate the AIF config against the wrapped `VFEModel`'s config.
