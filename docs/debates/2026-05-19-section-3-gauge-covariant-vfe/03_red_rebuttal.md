@@ -1,0 +1,43 @@
+# Red Rebuttal — section-3-gauge-covariant-vfe
+
+## Concession
+
+I concede sub-claims C and F outright.
+
+On C: `Attention/GL(K)_attention.tex:672-675` reproduces `F_i^{single} = D_KL(q_i ‖ p_i) - E_{q_i}[log p(o_i | k_i)]` and this is algebraically identical to the canonical FEP form recorded at `external_canon_inference.md:17` (`F[q] = E_q[-log p(o|s)] + KL(q(s) ‖ p(s))`). The citations `[friston2010free, parr2022active]` at line 670 are the canonical references for this Form-3 perceptual-inference free energy. The manuscript does not claim active-inference policy machinery, does not include a `G(π)` term, and does not misuse the conditional. There is no falsifiable strike here.
+
+On F: `Attention/GL(K)_attention.tex:983` explicitly invokes Elitzur's theorem `[weinberg1995quantum]` and recasts the GL(K) action as "a reparameterization symmetry of the KL divergence (Theorem~\ref{thm:glk_invariance})." This matches the canonical interpretation at `01_evidence.md:97-98`. The manuscript does not claim spontaneous breaking of a local physical gauge symmetry — the precise statement Elitzur forbids — and `Attention/GL(K)_attention.tex:985` correctly attributes the actual symmetry-breaking effect to the non-gauge-invariant observation term. The disclaimer is canon-aligned.
+
+I also concede that blue's Falsification-Condition test on sub-claim D — whether the sympy-verified closed-form `α_i* = c_0/(b_0 + KL)` depends on a hidden constraint — comes up clean. The derivative at `Attention/GL(K)_attention.tex:929` and the closed-form at line 937 match the Gamma-MAP result. The mathematics is correct.
+
+## Core attack
+
+Sub-claim D fails as an editorial-purity matter, and blue effectively conceded this in its own opening.
+
+Blue's evidence section at `02_blue_opening.md:49` states: "A red strike that the manuscript should explicitly cite `[Bishop2006]` is an editorial improvement, not a structural correctness issue." Blue is naming the gap and then dismissing it as cosmetic. Under the source-of-truth rule in `debate_methodology.md:8-9`, this dismissal does not survive: a "natural choice" framing for a regularizer that is *demonstrably* the negative log-density of a Gamma conjugate prior on a Gaussian precision parameter `[Bishop2006 §2.3.6, Murphy2012 §4.6.1]` is an under-cited claim, not a cosmetic gap.
+
+`Attention/GL(K)_attention.tex:914` reads: "where $R(\alpha_i)$ is a precision regularizer. A natural choice is a log-barrier form such as." The text then writes `R(α_i) = b_0 α_i - c_0 log α_i` (line 917) and proceeds to derive the closed-form `α_i* = c_0/(b_0 + KL)` without ever identifying this regularizer as the conjugate-prior negative log density. By the canon evidence at `01_evidence.md:92-93`, this *is* `-log Gamma(α_i; c_0 + 1, b_0)` up to additive constants. The manuscript labels it as one of several "natural choices" when it is in fact the unique Gamma-MAP grounding from the Bayesian-precision literature, and the manuscript at line 921 then re-explains the construction in purely mechanical terms ("penalizes arbitrarily large precision ... log-barrier that enforces $\alpha_i > 0$") without invoking the conjugate-prior interpretation that would make the construction theoretically motivated rather than computationally convenient.
+
+The structural consequence: blue's defense of sub-claim D rests on the existence of three "compatible derivations" (`02_blue_opening.md:49` enumerates Gamma-MAP, convex log-barrier, and closed-form-rational-solution). All three exist as derivations. None of them appears in §3.7 as a citation or as an identifying remark. A reader of §3.7 alone cannot recover the theoretical grounding; the regularizer reads as a computational ansatz. This is the same purity standard the §4–§5 debate series enforced on the canonical-F-vs-surrogate question — gradient-method correctness was not enough; the manuscript had to label the convention explicitly. Sub-claim D should fail under the same standard.
+
+A secondary attack on sub-claim A. Blue's defense at `02_blue_opening.md:15-17` is correct that line 656 is honest at the local level and that no downstream §3 equation invokes the edge-relaxed form. I grant the load-bearing-equation test. The residual issue is one of framing-level adequacy: the manuscript's title is "Gauge-Covariant Variational Free Energy" and §3.2 introduces `Ω_ij` as a "gauge transport operator" (line 612), yet the operative gauge structure in §3 is *flat* by the parameterization `Ω_ij = exp(φ_i) exp(-φ_j)` and Lemma 1 at line 640 reduces the holonomy to identity. A reader encountering "gauge transport" at line 612 — having not yet read line 656 — will assume non-trivial gauge structure. The structural restriction is named at the right line; the framing at the introduction and at line 612 does not flag it. This is editorially weaker than the line-656 disclosure alone suggests.
+
+A tertiary observation on sub-claim B. Blue's defense at `02_blue_opening.md:21-23` correctly notes that `Φ_i, Φ̃_i` do not appear in Eq. eq:free_energy_final. I grant this. The residual gap: §3.1 at lines 580–583 introduces `k_i ∈ R^{K_q}` and `m_i ∈ R^{K_p}` with potentially distinct fiber dimensions `K_q ≠ K_p`, yet §3.5's reduced free energy at lines 845–855 contains only the belief channel. The manuscript at line 677 declares the model-channel scaffold deferred, but does not explicitly state that `K_q` and `K_p` are independent free parameters in this restriction — the reader is left to infer whether `K_p` plays any role in §3. The codebase default `K_q = K_p` (per `CLAUDE.md`) is not stated as a §3 simplifying restriction. This is a minor editorial gap, not a structural correctness issue.
+
+## Defense
+
+The structural claim of my opening — that §3 carries an editorial-purity gap comparable in magnitude to the §4–§5 debate-series gaps — survives blue's attack with calibrated adjustments.
+
+The strongest residual position: §3 has identifiable editorial gaps that should be fixed before the manuscript is fully theoretically pure, but the gaps do not reach the load-bearing structural-error level that would invalidate the §3 derivation. The Phase-2 evidence and blue's own opening converge on this characterization:
+
+1. Sub-claim D requires an explicit citation of the Gamma conjugate prior at line 914. Blue conceded this is a real gap (`02_blue_opening.md:49`) but classified it as cosmetic. Under the project's pristine-codebase standard articulated in `CLAUDE.md` (and applied as a debate principle in the §4–§5 series), an under-cited theoretical grounding is a substantive purity gap.
+
+2. Sub-claim A requires an earlier and more prominent flag for the flat-bundle restriction. The line-656 disclosure is locally adequate but the introduction-level framing reads as if non-trivial gauge structure were operative. The §3.2 introduction at line 612 calls Ω "gauge transport" without flagging that the parameterization forces flatness.
+
+3. Sub-claim B requires a one-line statement about the `K_q` vs `K_p` independence and which dimension is operative in §3.
+
+4. Sub-claim E survives blue's attack intact. The base-point restriction at `Attention/GL(K)_attention.tex:574` ("All probability distributions are defined at a specific base manifold point $c = c^*$ unless otherwise noted") is explicitly stated at the opening of §3, and blue's enumeration at `02_blue_opening.md:55` of every numbered §3 equation correctly shows none invokes overlap integrals, Riemann curvature, gauge curvature, or Fisher curvature. The line-977 parenthetical is honest future-work signaling, not load-bearing scaffolding. I withdraw any residual attack on E.
+
+5. Sub-claims C and F survive fully, as conceded above.
+
+The compound verdict the judge should weigh: §3 is not structurally broken on any of its load-bearing derivations, but it carries at least one well-defined editorial-purity gap (sub-claim D's missing Gamma-prior citation at line 914) and one framing-level gap (sub-claim A's introduction-level disclosure of the flat-bundle restriction). These are real strikes under the source-of-truth rule at `debate_methodology.md:8-9`, comparable to the editorial corrections applied in the §4–§5 series (e.g., the canonical-F-vs-surrogate convention statement at line 874). A RED_WINS-narrow verdict with scoped action items — cite `[Bishop2006 §2.3.6]` at line 914, add a flat-bundle flag earlier in §3.2, add a one-line `K_q` vs `K_p` clarification at §3.1 — is consistent with this position. A BLUE_WINS-broad verdict that treats these as not-worth-fixing would be inconsistent with the editorial standard the §4–§5 series established for the same manuscript.
