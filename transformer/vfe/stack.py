@@ -15,23 +15,42 @@ reassigned from the posterior. priors.phi is likewise never consumed by
 VFEEStep (phi is initialised from beliefs.phi each layer), so phi is
 held at the embedding value in the prior state.
 
-Implementation note — mean-only cascade vs canonical hierarchical VI.
-====================================================================
+Implementation note — mean-only cascade vs canonical hierarchical VI (σ).
+=========================================================================
 Under the default ``prior_handoff_rho=1.0, prior_handoff_sigma=0.0``,
 only the posterior MEAN of layer L flows into the prior of layer L+1;
-the posterior VARIANCE and the posterior GAUGE FRAME are discarded and
-the prior at L+1 reuses the embedding sigma and embedding phi. This is
-a *point-estimate handoff*, not the full distributional handoff that
-canonical hierarchical variational inference (Friston 2017; Parr,
-Pezzulo, Friston 2022; Blei, Kucukelbir, Jordan 2017) prescribes.
+the posterior VARIANCE is discarded and the prior at L+1 reuses the
+embedding sigma. This is a *point-estimate σ handoff*, not the full
+distributional σ handoff that canonical hierarchical variational
+inference (Friston 2017; Parr, Pezzulo, Friston 2022; Blei,
+Kucukelbir, Jordan 2017) prescribes. Effect: cross-layer uncertainty
+about ``σ_l`` is dropped at every boundary; layer L+1's
+KL(q^{L+1} || prior) treats the embedding sigma as ground truth even
+though layer L's posterior has refined it. The codepath for full
+σ handoff exists (``prior_handoff_sigma>0`` triggers the SPD eigenvalue
+floor branch); set ``prior_handoff_sigma=1.0`` to recover the canonical
+σ scheme.
 
-Effect: cross-layer uncertainty about ``s_l`` is dropped at every
-boundary — layer L+1's KL(q^{L+1} || prior) treats the embedding sigma
-as ground truth even though layer L's posterior has refined it. The
-codepath for full handoff exists (``prior_handoff_sigma>0`` triggers
-the SPD eigenvalue floor branch), but the default is point-passing.
-Set ``prior_handoff_sigma=1.0`` (and a matching mechanism for phi if
-desired) to recover the canonical scheme.
+Implementation note — φ cascade is via beliefs, not priors.
+============================================================
+``priors.phi`` is intentionally unused. The φ cascade across the L-block
+depth dimension happens via ``beliefs.phi``: each block's
+``VFEBlock.forward`` returns ``BeliefState(mu, sigma, phi)`` with the
+post-E-step posterior φ, the next block reads ``beliefs.phi`` in its
+inner E-step at ``e_step.py: phi = beliefs.phi``, and the
+``BeliefState`` returned by the L-th block carries the L-block-evolved
+gauge frame as the model's final φ. No code site in
+``transformer/vfe/`` reads ``priors.phi`` — grep confirms zero
+consumers — so the embedding-value write at the bottom of this module
+is operationally inert, and adding a ``prior_handoff_phi`` toggle
+would gate a parameter no consumer reads. The σ and φ slots therefore
+exhibit a principled asymmetry: prior σ enters ``KL(q‖p)`` as a
+regularizer and benefits from posterior handoff (``prior_handoff_sigma``);
+prior φ does not enter the E-step KL functional at all (transport
+``Ω_ij = exp(φ_i)·exp(-φ_j)`` is built from current ``beliefs.phi`` on
+both endpoints), so no prior-φ handoff is needed for cross-layer φ
+evolution. See ``docs/debates/2026-05-20-cross-layer-phi-handoff/04_verdict.md``
+for the adjudication.
 """
 
 from __future__ import annotations
