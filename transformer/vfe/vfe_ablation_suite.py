@@ -86,10 +86,10 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
     
-    'batch_size':               320,
+    'batch_size':               64,
     
-    'max_seq_len':              64,
-    'max_steps':                4000,
+    'max_seq_len':              128,
+    'max_steps':                15000,
 
     'use_prior_bank':           False,
     'mask_self_attention':      False,
@@ -105,7 +105,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'E_learnable_alpha':        True,
     'learnable_kappa':          False,
 
-    'use_autograd_mu_sigma':       False,
+    
     'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       True,
 
@@ -113,11 +113,11 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'n_e_steps':                1,
     'n_layers':                 1,
 
-    'alpha_divergence':         1.0,
+    'alpha_divergence':         1,
     'include_attention_entropy': True,
 
-    'e_mu_lr':                  0.4,
-    'e_sigma_lr':               0.025,
+    'e_mu_lr':                  0.5,
+    'e_sigma_lr':               0.015,
     'e_phi_lr':                 0.00,
    
     'alpha':                    1.0,
@@ -131,7 +131,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,
-    'prior_handoff_sigma':      0.0,
+    'prior_handoff_sigma':      0.1,
 
     # === Covariance ===
     'diagonal_covariance':      True,
@@ -156,7 +156,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     # === Embedding init ===
     'mu_init_std':              0.1,
     'phi_scale':                0.1,
-    'sigma_init':               0.4,
+    'sigma_init':               1,
 
     # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
     'epistemic_weight':         0.5,
@@ -167,8 +167,13 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
 
-    # === Cross-head coupling (GL(K) multi-head only) ===
-    # See transformer/vfe/config.py docstring and metrics/viz modules.
+    # === Cross-head coupling (GL(K) multi-head) ===
+    # Off-diagonal gauge generators sparsely connecting selected head pairs.
+    # Each (a, b) entry adds d_head² generators that span head-a → head-b's
+    # subspace; the merged subspace becomes a single super-block with full
+    # GL(d_super) gauge. Empty default = standard block-diagonal gl(d_head)^H.
+    # See transformer/vfe/cross_coupling_metrics.py and
+    # transformer/vfe/cross_coupling_viz.py for diagnostics.
     'cross_couplings':                  [],
     'auto_close_cross_head_basis':      False,
     'validate_cross_head_closure':      True,
@@ -182,6 +187,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'm_mu_lr':                  0.015,
     'm_sigma_lr':               0.004,
     'm_phi_lr':                 0.015,
+    
     'm_hyper_lr':               0.001,
     'm_other_lr':               0.035,
     'weight_decay':             0.075,
@@ -194,12 +200,11 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            20000,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
 
     'track_layer_diagnostics':      False,
     'monitor_monotonicity':         False,
-    # === Driver-only (not VFEConfig fields) ===
     'dataset':                  'wikitext-103',
 }
 
@@ -316,21 +321,21 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'mu_init_std': {
         'description': 'Embedding init: std of base_mu = randn(K) * mu_init_std',
         'param': 'mu_init_std',
-        'values': [0, 0.001, 0.01, 0.1,  1],
-        'baseline_value': 0.4,
+        'values': [0, 0.005, 0.01, 0.05, 0.075, 0.1],
+        'baseline_value': 0.01,
     },
 
     'phi_scale': {
         'description': 'Embedding init: per-token phi_embed ~ N(0, phi_scale)',
         'param': 'phi_scale',
-        'values': [0, 0.001, 0.01, 0.1, 1],
+        'values': [0, 0.001, 0.005, 0.01, 0.1, 0.3],
         'baseline_value': 0.05,
     },
 
     'sigma_init': {
         'description': 'Embedding init: initial covariance scale (base_log_sigma = log(sigma_init))',
         'param': 'sigma_init',
-        'values': [0, 0.001, 0.01, 0.1, 1.0],
+        'values': [0.1, 0.25, 0.45, 0.55, 0.75, 1],
         'baseline_value': 0.4,
     },
 
@@ -554,6 +559,80 @@ def run_single_vfe_experiment(
     n_params = sum(p.numel() for p in model.parameters())
 
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compact init banner — mirrors transformer/vfe/train_vfe.py's per-run
+    # banner so the ablation suite emits the same initialization summary
+    # per run. Uses print() (not logger.info) because this script has no
+    # logging.basicConfig and the rest of its console output is print()-based.
+    from transformer.baselines.flops_counter import (
+        count_gauge_transformer_flops, format_flops,
+    )
+
+    seq_len = vcfg.max_seq_len
+    batch_size = train_loader.batch_size if train_loader.batch_size is not None else 1
+    max_steps = vcfg.max_steps
+    n_heads = vcfg.irrep_spec[0][1] if vcfg.irrep_spec else 1
+    head_dim = vcfg.irrep_spec[0][2] if vcfg.irrep_spec else vcfg.embed_dim
+    phi_dim = vcfg.embed_dim * vcfg.embed_dim
+
+    flops_result = count_gauge_transformer_flops(
+        vocab_size=vcfg.vocab_size,
+        embed_dim=vcfg.embed_dim,
+        n_layers=vcfg.n_layers,
+        n_heads=n_heads,
+        head_dim=head_dim,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        phi_dim=phi_dim,
+        ffn_n_iterations=vcfg.n_e_steps,
+        use_rope=vcfg.use_rope,
+        diagonal_covariance=vcfg.diagonal_covariance,
+    )
+    step_flops = flops_result['step_total']
+    total_flops = step_flops * max_steps
+    total_tokens = max_steps * batch_size * seq_len
+
+    try:
+        dataset_tokens = len(train_loader.dataset.tokens)
+    except AttributeError:
+        dataset_tokens = None
+
+    params_str = f"{n_params/1e6:.2f}M" if n_params >= 1e6 else f"{n_params/1e3:.1f}K"
+    dataset_label = str(cfg.get('dataset', 'unknown'))
+    dataset_name = dataset_label.upper()
+    coverage_str = ""
+    if dataset_tokens and dataset_tokens > 0:
+        coverage_str = f" ~ {total_tokens / dataset_tokens * 100:.0f}% {dataset_label.lower()}"
+
+    print("=" * 70)
+    print(f"  Gauge VFE Transformer | {params_str} params | {device}")
+    print(f"  K={vcfg.embed_dim}, N={seq_len}, L={vcfg.n_layers}, "
+          f"heads={n_heads} | {dataset_name} ({total_tokens/1e6:.0f}M tokens)")
+    print(f"  {max_steps:,} steps | B={batch_size}{coverage_str} | "
+          f"FLOPs/step: {format_flops(step_flops)} | Total: {format_flops(total_flops)}")
+    print(f"  LR: mu={vcfg.m_mu_lr}, sigma={vcfg.m_sigma_lr}, "
+          f"phi={vcfg.m_phi_lr}, out={vcfg.m_other_lr}")
+    print(f"  VFE weights: alpha={vcfg.alpha}, lambda_align={vcfg.lambda_align}, "
+          f"lambda_soft={vcfg.lambda_soft} | kappa={vcfg.kappa}")
+    extras = []
+    if vcfg.use_non_flat_transport:
+        extras.append("non-flat")
+    if vcfg.use_prior_bank:
+        extras.append("prior-bank")
+    if vcfg.learnable_kappa:
+        extras.append("learnable-kappa")
+    if vcfg.E_learnable_alpha:
+        extras.append("E-learnable-alpha")
+    if extras:
+        print(f"  Features: {', '.join(extras)}")
+    val_batches_str = (
+        f"val_batches={len(val_loader)}" if val_loader is not None
+        else "val_batches=0"
+    )
+    print(f"  Seed: {seed} | Dataset: vocab={vocab_size}, "
+          f"train_batches={len(train_loader)}, {val_batches_str}")
+    print(f"  Output: {run_dir}")
+    print("=" * 70)
 
     trainer = VFETrainer(
         model, vcfg, train_loader,
