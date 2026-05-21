@@ -402,7 +402,7 @@ $\rho: G \to \mathrm{GL}(V)$ & & Representation of $G$ on the fiber $V$ \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Variational quantities}} \\
 $\mathcal{F}$ & $\mathbb{R}$ & Gauge-covariant variational free energy \\
-$D_{\KL}(q \| p)$ & $\mathbb{R}_{\geq 0}$ & Forward Kullback--Leibler divergence \\
+$D_{\KL}(q \| p)$ & $\mathbb{R}_{\geq 0}$ & Forward Kullback-Leibler divergence \\
 $\beta_{ij}$ & $[0,1]$, $\sum_j \beta_{ij} = 1$ & Belief attention weight (source-selection posterior) \\
 $\gamma_{ij}$ & $[0,1]$ & Model-fiber coupling weight \\
 $\alpha$ ($\alpha_i$) & $\mathbb{R}^+$ & Prior precision; state-dependent variant (Sec.~\ref{sec:state_dependent_precision}) \\
@@ -650,7 +650,7 @@ Equivalently, the cocycle condition $\Omega_{ij} \Omega_{jk} = \Omega_{ik}$ hold
 \end{lemma}
 
 \begin{proof}
-Direct computation. The consecutive inverse--product pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
+Direct computation. The consecutive inverse-product pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
 \end{proof}
 
 For $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the cocycle identity therefore holds regardless of the learned $\phi_i$, and semantic transport from token $i$ to token $k$ is path-independent: the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij} \Omega_{jk}$ yield identical results. Non-trivial holonomy is recovered without abandoning the vertex-frame skeleton by inserting an edge-local connection $\delta_{ij}$ between the vertex factors,
@@ -1098,14 +1098,14 @@ combines a content-dependent term (the Mahalanobis distance between belief means
 
 The condition $S(\Omega_{ij}) = 0$ is equivalent to $\Omega_{ij} \in \mathrm{O}(K)$, but orthogonality serves a second, equally important role: the transported covariance $\sigma^2(\Omega_{ij}\Omega_{ij}^\top)$ equals $\sigma^2 I$ if and only if $\Omega_{ij}\Omega_{ij}^\top = I$, i.e., $\Omega_{ij} \in \mathrm{O}(K)$. Thus orthogonal transport is the \emph{unique} condition under which isotropic covariances are preserved under gauge transport. For $\Omega_{ij} \in \mathrm{GL}(K) \setminus \mathrm{O}(K)$, a belief that is isotropic in its own frame becomes anisotropic when transported to another frame, and the geometric bias $S(\Omega_{ij}) > 0$ measures precisely this induced anisotropy.
 
-However, the matrix exponential parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ (Eq.~\ref{eq:gauge_frame_rotation}) restricts transport to the identity component. Under orthogonal projection (e.g., Newton--Schulz iteration), $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$, the special orthogonal group with $\det = +1$. The full orthogonal group $\mathrm{O}(K) = \mathrm{SO}(K) \rtimes \mathbb{Z}_2$ includes a second connected component of orientation-reversing transformations ($\det = -1$) that is topologically inaccessible to the exponential map. To extend to full $\mathrm{O}(K)$, one introduces per-agent diagonal reflection matrices $R_i = \mathrm{diag}(s_i)$ with $s_i \in \{-1,+1\}^K$, yielding the combined transport
+However, the matrix exponential parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ (Eq.~\ref{eq:gauge_frame_rotation}) restricts transport to the identity component. Under orthogonal projection (e.g., Newton-Schulz iteration), $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$, the special orthogonal group with $\det = +1$. The full orthogonal group $\mathrm{O}(K) = \mathrm{SO}(K) \rtimes \mathbb{Z}_2$ includes a second connected component of orientation-reversing transformations ($\det = -1$) that is topologically inaccessible to the exponential map. To extend to full $\mathrm{O}(K)$, one introduces per-agent diagonal reflection matrices $R_i = \mathrm{diag}(s_i)$ with $s_i \in \{-1,+1\}^K$, yielding the combined transport
 %
 \begin{equation}
 \Omega_{ij} = R_i M_{ij} R_j, \qquad M_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K),
 \label{eq:ok_transport}
 \end{equation}
 %
-When $\phi_i$ is restricted to $\mathfrak{so}(K)$ (skew-symmetric matrices), $M_{ij} \in \mathrm{SO}(K)$ automatically; for general $\phi_i \in \mathfrak{gl}(K)$, orthogonal projection (e.g., Newton--Schulz iteration, as described above) maps $M_{ij}$ to $\mathrm{SO}(K)$. With $M_{ij} \in \mathrm{SO}(K)$, the combined transport covers both components of $\mathrm{O}(K)$ since $\det(\Omega_{ij}) = (\prod_k s_i^{(k)})(\prod_k s_j^{(k)})\det(M_{ij})$ ranges over $\pm 1$. Orthogonality $\Omega_{ij}\Omega_{ij}^\top = R_i M_{ij} \underbrace{R_j R_j}_{I} M_{ij}^\top R_i = R_i \underbrace{M_{ij}M_{ij}^\top}_{I} R_i = \underbrace{R_i^2}_{I} = I$ follows from the fact that each factor is independently orthogonal, ensuring $S(\Omega_{ij}) = 0$ and preservation of isotropic covariance under transport. The Mahalanobis distance decomposes cleanly: since $\Omega_{ij}^{-1} = R_j M_{ij}^\top R_i$ and each $R$ is its own inverse,
+When $\phi_i$ is restricted to $\mathfrak{so}(K)$ (skew-symmetric matrices), $M_{ij} \in \mathrm{SO}(K)$ automatically; for general $\phi_i \in \mathfrak{gl}(K)$, orthogonal projection (e.g., Newton-Schulz iteration, as described above) maps $M_{ij}$ to $\mathrm{SO}(K)$. With $M_{ij} \in \mathrm{SO}(K)$, the combined transport covers both components of $\mathrm{O}(K)$ since $\det(\Omega_{ij}) = (\prod_k s_i^{(k)})(\prod_k s_j^{(k)})\det(M_{ij})$ ranges over $\pm 1$. Orthogonality $\Omega_{ij}\Omega_{ij}^\top = R_i M_{ij} \underbrace{R_j R_j}_{I} M_{ij}^\top R_i = R_i \underbrace{M_{ij}M_{ij}^\top}_{I} R_i = \underbrace{R_i^2}_{I} = I$ follows from the fact that each factor is independently orthogonal, ensuring $S(\Omega_{ij}) = 0$ and preservation of isotropic covariance under transport. The Mahalanobis distance decomposes cleanly: since $\Omega_{ij}^{-1} = R_j M_{ij}^\top R_i$ and each $R$ is its own inverse,
 %
 \begin{equation}
 \|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2 = \|M_{ij}^\top(s_i \odot \mu_i) - (s_j \odot \mu_j)\|^2,
@@ -2298,7 +2298,7 @@ The gauge VFE is computationally more expensive than standard attention, primari
 
 \subsubsection{Cross-Head Gauge Mixing.}
 
-Standard multi-head attention restricts the gauge algebra to $\bigoplus_a \mathfrak{gl}(d_{\mathrm{head}}) \subset \mathfrak{gl}(d_k)$, projecting out the majority of generators (87.5\% for typical architectures). Restoring the off-diagonal generators (Section~\ref{sec:off_diagonal_mixing}) would make attention scores themselves cross-head aware, so that head~$a$'s decision about what to attend to depends on the content of head~$b$---qualitatively different from the post-attention mixing provided by~$W_O$. For equivariant architectures with $\mathrm{SO}(3)$ irrep structure, these off-diagonal blocks correspond to Clebsch--Gordan couplings between angular momentum channels. Whether the computational cost of richer transport can be justified by improved expressiveness, and whether structured sparsity (coupling only selected head pairs) achieves most of the benefit, is a central experimental question.
+Standard multi-head attention restricts the gauge algebra to $\bigoplus_a \mathfrak{gl}(d_{\mathrm{head}}) \subset \mathfrak{gl}(d_k)$, projecting out the majority of generators (87.5\% for typical architectures). Restoring the off-diagonal generators (Section~\ref{sec:off_diagonal_mixing}) would make attention scores themselves cross-head aware, so that head~$a$'s decision about what to attend to depends on the content of head~$b$---qualitatively different from the post-attention mixing provided by~$W_O$. For equivariant architectures with $\mathrm{SO}(3)$ irrep structure, these off-diagonal blocks correspond to Clebsch-Gordan couplings between angular momentum channels. Whether the computational cost of richer transport can be justified by improved expressiveness, and whether structured sparsity (coupling only selected head pairs) achieves most of the benefit, is a central experimental question.
 
 \subsubsection{Non-Uniform Head Dimensions.}
 
@@ -2353,7 +2353,7 @@ All experiments reported in the results section can be reproduced using the prov
 \section*{Acknowledgments}
 Claude Opus 4.5/4.6 was utilized for programming our variational free energy descent simulation suite. All code was manually reviewed, corrected, and mathematically validated by the author by hand. Furthermore, Claude was utilized for typesetting figures, LaTeX equations, and general organizational and manuscript clarity advice. The author emphasizes that Claude (or any other LLMs) played no role in the development or conceptual ideas of our theoretical framework. The author further declares no funding or conflicts of interest.
 
-\paragraph{Supplementary Material.} All appendices are provided in the Supplementary Material: Appendices~A--D cover differential geometry, covariance dynamics, gauge frame gradients, and numerical methods; Appendices~E--G present the BERT validation, RG universality conjecture, and symmetry breaking simulations; Appendix~H proves the conditional uniqueness of the forward KL divergence via variational duality.
+\paragraph{Supplementary Material.} All appendices are provided in the Supplementary Material: Appendices~A through~D cover differential geometry, covariance dynamics, gauge frame gradients, and numerical methods; Appendices~E through~G present the BERT validation, RG universality conjecture, and symmetry breaking simulations; Appendix~H proves the conditional uniqueness of the forward KL divergence via variational duality.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
