@@ -244,13 +244,6 @@ class VFENonFlatConnection(nn.Module):
             g_fro_sq = (generators ** 2).sum(dim=(-2, -1)).clamp(min=1e-12)  # (n_gen,)
         self.register_buffer('g_fro_sq', g_fro_sq)
 
-        # W() cache: invalidated by W_raw._version bumps. Declared here so
-        # they're visible to instance-attribute static analysis, and the
-        # initial key is a sentinel that never matches a real _version (which
-        # starts at 0 after construction).
-        self._W_cache_key: int = -1
-        self._W_cache: Optional[torch.Tensor] = None
-
     # -- properties -----------------------------------------------------------
 
     @property
@@ -261,28 +254,17 @@ class VFENonFlatConnection(nn.Module):
     def W(self) -> torch.Tensor:
         r"""Antisymmetric, block-masked bilinear forms ``(n_gen, K, K)``.
 
-        Cached per-(version of W_raw) so the antisymmetrization runs once per
-        optimizer step instead of three times per E-step iteration. Autograd
-        fan-out from the cached tensor is the standard pattern — gradients
-        accumulate at W_raw across the multiple downstream consumers.
+        Recomputed each call. A prior implementation cached the result keyed
+        on ``W_raw._version``, but ``_version`` only bumps on in-place writes
+        (i.e. ``optimizer.step()``). Between two forwards within a single
+        optimizer step — e.g. gradient accumulation — the cache hit returned
+        a tensor whose autograd ``grad_fn`` referenced saved tensors freed
+        by the prior ``backward()``; the next ``backward()`` would error or
+        silently alias stale state. The recomputation is two elementwise ops
+        and a transpose, trivial compared to the ``matrix_exp`` that follows.
         """
-        cache_key = self.W_raw._version
-        cached = self._W_cache
-        # Cross-check device: ``.to(device)`` moves W_raw (a parameter) but
-        # doesn't touch _W_cache (a plain attr). After such a move, _version
-        # still bumps so this normally re-fires anyway, but guard explicitly
-        # for the edge case where the version hasn't advanced.
-        if (
-            cached is not None
-            and self._W_cache_key == cache_key
-            and cached.device == self.W_raw.device
-        ):
-            return cached
         W_masked = self.W_raw * self.W_block_mask
-        result = 0.5 * (W_masked - W_masked.transpose(-1, -2))
-        self._W_cache_key = cache_key
-        self._W_cache = result
-        return result
+        return 0.5 * (W_masked - W_masked.transpose(-1, -2))
 
     # -- forward --------------------------------------------------------------
 

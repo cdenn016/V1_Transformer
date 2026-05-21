@@ -335,7 +335,6 @@ class VFEConfig:
     use_non_flat_transport: bool = False
     non_flat_max_strength: float = 1.0       # s_max in s = s_max·tanh(ρ)
     non_flat_per_edge_delta_max: float = 1.0  # δ_max bound on ‖δ_ij·G‖_F
-    non_flat_tile_size: int = 0               # Reserved for future j-axis chunked aggregation. The tiled path is not yet implemented; non-zero values are silently treated as 0 today.
 
     # === Head mixer ===
     # Schur-commutant per-irrep-type mixer applied after the E-step (and
@@ -471,6 +470,19 @@ class VFEConfig:
                     f"freeze the corresponding param group; negative values are "
                     f"never valid."
                 )
+        if self.n_e_steps < 1:
+            raise ValueError(
+                f"n_e_steps={self.n_e_steps} must be >= 1. The E-step inner "
+                f"loop runs `for t in range(self.n_e_steps)`, so 0 yields a "
+                f"no-op forward and any negative value is meaningless."
+            )
+        _valid_nan_modes = ('off', 'warn', 'revert', 'abort')
+        if self.e_nan_check not in _valid_nan_modes:
+            raise ValueError(
+                f"e_nan_check={self.e_nan_check!r} not in {_valid_nan_modes}. "
+                f"A typo here would otherwise reach _numerics.check_finite "
+                f"and silently behave as 'off'."
+            )
         # --- Exact full-cov decode validation ------------------------------
         # exact_full_cov_decode=True is meaningful only when the prior bank
         # carries non-zero off-diagonal mass within each gauge block AND the
@@ -664,15 +676,6 @@ class VFEConfig:
             # supported as of 2026-05-19.
             # Omega-direct: per-block Ω walks super_block_dims; supported.
 
-        # --- non_flat_tile_size reserved future field ----------------------
-        if self.non_flat_tile_size != 0:
-            raise NotImplementedError(
-                f"non_flat_tile_size={self.non_flat_tile_size} is reserved for "
-                "future j-axis chunked aggregation; the tiled path is not yet "
-                "implemented. Set non_flat_tile_size=0 (the default) to use the "
-                "unchunked aggregation, or remove the field from your config."
-            )
-
         # --- Non-flat transport constraints --------------------------------
         if self.use_non_flat_transport:
             if not self.diagonal_covariance:
@@ -726,66 +729,6 @@ class VFEConfig:
                 f"gauge_parameterization={self.gauge_parameterization!r}) "
                 f"routes through a path that reconstructs the standard KL and "
                 f"will ignore the Renyi exponent.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        # The E-step inner loop in e_step.py orders updates as
-        # (μ-update → σ-retract → φ-retract). With n_e_steps==1 the
-        # retracted σ and φ are the last tensors written before the loop
-        # exits, and no later step in the same iteration consumes them.
-        # Whether σ_new and φ_new reach the loss after stack(...) returns
-        # then depends on what reads them downstream:
-        #   σ lift: n_e_steps>=2  (next iter's nat_grad_mu reads sigma)
-        #        OR n_layers>=2   (next layer's compute_kl_attention reads sigma)
-        #        OR use_prior_bank=True   (prior_bank.decode reads sigma_q)
-        #        OR norm_type in {'mahalnorm','centered_mahalnorm'}   (norm reads sigma)
-        #   φ lift: n_e_steps>=2  OR n_layers>=2
-        #        (prior_bank.decode(mu_q, sigma_q, tau) does not take phi;
-        #         no norm reads phi.)
-        # When the relevant lift fails, sweeping e_sigma_lr / e_phi_lr scales
-        # tensors that are autograd-disconnected from CE and the loss is
-        # bitwise identical across the sweep.
-        # σ-orphan lift conditions depend on whether direct-mode prior is
-        # active: under `gauge_fixed_priors=False` the σ parameter is
-        # `sigma_log_embed`, which receives gradient through the starting-σ
-        # path in the E-step regardless of `e_sigma_lr` — so sweeping
-        # `e_sigma_lr` is still orphaned (it scales a tensor discarded after
-        # the inner update), but `sigma_log_embed` itself learns. The
-        # warning text below now disambiguates the two cases.
-        _sigma_lift_via_norm = self.norm_type in ('mahalnorm', 'centered_mahalnorm')
-        _sigma_orphan = (
-            self.n_e_steps == 1
-            and self.n_layers == 1
-            and not self.use_prior_bank
-            and not _sigma_lift_via_norm
-        )
-        _phi_orphan = (self.n_e_steps == 1 and self.n_layers == 1)
-        if _sigma_orphan or _phi_orphan:
-            _dead = []
-            if _sigma_orphan:
-                _dead.append("e_sigma_lr")
-            if _phi_orphan:
-                _dead.append("e_phi_lr")
-            _direct_mode_note = (
-                " NOTE: gauge_fixed_priors=False — the σ parameter "
-                "(`sigma_log_embed`) still learns via the starting-σ path; "
-                "only `e_sigma_lr` (the inner-iteration σ retraction rate) "
-                "is dead under this configuration."
-                if not self.gauge_fixed_priors and _sigma_orphan
-                else ""
-            )
-            import warnings
-            warnings.warn(
-                f"Orphaned E-step retraction: with n_e_steps={self.n_e_steps}, "
-                f"n_layers={self.n_layers}, use_prior_bank={self.use_prior_bank}, "
-                f"norm_type={self.norm_type!r}, the following LR(s) scale "
-                f"tensors that never reach the loss and will show no effect "
-                f"when swept: {', '.join(_dead)}. Lift conditions — σ: "
-                f"n_e_steps>=2 OR n_layers>=2 OR use_prior_bank=True OR "
-                f"norm_type in {{'mahalnorm','centered_mahalnorm'}}; φ: "
-                f"n_e_steps>=2 OR n_layers>=2."
-                f"{_direct_mode_note}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -881,6 +824,11 @@ class VFEConfig:
         """
         if self.cross_couplings:
             sbd = self.super_block_dims
-            assert sbd is not None
+            if sbd is None:
+                raise RuntimeError(
+                    "super_block_dims unexpectedly None despite non-empty "
+                    "cross_couplings; VFEConfig invariant violated. This "
+                    "should have been built by __post_init__."
+                )
             return sbd
         return self.irrep_dims

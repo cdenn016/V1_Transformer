@@ -827,7 +827,13 @@ class VFEEStep(nn.Module):
 
         for t in range(self.n_e_steps):
             if _nan_check_armed:
-                _iter_snapshot = (mu.detach().clone(), sigma.detach().clone(), phi.detach().clone())
+                # Snapshot the pre-iteration tensors WITHOUT detach: on a
+                # 'revert', we return tensors that retain the autograd graph
+                # back to the model inputs so M-step gradients still flow.
+                # A previous detach() here silently severed the path and
+                # zeroed the M-step contribution for any minibatch that
+                # triggered a revert.
+                _iter_snapshot = (mu.clone(), sigma.clone(), phi.clone())
             # 1. Compute transport and KL attention.
             # The "flat" cache (block_exp_pairs) is built unconditionally
             # because both the flat path and the non-flat path need it as a
@@ -1383,8 +1389,11 @@ class VFEEStep(nn.Module):
                 # block_exp_pairs is intentionally not forwarded — _update_phi
                 # must rebuild Omega from a fresh phi leaf for the autograd
                 # path. The dead arg is dropped from the call to make this
-                # explicit.
-                phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
+                # explicit. Short-circuit when e_phi_lr==0 to skip the full
+                # autograd.grad + matrix_exp rebuild that would only produce
+                # a zero update.
+                if self.e_phi_lr > 0.0:
+                    phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, kappa=_kappa)
 
             # Item 1 (e_nan_check): NaN/Inf sentinel at end-of-iteration.
             # Default 'off' is a no-op. 'warn' logs and continues. 'revert'
@@ -1984,16 +1993,6 @@ class VFEEStep(nn.Module):
         priors: BeliefState,
         mask: Optional[torch.Tensor],
     ) -> BeliefState:
-        # Same guard as _compute_mu_sigma_grad_autograd: the omega-direct
-        # path reconstructs standard KL and would silently drop the Rényi α.
-        if abs(self.alpha_divergence - 1.0) > 1e-9:
-            raise RuntimeError(
-                f"alpha_divergence={self.alpha_divergence} is incompatible "
-                "with gauge_parameterization='omega_direct': this path "
-                "reconstructs the standard KL functional and silently "
-                "ignores the Rényi α exponent. Either set alpha_divergence=1.0 "
-                "or use gauge_parameterization='phi'."
-            )
         r"""E-step inner loop with :math:`\Omega \in G` as the gauge state.
 
         Iterates :math:`(\mu, \sigma, \Omega)` instead of :math:`(\mu, \sigma,
@@ -2011,6 +2010,16 @@ class VFEEStep(nn.Module):
         Killing-degenerate trace drift on :math:`\mathbb{R}\cdot I \subset
         \mathfrak{gl}(K)`).
         """
+        # Same guard as _compute_mu_sigma_grad_autograd: the omega-direct
+        # path reconstructs standard KL and would silently drop the Rényi α.
+        if abs(self.alpha_divergence - 1.0) > 1e-9:
+            raise RuntimeError(
+                f"alpha_divergence={self.alpha_divergence} is incompatible "
+                "with gauge_parameterization='omega_direct': this path "
+                "reconstructs the standard KL functional and silently "
+                "ignores the Rényi α exponent. Either set alpha_divergence=1.0 "
+                "or use gauge_parameterization='phi'."
+            )
         if beliefs.omega is None:
             raise RuntimeError(
                 "gauge_parameterization='omega_direct' requires "

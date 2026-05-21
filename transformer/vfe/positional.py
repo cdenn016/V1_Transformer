@@ -90,13 +90,18 @@ class VFEPositionalEncoding(nn.Module):
             from transformer.core.vfe_utils import build_slk_basis
             _, P = build_slk_basis(generators, list(irrep_dims))  # (n_gen, n_gen - H)
             self.register_buffer('pos_phi_basis', P)
+            # Scale positional gauge init by cfg.phi_scale so the user-facing
+            # phi_scale knob actually zeroes the initial gauge frame when set
+            # to 0. A prior hardcoded `* 0.01` silently injected a nonzero
+            # positional phi regardless of phi_scale, contaminating any
+            # phi_scale=0 sweep with a residual 0.01-magnitude rotation.
             self.pos_phi_free = nn.Parameter(
-                torch.randn(cfg.max_seq_len, P.shape[-1]) * 0.01
+                torch.randn(cfg.max_seq_len, P.shape[-1]) * cfg.phi_scale
             )
         else:
             self.pos_phi_basis = None
             self.pos_phi_free = nn.Parameter(
-                torch.randn(cfg.max_seq_len, n_gen) * 0.01
+                torch.randn(cfg.max_seq_len, n_gen) * cfg.phi_scale
             )
 
     def forward(self, phi: torch.Tensor, seq_len: int) -> torch.Tensor:
