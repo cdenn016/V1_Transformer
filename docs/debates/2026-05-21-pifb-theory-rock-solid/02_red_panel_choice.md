@@ -1,0 +1,30 @@
+# Red Panel Choice — 02 Opening
+
+Mode: theory. Round: opening (Phase 2). Side: red. Mandate: falsify the claim that §Theory of `Attention/Participatory_it_from_bit.tex` (lines 180-2070) is rock solid and publication ready.
+
+## Selected panel (5 of 10)
+
+| Tag | One-sentence justification |
+|---|---|
+| `philosophy-of-science` | Mandatory under the methodology. Owns sub-claims 4–6: falsifiability and scope (analogy vs derivation), self-containedness (companion-paper dependence), and unresolved gaps (the literal `\textbf{TODO}` inside §Theory at line 1880). |
+| `gauge-theorist` | The section runs on principal bundles, $\mathrm{GL}^+(K)$ transport, the sandwich product, Goldstone language, and a dual Role A / Role B treatment of the gauge frame $\phi_i$. The strongest checks of canonical fidelity (sub-claim 2) on the bundle/edge-mode side live here, including whether the vanishing-holonomy lemma + edge-mode citation actually license what they are asked to license. |
+| `variational` | The functional is a multi-agent extension of FEP with belief-coupling, attention-entropy, and cross-scale-shadow terms that are not in standard single-agent FEP (`external_canon_inference.md:29`, `:60`). Owns the mixture-of-sources status caveat, the source-independence factorization assumption, the cross-scale shadow as deterministic point-passing vs. true variational hierarchy, and the conditional-uniqueness backstop. |
+| `info-geometer` | The section invokes Fisher–Rao, Chentsov/Cencov, KL-of-Gaussians closed form, natural-gradient flow, and a "Fisher metric mass term." Owns the canonical-fidelity check on the information-geometric primitives (sub-claim 2), the Cencov uniqueness reading of attention-entropy as "geometric necessity," and the f-divergence conditional-uniqueness appendix backstop. |
+| `geometer` | The mass-analogy subsection (lines 1877–2069) rests on second-variation Hessians, kinetic-metric postulates, sandwich transport of precision $\Omega^{-T}\Lambda\Omega^{-1}$, and the explicit Arnold-1989 citation for the inertia-tensor / potential-Hessian independence requirement. Owns the differential-geometric checks on the Hessian-as-mass identification and the velocity-quadratic metric postulate, including the symmetric-attention conservative-Hamiltonian reading vs the asymmetric-attention dissipative-only fallback. |
+
+## Rationale for the swap
+
+The `theory`-mode default is `geometer, info-geometer, variational, gauge-theorist, philosophy-of-science`. That is exactly the panel selected here; no swap was required. `numerical-analyst` was considered (the manuscript invokes machine-precision symbolic verification at line 1723, fp behavior of $\Omega^{-T}\Lambda\Omega^{-1}$, etc.) but the §Theory claim is about derivation soundness rather than finite-precision risk, and `geometer` plus `info-geometer` between them cover the Hessian and sandwich-transport algebra without the numerical lens. `transformer-ml` was considered for the transformer-limit reduction in §1.16 but the load-bearing complaint there is the companion-paper outsourcing, which is a philosophy-of-science / self-containedness attack, not a transformer-architecture attack.
+
+## Lead attack vectors seeded to the panel
+
+Ordered by strength (decisive first):
+
+1. **TODO inside §Theory (line 1880).** Literal `\textbf{TODO:}` deferring the only empirical test of $\omega^2 \propto m_{\text{eff}}^{-1}$ to future work, inside what is asserted to be publication-ready theory. Face-value violation of sub-claim 6 of the operationalization. (philosophy-of-science.)
+2. **Mass-analogy as definitional consequence (lines 1882, 2048, 2064).** Manuscript explicitly states the harmonic-oscillator $\omega^2 \propto k/m$ scaling is "a definitional consequence of identifying the kinetic-metric coefficient with the potential Hessian rather than an independent dynamical scaling" and cites Arnold 1989 for the standard requiring inertia and potential Hessian to be operationally independent — and then explicitly fails to supply that independence. (philosophy-of-science + geometer.)
+3. **Companion-paper load-bearing dependence.** `Dennis2025trans` cited ≥10× in §Theory for transformer-limit reduction, per-coordinate $\alpha$, multi-head lift, mixture-of-sources construction, untied QK reduction (lines 1042, 1294, 1352, 1607, 1615, 1702, 1818). Sub-claim 5 (self-containedness) falls if these reductions are not carried in §Theory itself. (philosophy-of-science.)
+4. **Multi-agent coupling as engineered ansatz, not derivation from FEP** (`external_canon_inference.md:29`). Section 1.13 (lines 1027–1029) explicitly labels the multi-agent functional as a "novel" extension and an "engineered consensus energy, not a derivation from FEP alone"; the mixture-of-sources status note at line 1044 reiterates "consensus-energy ansatz rather than a generative-model derivation." Does the rest of §Theory then treat this as derivation when reading "attention is a geometric necessity rather than an architectural choice" at line 1411? (variational.)
+5. **Cross-scale shadow as deterministic point-passing vs. true variational hierarchy** (`external_canon_inference.md:60`). Eq. (eq:cross_scale_shadow) at line 547 posits $p_i^{(s)} = \Omega_{i,I}[q_I^{(s+1)}]$ — a transported posterior, not a generative-model conditional $p(s_\ell\mid s_{\ell+1})$ in the standard hierarchical-FEP sense. The Appendix-A backstop (cited at line 552) is asserted but not visible in §Theory. (variational.)
+6. **Source-independence factorization** (line 1064). The mean-field factorization $Q(k,z)=q_i(k)\cdot\beta(z)$ is called out by the manuscript itself as "a substantive structural assumption, not a tractability simplification" — and the closed-form softmax depends on it. Does §Theory carry this caveat through to the "geometric necessity" framing? (variational + info-geometer.)
+
+Each expert is instructed: ≥1 external citation per memo, harvest new canon via WebSearch/WebFetch into the "Newly-discovered canon" section, and write to `02_red_memo_<tag>.md`.
