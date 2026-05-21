@@ -86,10 +86,10 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
     
-    'batch_size':               192,
+    'batch_size':               320,
     
     'max_seq_len':              64,
-    'max_steps':                2000,
+    'max_steps':                4000,
 
     'use_prior_bank':           False,
     'mask_self_attention':      False,
@@ -106,7 +106,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'learnable_kappa':          False,
 
     'use_autograd_mu_sigma':       False,
-    'use_equivariant_head_mixer':  True,
+    'use_equivariant_head_mixer':  False,
     'gauge_covariant_ridge':       True,
 
     # === E-step dynamics ===
@@ -117,8 +117,8 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'include_attention_entropy': True,
 
     'e_mu_lr':                  0.4,
-    'e_sigma_lr':               0.015,
-    'e_phi_lr':                 0.05,
+    'e_sigma_lr':               0.025,
+    'e_phi_lr':                 0.00,
    
     'alpha':                    1.0,
     'lambda_align':             2.45,
@@ -154,8 +154,8 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'rope_base':                150,
 
     # === Embedding init ===
-    'mu_init_std':              0.001,
-    'phi_scale':                0.001,
+    'mu_init_std':              0.1,
+    'phi_scale':                0.1,
     'sigma_init':               0.4,
 
     # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
@@ -194,7 +194,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            2000,
+    'eval_interval':            20000,
     'checkpoint_interval':      25000,
 
     'track_layer_diagnostics':      False,
@@ -226,7 +226,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'e_mu_lr': {
         'description': 'E-step natural-gradient step size for mu_q',
         'param': 'e_mu_lr',
-        'values': [0.4, 0.6, 0.7, 0.8],
+        'values': [0.01, 0.1, 0.25, 0.4, 0.5],
         'baseline_value': 0.1,
     },
 
@@ -253,7 +253,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
         # Same orphan-lift as e_sigma_lr: phi only matters across
         # iterations or layers (no decoder/norm reads phi directly).
         # n_e_steps=2 gives iteration #2's attention/transport a chance
-        # to read the updated phi.
+        # to read the updated phi.  typically zero for E-step
         'requires': {'n_e_steps': 2},
     },
 
@@ -300,7 +300,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'rope_base': {
         'description': 'RoPE frequency base: theta_n = 1 / base^(2n/K)',
         'param': 'rope_base',
-        'values': [25, 50, 75, 100, 150, 200],
+        'values': [ 50, 75, 100, 150, 200],
         'baseline_value': 100,
     },
 
@@ -316,21 +316,21 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'mu_init_std': {
         'description': 'Embedding init: std of base_mu = randn(K) * mu_init_std',
         'param': 'mu_init_std',
-        'values': [0, 1e-3, 1e-2, 1e-1, 1],
+        'values': [0, 0.001, 0.01, 0.1,  1],
         'baseline_value': 0.4,
     },
 
     'phi_scale': {
         'description': 'Embedding init: per-token phi_embed ~ N(0, phi_scale)',
         'param': 'phi_scale',
-        'values': [0.0, 1e-3, 1e-2, 0.05, 0.1, 0.25, 0.5, 1.0],
+        'values': [0, 0.001, 0.01, 0.1, 1],
         'baseline_value': 0.05,
     },
 
     'sigma_init': {
         'description': 'Embedding init: initial covariance scale (base_log_sigma = log(sigma_init))',
         'param': 'sigma_init',
-        'values': [0.001, 0.01, 0.1, 0.25, 0.5, 1.0],
+        'values': [0, 0.001, 0.01, 0.1, 1.0],
         'baseline_value': 0.4,
     },
 
@@ -381,19 +381,19 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
 
 # Sweep execution order (cheap-to-expensive; keep in sync with user priorities).
 SWEEP_ORDER: List[str] = [
-    'e_mu_lr',
+  #  'e_mu_lr',
    # 'e_sigma_lr',
    # 'e_phi_lr',
   # 'alpha_divergence',
-  # 'm_mu_lr',
+   #'m_mu_lr',
   #  'm_sigma_lr',
   # 'm_phi_lr',
- #   'm_hyper_lr',
+  #  'm_hyper_lr',
   #  'm_other_lr',
 
   #  'weight_decay',
     
-   # 'lambda_align',
+  #  'lambda_align',
    # 'lambda_softmax',
    
    # 'rope_base',
@@ -570,6 +570,23 @@ def run_single_vfe_experiment(
     )
     trainer.train(num_steps=vcfg.max_steps)
 
+    # Unconditional final validation pass. The trainer's periodic eval is
+    # gated on (step+1) % eval_interval == 0 (trainer.py:1695) and the
+    # final-pass branch at trainer.py:1785 is gated on test_loader. Neither
+    # fires under the ablation defaults (eval_interval=20000, max_steps=10000,
+    # no test_loader), so without this call best_val_ppl / final_val_ppl
+    # remain None and the suite falls back to final_train_ppl — see the
+    # `null` val fields in pre-fix ablation_result.json artifacts.
+    final_val_metrics: Dict[str, float] = {}
+    if val_loader is not None:
+        try:
+            final_val_metrics = trainer.evaluate()
+            print(f"  Final val eval: PPL={final_val_metrics.get('val_ppl', float('nan')):.4f}"
+                  f"  CE={final_val_metrics.get('val_loss', float('nan')):.4f}")
+        except (RuntimeError, ValueError) as exc:
+            print(f"  WARNING: final trainer.evaluate() failed: {exc!r}")
+            final_val_metrics = {}
+
     # Pull summary from PublicationMetricsTracker (filled by trainer.train).
     summary: Dict[str, Any] = {}
     if trainer._pub_tracker is not None:
@@ -582,12 +599,36 @@ def run_single_vfe_experiment(
             print(f"  WARNING: _pub_tracker.get_summary() failed: {exc!r}")
             summary = {}
 
-    best_val_ppl = summary.get('best_val_ppl')
-    final_val_ppl = summary.get('final_val_ppl')
     final_train_ppl = summary.get('final_train_ppl')
-    final_val_bpc = summary.get('final_val_bpc')
-    best_val_bpc = summary.get('best_val_bpc')
     avg_tokens_per_sec = summary.get('avg_tokens_per_sec')
+
+    # Prefer the just-computed final-eval values; fall back to whatever the
+    # periodic-eval tracker captured. best_val_ppl is min(tracker_best, final_eval).
+    tracker_best_val_ppl = summary.get('best_val_ppl')
+    tracker_final_val_ppl = summary.get('final_val_ppl')
+    tracker_final_val_bpc = summary.get('final_val_bpc')
+    tracker_best_val_bpc = summary.get('best_val_bpc')
+
+    final_val_ppl = final_val_metrics.get('val_ppl', tracker_final_val_ppl)
+    final_val_bpc = final_val_metrics.get('val_bpc', tracker_final_val_bpc)
+
+    if final_val_metrics.get('val_ppl') is not None:
+        best_val_ppl = (
+            min(tracker_best_val_ppl, final_val_metrics['val_ppl'])
+            if tracker_best_val_ppl is not None
+            else final_val_metrics['val_ppl']
+        )
+    else:
+        best_val_ppl = tracker_best_val_ppl
+
+    if final_val_metrics.get('val_bpc') is not None:
+        best_val_bpc = (
+            min(tracker_best_val_bpc, final_val_metrics['val_bpc'])
+            if tracker_best_val_bpc is not None
+            else final_val_metrics['val_bpc']
+        )
+    else:
+        best_val_bpc = tracker_best_val_bpc
 
     # `final_ppl` is the primary plotting metric; mirrors the core suite.
     # Prefer best-val (the historical convention in run_ablation_suite.py),
