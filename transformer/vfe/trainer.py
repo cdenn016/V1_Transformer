@@ -244,15 +244,16 @@ class VFETrainer:
             # same conceptual quantity (prior mean).
             if 'base_mu' in name or 'mu_embed' in name:
                 m_mu_params.append(param)
-            elif (
-                'base_log_sigma' in name
-                or 'sigma_log_embed' in name
-                or 'decode_log_scale' in name
-            ):
+            elif 'base_log_sigma' in name or 'sigma_log_embed' in name:
                 m_sigma_params.append(param)
             elif 'phi_embed' in name or 'pos_phi' in name:
                 m_phi_params.append(param)
-            elif 'e_step' in name:
+            elif 'decode_log_scale' in name or 'e_step' in name:
+                # decode_log_scale is the learnable decode softmax temperature
+                # (τ_decode), parametrically analogous to the attention κ which
+                # also lives in this hyper group. A prior implementation placed
+                # it in m_sigma_lr, conflating decode-temperature tuning with
+                # belief-σ tuning.
                 # NOTE: _phi_preconditioner is a register_buffer (not a
                 # Parameter), so named_parameters() never yields it; it stays
                 # frozen at init by design. The pattern is intentionally
