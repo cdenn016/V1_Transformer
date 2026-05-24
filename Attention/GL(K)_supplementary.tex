@@ -17,6 +17,9 @@
 \lstset{basicstyle=\ttfamily, breaklines=true}
 \usepackage{booktabs}
 
+% Figure search paths (match main paper)
+\graphicspath{{./}{./figs/}{../}{attention/}{../../Transformer Manuscript/fig_transformer_validation/}}
+
 % Custom commands (must match main paper)
 \newcommand{\softmax}{\operatorname{softmax}}
 \newcommand{\KL}{\operatorname{KL}}
@@ -396,6 +399,8 @@ We derive the gradient of the variational free energy $\mathcal{F}$ with respect
 
 \subsection{Structure of the Gauge Frame Gradient}
 
+\paragraph{Convention.} Throughout this appendix and Appendix~\ref{app:variational_descent}, the components $\partial \mathcal{F}/\partial \phi_i^a$ of the gauge-frame gradient in the generator basis $\{T_a\}$ are defined via the \emph{right-trivialised} differential of the matrix exponential, $D_{\phi_i}(\exp)[T_a] = Q_a^{R,(i)}\,\exp(\phi_i)$ with $Q_a^{R,(i)} \equiv \mathrm{dexp}_{\phi_i}(T_a)$, so that $\partial \Omega_{ij}/\partial \phi_i^a = Q_a^{R,(i)}\,\Omega_{ij}$. The implementation computes these components by automatic differentiation through PyTorch's \texttt{torch.matrix\_exp}, which returns the Fr\'echet derivative $D_\phi(\exp)[T_a]$; the right-trivialised generator is then recovered as $Q_a^R = D_\phi(\exp)[T_a]\cdot e^{-\phi}$. The same components are fed to the Cartan-modified preconditioner $\tilde g_{ab}$ of Section~\ref{sec:glk_preconditioning} (Eq.~\ref{eq:killing_metric}). The left-trivialised form $\partial/\partial\phi^a \exp(X) = \exp(X)\cdot Q_a^L$ with $Q_a^L = \mathrm{Ad}_{\exp(-\phi)}(Q_a^R)$ is mathematically equivalent and is sometimes written in Appendix~\ref{app:variational_descent} for didactic comparison; the reference implementation uses the right-trivialised convention throughout.
+
 The gauge frames enter the free energy exclusively through the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Since neither the belief-prior term $D_{\mathrm{KL}}(q_i \| p_i)$ nor the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$ depends on $\phi_i$, the complete autograd gradient (differentiating the attention-weighted energy $\sum_j \beta_{ij} K_{ij}$ via the product rule; see main text Section~3.5 for the distinction between autograd and reduced-free-energy gradients) is:
 
 \begin{equation}
@@ -447,7 +452,7 @@ where $\mathrm{dexp}_\phi: \mathfrak{g} \to \mathfrak{g}$ denotes the differenti
 \label{eq:dexp_series}
 \end{equation}
 
-where $\mathrm{ad}_\phi(\xi) = [\phi, \xi] = \phi\xi - \xi\phi$ is the adjoint representation. Equation \eqref{eq:dexp_series} defines the right-trivialized differential, related to the Fr\'{e}chet derivative (directional derivative in matrix space) by $D_\phi(\exp)[\xi] = \mathrm{dexp}_\phi(\xi) \cdot e^\phi$. The $\mathrm{GL}(K)$ specialization below uses the Fr\'{e}chet derivative directly via its integral representation.
+where $\mathrm{ad}_\phi(\xi) = [\phi, \xi] = \phi\xi - \xi\phi$ is the adjoint representation. Equation \eqref{eq:dexp_series} defines the right-trivialized differential, related to the Fr\'{e}chet derivative (directional derivative in matrix space) by $D_\phi(\exp)[\xi] = \mathrm{dexp}_\phi(\xi) \cdot e^\phi$. The $\mathrm{GL}(K)$ specialization below uses the Fr\'{e}chet derivative directly via its integral representation~\citep[Ch.~10]{Higham2008}.
 
 \subsubsection{$\mathrm{SO}(N)$ specialization.}
 
@@ -652,11 +657,11 @@ becomes very flat.
 \subsection{Gauge Frame Dynamics on $\mathrm{GL}(K)$}
 For the gauge frame fields $\phi_i$, which live in the Lie algebra $\mathfrak{gl}(K)$ (or its subalgebra $\mathfrak{so}(3)$ in the fundamental representation), a different geometric structure must be respected. These fields parameterize the local gauge frames as $U_i = \exp(\sum_a \phi_i^a T_a)$, where $\{T_a\}$ are the Lie algebra generators, and the transport operators take the form $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Gradients of the alignment energy $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j])$ with respect to $\phi_i$ are obtained via the chain rule through the transport operator: the KL gradient with respect to $\Omega$ is contracted against the differential $\partial\Omega_{ij}/\partial\phi_i^a$.
 
-The differential of the matrix exponential relates infinitesimal variations $\delta \phi$ to variations in the group element via the \emph{left-trivialised} form
+Per the convention paragraph at the head of Appendix~\ref{app:phi_gradients}, all gradient components $\partial \mathcal{F}/\partial \phi_i^a$ are defined via the \emph{right-trivialised} differential and computed by automatic differentiation through \texttt{torch.matrix\_exp}. The equivalent \emph{left-trivialised} expression is
 \begin{equation}
 \frac{\partial}{\partial \phi^a}\exp \Bigl(\textstyle\sum_b \phi^b T_b\Bigr) = \exp(X)\cdot Q_a^{L},
 \end{equation}
-where $X = \sum_b \phi^b T_b$ and $Q_a^{L} = d\exp^{L}_X(T_a)$ denotes the left-trivialised derivative of the exponential map applied to the generator $T_a$. This convention differs from the right-trivialised form $D_{\phi_i}(\exp)[T_a] = Q_a^{R,(i)} \exp(\phi_i)$ used in Eq.~\eqref{eq:dtilde_mu} of Appendix~C by an adjoint action: the two are related by $Q_a^{R} \exp(\phi) = \exp(\phi) \cdot Q_a^{L}$, equivalently $Q_a^{L} = \mathrm{Ad}_{\exp(-\phi)}(Q_a^{R})$~\citep{Hall2015}. For the $K = 3$ fundamental representation of $\mathfrak{so}(3)$, $Q_a^{L}$ is obtained from $Q_a^{R} = \mathrm{dexp}_\phi(T_a)$ of Eq.~\eqref{eq:dexp_so3} by this adjoint action; the only change is the sign of the first-order ad-coefficient (from $+c_1(\theta)\mathrm{ad}_X$ to $-c_1(\theta)\mathrm{ad}_X$), with $c_1, c_2$ and the small-angle Taylor cutoffs taken directly from Eq.~\eqref{eq:dexp_so3} and the surrounding §C.2 discussion. For higher-dimensional representations ($K > 3$), where the Cayley-Hamilton truncation requires $K$ terms, we instead compute $Q_a^{L}$ via the Fr\'{e}chet derivative of the matrix exponential using symmetric quadrature.
+with $X = \sum_b \phi^b T_b$ and $Q_a^{L} = \mathrm{Ad}_{\exp(-\phi)}(Q_a^{R})$~\citep{Hall2015}; the two forms are related by $Q_a^{R} \exp(\phi) = \exp(\phi) \cdot Q_a^{L}$ and yield identical Fr\'echet derivatives $D_\phi(\exp)[T_a]$ when paired with the appropriate group-element factor. We display the left-trivialised form here for cross-reference and to make explicit that switching conventions away from $\phi=0$ introduces an $\mathrm{Ad}$-twist on the gradient components that the preconditioner $\tilde g_{ab}$ (Section~\ref{sec:glk_preconditioning}) would then act on; the implementation uses the right-trivialised form to compute and precondition the gradient consistently. For the $K = 3$ fundamental representation of $\mathfrak{so}(3)$, the closed-form right-trivialised expression $Q_a^{R} = \mathrm{dexp}_\phi(T_a)$ of Eq.~\eqref{eq:dexp_so3} (Rodrigues coefficients) is used directly. For general $K$, the right-trivialised generator is recovered from PyTorch's Fr\'echet derivative as $Q_a^{R} = D_\phi(\exp)[T_a]\cdot e^{-\phi}$; no separate symmetric quadrature routine is invoked in production.
 
 The resulting Euclidean gradient $\partial\mathcal{F}/\partial\phi^a$ can optionally be preconditioned using one of several Lie-algebraic metrics. In the transformer implementation, these include: (i)~the \emph{Cartan-involution-modified} natural gradient, which uses the bilinear form $\tilde{g}_{ab} = 2K \mathrm{tr}(T_a^\top T_b) - 2 \mathrm{tr}(T_a)\mathrm{tr}(T_b)$ (positive-definite on $\mathfrak{sl}(K)$ as derived in Appendix~\ref{sec:glk_preconditioning}) as a position-independent metric with no free parameters; (ii)~a \emph{Cartan decomposition} preconditioner that dampens the non-compact (symmetric) directions of $\mathfrak{gl}(K)$ relative to the compact $\mathfrak{so}(K)$ directions; and (iii)~the full \emph{pullback} natural gradient $\mathcal{G}_{ab}(\phi) = \operatorname{tr}\bigl(\Psi(\mathrm{ad}_\phi)(T_a)^\top \cdot \exp(\phi)\exp(\phi)^\top \cdot \Psi(\mathrm{ad}_\phi)(T_b)\bigr)$ (Eq.~\ref{eq:pullback_metric}), where $\Psi(z) = (e^z - 1)/z$ and the position-dependent factor $\exp(\phi)\exp(\phi)^\top$ captures the exponential amplification of $D\exp$ in the non-compact sector.
 
@@ -946,14 +951,14 @@ Under $R_n$, the intrinsic-channel coupling constants transform as:
 \bigl(g_1^{(\mathrm{orig})}\bigr)' = n^{-1/2} g_1^{(\mathrm{orig})}, \qquad g_2' = n^{-1} g_2, \qquad g_3' = n^{-1} g_3,
 \label{eq:rg_scaling_supp}
 \end{equation}
-where the exponents follow from the central limit theorem (intrinsic anisotropy), the law of large numbers applied to pairwise transport (gauge variation), and the linear-norm scaling of holonomy products around triangles whose sides each contract as $n^{-1/2}$. The linearised RG matrix at the intrinsic fixed point is diagonal:
+where the exponents follow from the central limit theorem applied to the coarse-graining definitions above. The intrinsic anisotropy averages $n$ token-level perturbations and contracts as $n^{-1/2}$. The meta-agent transport $\Omega_{AB} = (|A||B|)^{-1}\sum_{i\in A, j\in B}\Omega_{ij}$ averages $|A|\cdot|B| = n^2$ inter-cluster edges, so each edge contracts as $n^{-1}$ (gauge variation). A linear-order expansion of the holonomy product $H_{ijk} = (I + e_1)(I + e_2)(I + e_3) - I = e_1 + e_2 + e_3 + O(e^2)$ around a triangle whose sides each contract as $n^{-1}$ then gives $\|H - I\| \sim n^{-1}$ for the linear-norm holonomy. The linearised RG matrix at the intrinsic fixed point is diagonal:
 \begin{equation}
 \mathcal{R} = \begin{pmatrix} n^{-1/2} & 0 & 0 \\ 0 & n^{-1} & 0 \\ 0 & 0 & n^{-1} \end{pmatrix},
 \label{eq:rg_matrix_supp}
 \end{equation}
 with all eigenvalues strictly less than one. The corresponding scaling dimensions are $y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -1$ for the linear holonomy norm $\|H-I\|$; the squared action $\|H-I\|^2$ inherits $y_3^{(\mathrm{action})} = -2$. All negative, classifying every operator as \emph{irrelevant} in the RG sense.
 
-The structural claim associated with these scaling dimensions is formalized in two parts in the main paper, Section~\ref{sec:rg_universality}, and we do not restate either here. Theorem~\ref{thm:rg_conditional} gives the i.i.d.-conditional fixed-point content in three clauses---intrinsic fixed point ($g_1^{(\mathrm{orig}),*} = g_2^* = g_3^* = 0$), stability under independence (all $y_k < 0$, hence infrared-stable in the textbook sense~\citep{Cardy1996,goldenfeld1992lectures}), and the emergent-anisotropy generation $g_1^{(\mathrm{emer})} > 0$ from within-cluster mean variance. Conjecture~\ref{conj:rg_universality} separately extends the conditional contraction to the empirical attention graphs of trained transformers, with two clauses: universality (all finite-coupling models flow in the intrinsic channel to the transformer limit, with the emergent anisotropy floor absorbed into $W_Q, W_K$) and an $O(\sqrt{K})$ sample-efficiency-gap claim from absorbing $O(K^2)$ degrees of freedom. The two-part split is load-bearing: the Theorem follows from the CLT applied to the scaling identities of Eqs.~\eqref{eq:rg_scaling_supp}--\eqref{eq:rg_matrix_supp} above, while the Conjecture is the open empirical claim and is the part the synthetic-CLT validation of §\ref{sec:rg_numerical_supp} does not settle.
+The structural claim associated with these scaling dimensions is formalized in two parts in the main paper, Section~\ref{sec:rg_universality}, and we do not restate either here. Proposition~\ref{thm:rg_conditional} gives the i.i.d.-conditional fixed-point content in three clauses---intrinsic fixed point ($g_1^{(\mathrm{orig}),*} = g_2^* = g_3^* = 0$), stability under independence (all $y_k < 0$, hence infrared-stable in the textbook sense~\citep{Cardy1996,goldenfeld1992lectures}), and the emergent-anisotropy generation $g_1^{(\mathrm{emer})} > 0$ from within-cluster mean variance. Conjecture~\ref{conj:rg_universality} separately extends the conditional contraction to the empirical attention graphs of trained transformers, with two clauses: universality (all finite-coupling models flow in the intrinsic channel to the transformer limit, with the emergent anisotropy floor absorbed into $W_Q, W_K$) and a heuristic $O(\sqrt{K})$-class sample-efficiency-gap claim from absorbing $O(K^2)$ degrees of freedom (the exponent is a class label, not a derived bound). The two-part split is load-bearing: the Proposition follows from the CLT applied to the scaling identities of Eqs.~\eqref{eq:rg_scaling_supp}--\eqref{eq:rg_matrix_supp} above, while the Conjecture is the open empirical claim and is the part the synthetic-CLT validation of §\ref{sec:rg_numerical_supp} does not settle.
 
 \paragraph{Emergent anisotropy and LayerNorm.}
 The generation of anisotropy under coarse-graining provides a geometric interpretation of LayerNorm: it acts as a \emph{projection back toward the isotropic submanifold} at each layer, counteracting the emergent anisotropy that the RG flow produces.
@@ -965,7 +970,7 @@ Both architectures share the same scaling exponents (universality class), but di
 
 \paragraph{Workstation-scale experiments ($<50$ GPU-hours).}
 \begin{enumerate}
-\item \emph{Sample efficiency grows with $K$.} Train gauge VFE and standard transformers at matched parameter counts for $K \in \{8, 16, 32, 64\}$ on WikiText-103. The ratio $R(K) = D_{\mathrm{TF}}(K) / D_{\mathrm{VFE}}(K)$ of tokens needed to reach a target perplexity should grow as $R(K) \propto \sqrt{K}$.
+\item \emph{Sample efficiency grows with $K$.} Train gauge VFE and standard transformers at matched parameter counts for $K \in \{8, 16, 32, 64\}$ on WikiText-103. The ratio $R(K) = D_{\mathrm{TF}}(K) / D_{\mathrm{VFE}}(K)$ of tokens needed to reach a target perplexity is conjectured to grow with $K$; the precise exponent (Conjecture~\ref{conj:rg_universality}(b) lists $R(K) \propto \sqrt{K}$ heuristically) is the open quantitative question this experiment is designed to resolve.
 \item \emph{Same scaling exponent.} Both architectures should exhibit the same Chinchilla-style exponent $\beta$ in $\mathrm{PPL}(D) \sim D^{-\beta}$, differing only in the prefactor.
 \item \emph{Coarse-graining exponents.} Extract attention matrices and beliefs from trained checkpoints, apply spectral coarse-graining, and measure how $g_1$, $g_2$, $g_3$ scale with cluster size $n$.
 \item \emph{Emergent anisotropy.} Decompose meta-agent covariances into $\sigma^2 I + \mathrm{Var}_A(\mu)$ and verify that the within-cluster variance is anisotropic even when the original token covariances are isotropic.
@@ -985,7 +990,7 @@ Both architectures share the same scaling exponents (universality class), but di
 We validate the scaling predictions using a synthetic VFE system with $K = 90$ belief dimensions and $N = 128$ tokens, applying binary spectral coarse-graining ($b = 2$) for seven RG levels. The validation proceeds in two stages: first, a direct CLT test that isolates the pure mathematical content of the scaling predictions; second, a graph-based RG flow that includes the finite-size effects of spectral clustering on a real attention graph.
 
 \paragraph{CLT validation.}
-For each coupling, we generate $200$ independent trials of $n$-token averages ($n = 2, 4, \ldots, 64$) and fit the decay exponent via log-log regression. The results confirm the predicted exponents to three significant figures:
+For each coupling, we generate $200$ independent trials of $n$-token averages ($n = 2, 4, \ldots, 64$) and fit the decay exponent via log-log regression. This is a sanity check that the analytic CLT prediction reproduces on synthetic i.i.d.\ data; it does not validate any claim of the framework about trained transformer attention graphs (cf.\ Proposition~\ref{thm:rg_conditional} vs.\ Conjecture~\ref{conj:rg_universality}). The measured exponents reproduce the analytic predictions to three significant figures:
 \begin{center}
 \begin{tabular}{lcc}
 \toprule
@@ -1023,7 +1028,7 @@ We construct a synthetic gauge VFE system with initial couplings $g_1 = 0.3$, $g
 
 The graph-based exponent for the original-channel anisotropy is $y_1^{(\mathrm{orig})} = -0.499$ (predicted $-0.500$), confirming that the inherited traceless perturbation decays as $1/\sqrt{n}$ even through spectral clustering. The total anisotropy $g_1^{(\mathrm{tot})}$ does not decay ($y_1^{(\mathrm{tot})} \approx +0.01$), as predicted by the conjecture: the emergent within-cluster variance $\mathrm{Var}_A(\mu)$ dominates at every coarse-grained level.
 
-The gauge variation and holonomy exponents on the attention graph ($y_2 = -0.66$, $y_3 = +0.17$) deviate from the CLT predictions, which we attribute to finite-size effects inherent in spectral clustering: at $N = 128$ with binary coarse-graining, the deepest levels contain only $4$--$8$ meta-agents, and the clustering assignments introduce correlations absent from the pure-averaging CLT analysis. The CLT validation confirms that the mathematical content of the scaling predictions is exact; the graph-based deviations quantify the finite-size corrections that would vanish in the $N \to \infty$ limit.
+The gauge variation and holonomy exponents on the attention graph ($y_2 = -0.66$, $y_3 = +0.17$) deviate from the CLT predictions. The interpretation of these deviations is open. Two non-exclusive hypotheses are consistent with the data, restated here from the main paper for completeness: (H1) finite-size bias in the spectral coarse-graining map, in which case the measured shift would require the correction term to dominate the asymptotic at the system sizes tested --- a regime standardly indicative of crossover behavior rather than small-$L$ corrections to an infrared-stable fixed point~\citep{Cardy1996}; (H2) genuine cross-token correlation in trained transformer attention, producing an $O(1)$ floor on $\mathrm{Var}(\bar{X}_n)$ that breaks the CLT $n^{-1/2}$ rate and would classify $g_3$ as a relevant operator in the standard Wilsonian sense~\citep{Cardy1996,goldenfeld1992lectures}, falsifying part (a) of Conjecture~\ref{conj:rg_universality}. The synthetic-data table above confirms only the analytic CLT calculation; it does not discriminate H1 from H2, and the unconditional $N\to\infty$ extrapolation presupposes H1. Validation on trained models is needed before either form of the conjecture can be considered empirically supported (cf.\ main paper, Section~\ref{sec:rg_universality}).
 
 
 \section{Symmetry Breaking Simulations}
@@ -1087,13 +1092,13 @@ The free energy exhibits natural timescale separation: beliefs $q_i$ (fast subsy
 \paragraph{Intuition.}
 Why must the divergence measuring inter-agent communication cost be the forward KL, and not some other statistical distance? The answer emerges from the interplay of three requirements that any well-behaved multi-agent variational system must satisfy simultaneously. First, we want each agent's updated belief $q_i^*$ to remain a tractable exponential-family distribution (i.e.\ a Gaussian), so that the belief update has a closed-form Boltzmann/Gibbs structure. Second, the attention weights $\beta_{ij}$ should act as proper dual variables: the marginal cost of attending to neighbor $j$ should equal the divergence between the agent's belief and that neighbor's signal, consistent with the envelope theorem. Third, the divergence should be local and enter the free energy linearly in $\beta_{ij}$, preserving the softmax form of attention.
 
-These three conditions, each individually nonrestrictive, are jointly restrictive. Alternative divergences violate at least one of the conditions. For example, the reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function. The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions. Symmetric divergences like Jensen-Shannon mix logarithmic and reciprocal terms, destroying log-linearity. Only the forward KL (with generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$) produces a stationarity condition that is linear in $\log q_i$, which is the condition for the solution to remain in the exponential family. The following theorem makes this precise.
+These three conditions, each individually nonrestrictive, are jointly restrictive. Alternative divergences violate at least one of the conditions. The reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function. The $\chi^2$-divergence has generator $f(t)=(t-1)^2/2$ with $f'(t)=t-1$; its stationarity condition $\log(q_i/p_i) + 1 + \sum_j \beta_{ij}\bigl[q_i/(\Omega_{ij}q_j) - 1\bigr] = \lambda$ mixes $q_i$ linearly with $\log q_i$ rather than producing the log-linear form required for exponential-family closure. Symmetric divergences like Jensen-Shannon mix logarithmic and reciprocal terms, destroying log-linearity. Only the forward KL (with generator $f(t) = t\log t - t + 1$ yielding $f'(t) = \log t$) produces a stationarity condition linear in $\log q_i$, which is the condition for the solution to remain in the exponential family. The following theorem makes this precise.
 
 Within a broad, but well-defined, class, the forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights. Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies. This local-global coordination gives rise to the expected forward KL attention term.
 
 In what follows we restrict to our ``matched-fiber'' framework, where all agents share the same fiber dimension $K$ and representation $\rho$, so that gauge transport acts within a single vector space. The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
 
-The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c) f \left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
+The uniqueness of the term is conditional and follows from two assumptions: (i) $\mathcal{D}$ is local in $c$, of $f$-divergence form $\displaystyle \int q_i(c) f \left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; and (ii) the coupling is linear in $\beta_{ij}$. Exponential-family closure of the resulting $q_i^*$ is a \emph{consequence} of the theorem (Step 2 of the proof produces the log-linear form automatically once $f'(t)=\log t$), not an additional hypothesis.
 
 \subsubsection{The Coupled Variational Problem}
 
@@ -1196,7 +1201,7 @@ This then identifies the attention cost with the KL.
 \subsubsection{Conditional Uniqueness Theorem}
 \label{thm:uniqueness_supp}
 
-\textbf{Theorem.} \textit{Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
+\textbf{Theorem.} \textit{Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence~\citep{Csiszar1967} of the form
 \[
 \mathcal{D}(q,p)
 = \int p(c) f \left(\frac{q(c)}{p(c)}\right)dc,
@@ -1266,14 +1271,17 @@ Next, rearranging and using $\sum_j\beta_{ij}=1$ we have:
 \label{eq:rearranged_target_supp}
 \end{equation}
 
-Comparing \eqref{eq:rearranged_target_supp} with the general stationarity condition \eqref{eq:general_stationarity_supp} term-by-term, we then require
-
+Subtracting \eqref{eq:rearranged_target_supp} from the general stationarity condition \eqref{eq:general_stationarity_supp} gives
 \begin{equation}
-f' \left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
+\sum_{j} \beta_{ij}\Bigl[\,f'\!\left(\frac{q_i^*(c)}{\Omega_{ij}(c)q_j(c)}\right) - \log\frac{q_i^*(c)}{\Omega_{ij}(c)q_j(c)}\,\Bigr] = k,
+\label{eq:residual_sum_supp}
+\end{equation}
+with $k = \lambda - 1 - C'$ a constant independent of $c$. To isolate a single $f'$ evaluation we exploit the freedom to choose the configuration: pick transported neighbors so that all $\Omega_{ij}(c) q_j(c)$ coincide pointwise with a common reference density $\bar{q}(c)$ — for example by setting $q_j(c) = \Omega_{ij}^{-1}(c)\bar{q}(c)$ for each $j$ in the family of admissible neighbor beliefs — and let $p_i$ vary so that $q_i^*(c)$ sweeps a range of values. All ratios $r_{ij}(c) = q_i^*(c)/\bar{q}(c)$ then coincide for fixed $c$, and \eqref{eq:residual_sum_supp} collapses via $\sum_j \beta_{ij} = 1$ to
+\begin{equation}
+f'(r(c)) - \log r(c) = k,
 \label{eq:ode_supp}
 \end{equation}
-
-for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c) q_j(c)]$ realized by varying the prior $p_i$ and the neighbor beliefs $\{q_j\}$ over their admissible families. The set of such ratios contains an open subinterval of $(0,\infty)$; by the real-analyticity hypothesis on $f$, the identity $f'(t) = \log t + k$ extends from this subinterval to all of $(0,\infty)$. Hence $f'(t)=\log t + k$ globally.
+which holds for every value of $r$ realized as $(p_i,c)$ vary over their admissible ranges. The set of such ratios contains an open subinterval of $(0,\infty)$; by the real-analyticity hypothesis on $f$, the identity $f'(t) = \log t + k$ extends from this subinterval to all of $(0,\infty)$. Hence $f'(t)=\log t + k$ globally.
 
 Next, by integrating we have:
 
@@ -1432,7 +1440,7 @@ The derivation establishes that \eqref{eq:supp_decode_canonical} is the composit
 Three scopes are worth stating explicitly. First, the derivation justifies the form of the readout, not its training objective: the M-step in the prior-bank implementation minimizes cross-entropy against the per-position target token, not the full free energy $\mathcal{F}$ summed over $i$ and $v$, so the variational interpretation is structural (the readout is the accuracy term) rather than dynamical (training does not descend $\mathcal{F}$ directly). Second, the derivation is exact only when $q_i^{\star}$ and the $\{\pi_v\}$ lie on the same statistical submanifold; under the diagonal-covariance specialization the diagonal Gaussian submanifold is closed under the operations involved, but the full-covariance branch's diagonal projection at decode is an approximation rather than a strict instance of the identity. Third, the temperature $\tau$ in \eqref{eq:supp_decode_canonical} is parameterized in the implementation as $\tau = \tau_{\mathrm{cfg}} \cdot e^{-s}$ with a learnable scalar $s$, mirroring the learnable attention temperature $\tau_{\mathrm{attn}} = \kappa\sqrt{K}$ of the main paper; this learnable component is a single scalar on top of the canonical scaling and does not alter the derivation, but it should be reported when the formula is quoted as a comparison baseline.
 
 
-\bibliographystyle{plainnat}
+% bibliographystyle is set by jmlr2e
 \bibliography{references}
 
 \end{document}

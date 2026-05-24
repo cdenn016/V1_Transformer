@@ -18,12 +18,10 @@
 \usepackage{booktabs}
 
 % Figure search paths (adjust for compilation directory)
-\graphicspath{{./}{../../Transformer Manuscript/fig_transformer_validation/}}
+\graphicspath{{./}{./figs/}{../}{attention/}{../../Transformer Manuscript/fig_transformer_validation/}}
 
-% Note: jmlr2e already defines theorem environments and proof
-% Available: theorem, lemma, proposition, corollary, definition, example
-% Manual definitions (no amsmath needed)
-\newtheorem{conjecture}[theorem]{Conjecture}
+% Note: jmlr2e already defines theorem, lemma, proposition, corollary,
+% definition, example, conjecture, axiom, remark; no manual redefinitions needed.
 \newcommand{\softmax}{\operatorname{softmax}}
 \newcommand{\KL}{\operatorname{KL}}
 \newcommand{\Tr}{\operatorname{Tr}}
@@ -57,7 +55,7 @@ We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transforme
 
 Language is a dynamic informational system: speakers and writers encode beliefs under uncertainty, listeners decode them, and the statistical regularities of this process reflect the structure of communication itself. Language modeling is a snapshot of this dynamic system, and the architectures that excel at it should reflect the mathematical structure of information exchange under uncertainty.
 
-Recent advances in neuroscience and intelligent systems have independently converged on the idea that intelligent systems integrate perception, inference, and communication under the constraints of uncertainty \citep{bahdanau2014neural,amari1998natural,bronstein2021geometric,foerster2016learning,wooldridge2009introduction}. Friston's Free Energy Principle (FEP) provides a general variational formulation of inference in cognitive systems \citep{friston2010free,parr2022active,friston2017graphical,ramstead2020variational}, whereas the attention mechanism in modern machine learning architectures defines a powerful (although empirically derived) rule for token prediction \citep{clark2019does,vaswani2017attention}. Despite their shared reliance on probabilistic inference and pairwise interaction, these two frameworks remain stubbornly separated. While several mathematical perspectives on attention have been developed (discussed below), a unified geometric framework from which the full suite of transformer architectural choices emerges as consequences of a single variational principle has been lacking.
+Recent advances in neuroscience and intelligent systems have independently converged on the idea that intelligent systems integrate perception, inference, and communication under the constraints of uncertainty \citep{bahdanau2014neural,amari1998natural,bronstein2021geometric}. Friston's Free Energy Principle (FEP) provides a general variational formulation of inference in cognitive systems \citep{friston2010free,parr2022active,friston2017graphical,ramstead2020variational}, whereas the attention mechanism in modern machine learning architectures defines a powerful (although empirically derived) rule for token prediction \citep{clark2019does,vaswani2017attention}. Despite their shared reliance on probabilistic inference and pairwise interaction, these two frameworks remain stubbornly separated. While several mathematical perspectives on attention have been developed (discussed below), a unified geometric framework from which the full suite of transformer architectural choices emerges as consequences of a single variational principle has been lacking.
 
 Many varieties of transformer and attention architectures have been proposed, implemented, and studied in recent years \citep{fuchs2020se3,thomas2018tensor}. Geometric deep learning approaches impose equivariance constraints using group-theoretic structure \citep{kondor2018generalization,finzi2020generalizing,bronstein2021geometric}, but these typically engineer symmetry into architectures rather than deriving attention from a variational principle. Attempts at curved space token embeddings have produced mixed results \citep{bonnabel2013stochastic,absil2008optimization}.
 
@@ -397,7 +395,7 @@ $\phi_i \in \mathfrak{g}$ & $\mathbb{R}^{K \times K}$ & Gauge frame parameters f
 $\tilde{\phi}_i \in \mathfrak{g}$ & $\mathbb{R}^{K_p \times K_p}$ & Gauge frame parameters for agent $i$ (model fiber) \\
 $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ & $\mathrm{GL}(K)$ & Belief-fiber transport from frame $j$ to frame $i$ \\
 $\tilde{\Omega}_{ij}$ & $\mathrm{GL}(K_p)$ & Model-fiber transport from frame $j$ to frame $i$ \\
-$\Phi_i, \tilde{\Phi}_i$ & $\mathbb{R}^{K_p \times K_q}$, $\mathbb{R}^{K_q \times K_p}$ & Cross-fiber morphisms (belief $\leftrightarrow$ model) \\
+$\Phi_i, \tilde{\Phi}_i$ & $\mathbb{R}^{K_p \times K_q}$, $\mathbb{R}^{K_q \times K_p}$ & Cross-fiber morphisms (belief $\leftrightarrow$ model); introduced in Supplementary Appendix~A for cross-reference with the companion paper~\citep{Dennis2025it}; not used in any equation of the present paper (see Section~\ref{sec:free_energy_section}) \\
 $\rho: G \to \mathrm{GL}(V)$ & & Representation of $G$ on the fiber $V$ \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Variational quantities}} \\
@@ -409,6 +407,8 @@ $\alpha$ ($\alpha_i$) & $\mathbb{R}^+$ & Prior precision; state-dependent varian
 $\kappa$ ($\tau$) & $\mathbb{R}^+$ & Attention temperature; $\kappa_a \propto \sigma_a^2$ in isotropic limit (Sec.~\ref{sec:multihead}) \\
 $\lambda$ & $\mathbb{R}^+$ & Belief alignment coupling strength \\
 $\pi_j$ & $[0,1]$, $\sum_j \pi_j = 1$ & Attention prior (encodes masking, positional bias) \\
+$\eta_q, \eta_s$ & $\mathbb{R}^+$ & Fast (belief) and slow (model) learning rates; $\eta_s \ll \eta_q$ in the present work \\
+$\hat\alpha$ & $\mathbb{R}^+$ & Trained-from-loss scalar version of $\alpha$ used in Algorithm~\ref{alg:em_loop} \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Transformer correspondences (flat-bundle, isotropic limit)}} \\
 $Q_i, K_j$ & $\mathbb{R}^{d_k}$ & Query and key vectors ($\to \mu_i, \mu_j$ under reduction) \\
@@ -858,10 +858,11 @@ where $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and $Z_i = \sum_j \pi_j
 
 The envelope theorem guarantees that the gradient of $\mathcal{F}_{\mathrm{red}}$ with respect to any belief parameter $x \in \{\mu_i, \Sigma_i, \phi_i\}$ takes the form:
 
-$$
+\begin{equation}
 \frac{d\mathcal{F}_{\mathrm{red}}}{dx} = \frac{\partial\mathcal{F}}{\partial x}\bigg|_{\beta=\beta^*}
 = \text{(prior terms)} + \sum_j \beta_{ij}^* \frac{\partial E_{ij}}{\partial x} - \text{(observation terms)},
-$$
+\label{eq:envelope_form}
+\end{equation}
 
 with no explicit $\partial\beta^*/\partial x$ terms, since the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial x)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{ij} = 0$.
 
@@ -899,7 +900,7 @@ This term is the expected negative log-likelihood of observations/data $o$ given
 
 In the variational free energy \eqref{eq:free_energy_final}, the self-coupling term $D_{\mathrm{KL}}(q_i \| p_i)$ carries unit coefficient. This implicitly assumes that the prior precision is apriori known and fixed such that each agent trusts its prior with uniform strength regardless of context. 
 
-The hierarchical structure of the generative model (discussed in the appendix) implies that the effective prior precision manifestly depends on the model uncertainty. Therefore, we may choose to promote the self-coupling weight from a fixed constant to a per-agent variational parameter $\alpha_i > 0$ (subject perhaps to a regularizer that prevents degenerate solutions).
+A more flexible treatment promotes the self-coupling weight from a fixed constant to a per-agent variational parameter $\alpha_i > 0$, subject to a regularizer that prevents degenerate solutions. The derivation below is a single-scale Lagrangian construction and does not invoke any hierarchical or multi-scale structure.
 
 This augmented free energy for agent $i$ is then:
 
@@ -961,7 +962,7 @@ Applying the product rule to the self-coupling term $\alpha_i^* D_{\mathrm{KL}}(
 \end{equation}
 where the second equality uses $\alpha_i^*/c_0 = 1/(b_0 + D_{\mathrm{KL}})$ to collapse the bracket $1 - (\alpha_i^*/c_0) D_{\mathrm{KL}}$ to $b_0/(b_0 + D_{\mathrm{KL}})$. The effective autograd prefactor on $\partial D_{\mathrm{KL}}/\partial \theta$ is therefore $(\alpha_i^*)^2 b_0/c_0$ rather than the envelope-form $\alpha_i^*$ alone.
 
-By the envelope theorem (Section~\ref{sec:final_free_energy}) the explicit $\partial \alpha_i/\partial \theta$ contribution vanishes from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ when $\alpha_i$ is held at $\alpha_i^*$. Autograd-based implementations that differentiate through $\alpha_i^*(\mu_i, \Sigma_i)$ along with $D_{\mathrm{KL}}$ pick up the correction in Eq.~\eqref{eq:alpha_product_rule}, which closes the chain rule on the $\partial \alpha_i/\partial \mu_i$ and $\partial \alpha_i/\partial \Sigma_i$ slots in Eq.~\eqref{eq:natural_gradient_general}. Our reference implementation evaluates the corrected form (`transformer/core/vfe_gradients.py`); the constant-$\alpha$ specialization $\alpha_i = 1$ collapses both the closed-form and the chain-rule correction.
+By the envelope theorem (Section~\ref{sec:final_free_energy}) the explicit $\partial \alpha_i/\partial \theta$ contribution vanishes from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ when $\alpha_i$ is held at $\alpha_i^*$. Autograd-based implementations that differentiate through $\alpha_i^*(\mu_i, \Sigma_i)$ along with $D_{\mathrm{KL}}$ pick up the correction in Eq.~\eqref{eq:alpha_product_rule}, which closes the chain rule on the $\partial \alpha_i/\partial \mu_i$ and $\partial \alpha_i/\partial \Sigma_i$ slots in Eq.~\eqref{eq:natural_gradient_general}. Our reference implementation evaluates the corrected form (\texttt{transformer/core/vfe\_gradients.py}); the constant-$\alpha$ specialization $\alpha_i = 1$ collapses both the closed-form and the chain-rule correction.
 
 
 \subsection{Belief Dynamics}
@@ -1004,7 +1005,7 @@ In our general formulation, each agent $i$ (token) maintains a local MVG belief:
 q_i = \mathcal{N}(\mu_i, \Sigma_i),
 \end{equation}
 
-where $\mu_i \in \mathbb{R}^{d_k}$ is the agent's mean representation in its local gauge frame, and $\Sigma_i \in \mathbb{R}^{d_k\times d_k}$ is its belief covariance (symmetric positive definite). Note that we are embedding in $K=d_k$ dimensions in order to make contact with standard notation and, for now, the gauge group will be the fundamental \mathrm{GL}($K=d_k)$. 
+where $\mu_i \in \mathbb{R}^{d_k}$ is the agent's mean representation in its local gauge frame, and $\Sigma_i \in \mathbb{R}^{d_k\times d_k}$ is its belief covariance (symmetric positive definite). Note that we are embedding in $K=d_k$ dimensions in order to make contact with standard notation and, for now, the gauge group will be the fundamental $\mathrm{GL}(K=d_k)$.
 
 Communication between agents $i$ and $j$ is mediated by a gauge frame transport operator
 
@@ -1059,7 +1060,7 @@ This identity has the interpretation that rather than transporting the key belie
 
 \paragraph{Generalization to R\'enyi $\alpha$-divergence.}
 
-The construction above uses the KL divergence as the alignment functional. The framework extends without change to the one-parameter R\'enyi family $D_\alpha(q \| p)$ with order $\alpha \in (0, \infty) \setminus \{1\}$, and the $\alpha \to 1$ limit recovers the KL. For independent diagonal Gaussians with $q = \mathcal{N}(\mu_q, \mathrm{diag}(\sigma_q))$ and $p = \mathcal{N}(\mu_p, \mathrm{diag}(\sigma_p))$, the R\'enyi divergence admits the closed form
+The construction above uses the KL divergence as the alignment functional. The softmax structure of $\beta$ extends without change to the one-parameter R\'enyi family $D_\alpha(q \| p)$ with order $\alpha \in (0, \infty) \setminus \{1\}$, since the row-Lagrangian KKT argument of Section~\ref{sec:mixture_derivation} depends only on the entropy term $\tau\sum_j\beta_{ij}\log(\beta_{ij}/\pi_j)$ and on linearity of the alignment energy in $\beta_{ij}$, not on the specific form of the divergence. The $\alpha \to 1$ limit recovers the KL. For independent diagonal Gaussians with $q = \mathcal{N}(\mu_q, \mathrm{diag}(\sigma_q))$ and $p = \mathcal{N}(\mu_p, \mathrm{diag}(\sigma_p))$, the R\'enyi divergence admits the closed form
 \begin{equation}
 D_\alpha(q \| p) = \frac{1}{2}\left[ \alpha \sum_k \frac{(\mu_p^k - \mu_q^k)^2}{\tilde\sigma_k} + \frac{1}{\alpha - 1} \sum_k \left((1-\alpha)\log \sigma_q^k + \alpha \log \sigma_p^k - \log \tilde\sigma_k\right) \right],
 \label{eq:renyi_diagonal}
@@ -1071,7 +1072,7 @@ The attention construction is unchanged in form:
 \beta_{ij}^{(\alpha)} = \mathrm{softmax}_j\left(-\frac{D_\alpha(q_i \| \Omega_{ij} q_j)}{\tau}\right),
 \label{eq:renyi_attention}
 \end{equation}
-with the KL row $\alpha = 1$ as the standard limit and other values selecting different mass/coverage trade-offs (e.g., $\alpha = 1/2$ recovers the Bhattacharyya coefficient up to a sign). All gradient derivations above carry over by replacing $\partial D_{\mathrm{KL}}/\partial \theta$ with $\partial D_\alpha/\partial \theta$; the additional product-rule term in Eq.~\eqref{eq:alpha_product_rule} retains its form with $D_{\mathrm{KL}} \to D_\alpha$. Our reference implementation exposes the order $\alpha$ through the per-block configuration option (\texttt{alpha\_divergence} in \texttt{transformer/core/block\_config.py}); the diagonal closed form Eq.~\eqref{eq:renyi_diagonal} is the kernel evaluated inside the attention path and the iterative belief updates, with a Taylor branch near $\alpha = 1$ for numerical stability.
+with the KL row $\alpha = 1$ as the standard limit and other values selecting different mass/coverage trade-offs (e.g., $\alpha = 1/2$ recovers the Bhattacharyya coefficient up to a sign). All gradient derivations above carry over by replacing $\partial D_{\mathrm{KL}}/\partial \theta$ with $\partial D_\alpha/\partial \theta$; the additional product-rule term in Eq.~\eqref{eq:alpha_product_rule} retains its form with $D_{\mathrm{KL}} \to D_\alpha$. Our reference implementation exposes the order $\alpha$ through the per-block configuration option (\texttt{alpha\_divergence} in \texttt{transformer/core/block\_config.py}); the diagonal closed form Eq.~\eqref{eq:renyi_diagonal} is the kernel evaluated inside the attention path and the iterative belief updates, with a Taylor branch near $\alpha = 1$ for numerical stability. The extension is to the softmax form of $\beta$; the closed-form geometric-mean stationary belief $q_i^* \propto p_i^{1/2}\prod_j (\Omega_{ij}q_j)^{\beta_{ij}/2}$ derived for KL in Supplementary Appendix~H is specific to $\alpha = 1$ and does not generalize to $\alpha \neq 1$, where the stationarity condition for $q_i^*$ becomes transcendental.
 
 \paragraph{Isotropic attention with general gauge transport.}
 
@@ -1154,7 +1155,7 @@ The implicit pair-dependent bilinear is
 M_{ij} := \Omega_{ij}^{-\top}\Sigma_j^{-1} = U_i^{-\top} U_j^\top \Sigma_j^{-1}.
 \label{eq:gauge_bilinear}
 \end{equation}
-As $(U_i, U_j)$ ranges over $\mathrm{GL}(d_k)^2$ and $\Sigma_j$ over $\mathrm{SPD}(d_k)$, polar decomposition shows that $M_{ij}$ ranges over all of $\mathrm{GL}(d_k)$. The expressive power of the gauge-derived bilinear is therefore identical to that of an independently learned $W_Q W_K^\top \in \mathrm{GL}(d_k)$ in standard attention. Generically $M_{ij}$ is non-symmetric, recovering the asymmetry of $W_Q^\top W_K$ that the symmetric $C^{-1}$ closure of the trivial-frame route does not. Although $M_{ij}$ depends on the pair $(i,j)$, its evaluation $\mu_i^\top M_{ij}\mu_j$ factorizes through per-token vectors via Eqs.~\eqref{eq:untied_cross_term}--\eqref{eq:gauge_qk}, exactly as in standard attention.
+As $(U_i, U_j)$ ranges over $\mathrm{GL}(d_k)^2$ and $\Sigma_j$ over $\mathrm{SPD}(d_k)$, polar decomposition shows that for each pair $(i,j)$ the bilinear $M_{ij}$ can be realized as any element of $\mathrm{GL}(d_k)$. The expressive power of the gauge-derived bilinear is therefore identical to that of an independently learned $W_Q W_K^\top \in \mathrm{GL}(d_k)$ in standard attention. The image is per-pair: the family $\{M_{ij}\}_{i,j}$ is constrained by the shared factorization through the per-token $\{U_i, \Sigma_j\}$, exactly as $\{W_Q\mu_i \cdot W_K \mu_j\}$ is constrained by shared $W_Q, W_K$ in standard attention. Generically $M_{ij}$ is non-symmetric, recovering the asymmetry of $W_Q^\top W_K$ that the symmetric $C^{-1}$ closure of the trivial-frame route does not. Although $M_{ij}$ depends on the pair $(i,j)$, its evaluation $\mu_i^\top M_{ij}\mu_j$ factorizes through per-token vectors via Eqs.~\eqref{eq:untied_cross_term}--\eqref{eq:gauge_qk}, exactly as in standard attention.
 
 \paragraph{Reduction to the standard form.}
 The remaining terms in Eq.~\eqref{eq:full_kl_general} fall into two groups under the row-softmax over $j$. Terms depending on $j$ alone, namely $r_j$, $\log\det\Sigma_j$, and $\log|\det U_j|$, contribute a key-side prior bias that is absorbed into $\log\pi_{ij}$. Terms coupling $i$ and $j$ through the belief covariances rather than the means, namely $x_i^\top H_j x_i$ and $\mathrm{tr}(H_j P_i)$, are gauge-theoretic uncertainty corrections beyond vanilla attention; they vanish under the closure $\Sigma_j = U_j C U_j^\top$ for shared SPD $C$, which collapses $H_j$ to the constant $C^{-1}$. Under this closure the carving in Eq.~\eqref{eq:gauge_qk} becomes the symmetric form $Q_i = C^{-1/2}U_i^{-1}\mu_i$, $K_j = C^{-1/2}U_j^{-1}\mu_j$ with a single shared bilinear $C^{-1}$. The resulting attention rule is structurally $\operatorname{softmax}_j(Q_i^\top K_j/\sqrt{d_k} + b_{ij}) V_j$ with the absorbed key-side bias $b_{ij} = -r_j/(2\tau) + \text{const}$ and $r_j = \|C^{-1/2}U_j^{-1}\mu_j\|^2 = \|K_j\|^2$ the squared key norm. The framework therefore recovers the structural form of standard attention modulo this content-dependent additive bias; the strict \citet{vaswani2017attention} \S3.2.1 form with uniform prior is obtained only when the key-norm variation across $j$ is approximately constant, e.g., under the layer-normalization or high-dimensional-concentration conditions discussed in Section~\ref{sec:dot_product_derivation}.
@@ -1254,6 +1255,8 @@ M_h^a := A_Q^a (A_K^a)^\top \in \mathrm{GL}(d_{\text{head}}),
 \end{equation}
 %
 and the actual transformer logit kernel is its low-rank lift $W_Q^a (W_K^a)^\top = U_Q^a M_h^a (U_K^a)^\top$. The gauge-theoretic identification $\sigma^{-2}\Omega^{-\top} \leftrightarrow M_h^a$ operates at the level of the invertible head-space factor, not the ambient low-rank kernel. In the block-diagonal multihead gauge model (Section~\ref{sec:multihead}), the isometric factors $U_Q^a, U_K^a$ can be interpreted as selecting head subspaces, consistent with a $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$ decomposition. The identification is value-level on the head subspace: the bilinear form $\mu_i^\top M_h^a \mu_j$ equals the standard attention logit on the head subspace, and the SVD identity $W_Q^a (W_K^a)^\top = U_Q^a M_h^a (U_K^a)^\top$ is exact for any rectangular factorization. It does not assert parameter-level identity between the gauge framework's learned $(\sigma, \Omega)$ and the standard transformer's atomically-learned $W_Q^a, W_K^a$, which are different parameterizations of the same bilinear form under different optimizer geometries (natural gradient on the gauge manifold versus stochastic gradient on the rectangular projection space).
+
+\paragraph{Scope of the head-space identification.} The gauge framework's identification covers the invertible per-head bilinear $M_h^a$ on the head subspace and the value aggregation up to the $W_O$ absorption documented in §\ref{sec:value_aggregation}. It does \emph{not} derive the rectangular subspace embeddings $U_Q^a, U_K^a, U_V^a$, which select which $d_{\mathrm{head}}$-dimensional subspace of the $d_{\mathrm{model}}$-dimensional embedding space each head reads from. Subspace selection is a structural design choice with no analog in the $(\sigma, \Omega)$ parameterization and is not predicted by the framework. The block-diagonal $\mathrm{GL}(d_{\mathrm{head}})^H$ structure of the head-space kernels is derived; the choice of rectangular embedding factors is structural and orthogonal to the gauge derivation.
 
 Next, rather than completely taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ can then be considered to parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. Therefore, the full limit need not be taken.
 
@@ -1659,7 +1662,8 @@ $\beta_{ij} = \softmax(-D_{\KL}/\tau)$ & Exact (Sec.~\ref{sec:mixture_derivation
 $\Omega_{ij} = e^{\phi_i}e^{-\phi_j} \in \mathrm{GL}^+(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ & D$^\sharp$ \\
 Forward KL uniqueness & Thm.\ (Supp.~App.~H) & Why dot-product attention & D \\
 $\hat\mu_i = \sum_j \beta_{ij}\Omega_{ij}\mu_j$ & $\Omega$ absorbed into $W_V$ & $\sum_j \alpha_{ij} V_j$ (value agg.) & D \\
-$\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$ & Irrep decomposition & Multi-head attention & D \\
+$\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$ & Irrep decomposition & Multi-head head-space kernel & D$^\sharp$ \\
+Rectangular $U_Q^a, U_K^a, U_V^a$ (subspace embeddings) & Not derived (structural) & Multi-head subspace selection & S \\
 \hline
 \multicolumn{4}{|l|}{\textit{Positional Structure}} \\
 \hline
@@ -1689,7 +1693,7 @@ Observations break symmetry & Explicit breaking & Training / learning & S \\
 \multicolumn{4}{|l|}{\textit{Architecture}} \\
 \hline
 $\mu^{(\ell+1)} = \mu^{(\ell)} - \tilde{\eta} \Sigma\nabla\mathcal{F}$ & Natural gradient flow & Residual connection & S \\
-$e \cdot \exp(-\|e\|^2/\tau)/Z$ (Eq.~\ref{eq:vfe_glu}) & Boltzmann GLU gate & GELU/SiLU activation & S \\
+$e \cdot \exp(-\|e\|^2/\tau)/Z$ (Eq.~\ref{eq:vfe_glu}) & Boltzmann GLU gate & GELU/SiLU activation & I \\
 VFE iterations ($T$ inner, $L$ outer) & Shared / fresh weights & Layers / depth; DEQ at $L = 1$ & D \\
 Prior bank $\{(\mu_p^c, \Sigma_p^c, \phi_c)\}$ & Deterministic limit & Embedding matrix $W_{\text{embed}}$ & S \\
 $p(o|\mu) = \mathrm{Cat}(\softmax(W\mu))$ & Observation model & Output proj.\ $+$ softmax & D \\
@@ -1697,7 +1701,7 @@ Fast subsystem $\mathcal{F}_{\text{fast}}$ & Frozen models & Forward pass (infer
 Slow subsystem $\mathcal{F}_{\text{slow}}$ & Between-pass updates & Weight training & S \\
 \hline
 \end{tabular}
-\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = derived from the variational principle (mathematically exact or follows from explicit limits); $\text{D}^\sharp$ = derived up to a non-uniqueness equivalence class (the bilinear form $W_Q W_K^\top$ can be thin-SVD-lifted to a full-rank invertible per-head map $M_h \in \mathrm{GL}(d_{\text{head}})$, with the lift fixed only up to right multiplication by elements of the isotropy group); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form, as in any Euler discretization yielding $\mu^{(\ell+1)} = \mu^{(\ell)} + \Delta\mu^{(\ell)}$).}
+\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = derived from the variational principle (mathematically exact or follows from explicit limits); $\text{D}^\sharp$ = derived up to a non-uniqueness equivalence class (the bilinear form $W_Q W_K^\top$ can be thin-SVD-lifted to a full-rank invertible per-head map $M_h \in \mathrm{GL}(d_{\text{head}})$, with the lift fixed only up to right multiplication by elements of the isotropy group); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form, as in any Euler discretization yielding $\mu^{(\ell+1)} = \mu^{(\ell)} + \Delta\mu^{(\ell)}$); I = \emph{interpretive} correspondence (the framework and the architectural element belong to a common family but are not functionally identical; e.g., the Boltzmann gate of Eq.~\ref{eq:vfe_glu} uses the Gaussian PDF while GELU uses the Gaussian CDF).}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
@@ -1736,7 +1740,7 @@ G_{\text{multi-head}} = \mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k),
 
 a $(H \cdot d_{\text{head}}^2)$-dimensional subgroup of the $d_k^2$-dimensional $\mathrm{GL}(d_k)$.
 
-\paragraph{Per-head holonomy.} Under the discrete Regime~II construction of Lemma~\ref{thm:vanishing_holonomy}, the edge-relaxed transport \eqref{eq:edge_relaxed_omega_glk} factorizes across heads: each head $a$ carries its own connection field $\delta_{ij}^{(a)}$ acting in its own irrep block, and the holonomy decomposes as a direct sum
+\paragraph{Per-head holonomy.} The vertex-frame parameterization adopted throughout the main paper places the model in Regime~I, where the holonomy vanishes identically by Lemma~\ref{thm:vanishing_holonomy} and the discussion below is vacuous as written. The companion paper~\citep{Dennis2025it} develops the edge-relaxed Regime~II construction in detail; under that extension, the transport~\eqref{eq:edge_relaxed_omega_glk} factorizes across heads. Each head $a$ would carry its own connection field $\delta_{ij}^{(a)}$ acting in its own irrep block, and the holonomy would decompose as a direct sum
 \begin{equation}
 H_{ijk} = \bigoplus_{a=1}^{H} H_{ijk}^{(a)},
 \qquad
@@ -2230,7 +2234,7 @@ A future test that the Regime~II construction makes possible is to train a non-f
 \subsection{Conjecture: The Transformer as a Renormalization Group Fixed Point}
 \label{sec:rg_universality}
 
-The three-limit reduction of Section~\ref{sec:transformer_limit} can be understood as a \emph{renormalization group (RG)-style coarse-graining flow} on the space of gauge-theoretic VFE models. Under an i.i.d.\ independence assumption on token-level perturbations, the central limit theorem delivers a conditional contraction result (Theorem~\ref{thm:rg_conditional} below). We separately conjecture---but do not claim to have validated on trained models---that the standard transformer occupies a stable infrared fixed point of this flow when the i.i.d.\ assumption is replaced by the empirical attention-graph statistics of trained models (Conjecture~\ref{conj:rg_universality}).
+The three-limit reduction of Section~\ref{sec:transformer_limit} can be understood as a \emph{renormalization group (RG)-style coarse-graining flow} on the space of gauge-theoretic VFE models. Under an i.i.d.\ independence assumption on token-level perturbations, the central limit theorem delivers a conditional contraction result (Proposition~\ref{thm:rg_conditional} below). The Proposition is a direct application of the CLT to the coarse-graining definitions in Eqs.~\eqref{eq:g1_def}--\eqref{eq:g3_def}; its content lies in the i.i.d.\ premise, not in any gauge-theoretic structure. We separately conjecture---but do not claim to have validated on trained models---that the standard transformer occupies a stable infrared fixed point of this flow when the i.i.d.\ assumption is replaced by the empirical attention-graph statistics of trained models (Conjecture~\ref{conj:rg_universality}).
 
 \subsubsection{Setup and Scaling Dimensions.}
 
@@ -2255,7 +2259,7 @@ Under the assumption that perturbations $\Delta_i$ and transport variations $\de
 \end{equation}
 with all scaling dimensions negative ($y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -1$ for the linear holonomy norm, and $y_3^{(\mathrm{action})} = -2$ for the squared holonomy $\|H-I\|^2$), classifying every operator as \emph{irrelevant}.
 
-\begin{theorem}[Conditional CLT contraction of the gauge VFE family]
+\begin{proposition}[Conditional CLT contraction of the gauge VFE family]
 \label{thm:rg_conditional}
 Let $\mathcal{T}(K, N, g_1^{(\mathrm{orig})}, g_2, g_3)$ denote the family of gauge VFE models, and assume that the perturbations $\Delta_i$ and transport variations $\delta\Omega_{ij}$ are independent and identically distributed across tokens. Then:
 \begin{enumerate}
@@ -2263,23 +2267,23 @@ Let $\mathcal{T}(K, N, g_1^{(\mathrm{orig})}, g_2, g_3)$ denote the family of ga
 \item[(ii)] \textbf{Stability under independence.} All scaling dimensions are negative ($y_1 = -\tfrac{1}{2}$, $y_2 = y_3 = -1$). Under the i.i.d.\ assumption, the intrinsic-channel origin meets the textbook definition of an infrared-stable fixed point~\citep{Cardy1996,goldenfeld1992lectures}.
 \item[(iii)] \textbf{Emergent anisotropy.} $R_n$ generates total-channel anisotropy via $\mathrm{Var}_A(\mu)$ even at $g_1^{(\mathrm{orig})} = 0$, so the total $g_1^{(\mathrm{tot})}$ does not flow to zero. The augmented $(\mu_A, \Sigma_A)$ family contains this term, analogous to the effective-action augmented class in Wilsonian RG~\citep{Cardy1996}.
 \end{enumerate}
-\end{theorem}
+\end{proposition}
 
-The empirical content of the original conjecture---the application of these scaling dimensions to the learned representations of trained transformers, where the i.i.d.\ assumption is not known to hold---is logically separate from Theorem~\ref{thm:rg_conditional} and remains an open conjecture.
+The three clauses are textbook CLT applied to the definitions in Eqs.~\eqref{eq:g1_def}--\eqref{eq:g3_def}; the gauge content of the framework does not enter the calculation. The empirical content---the application of these scaling dimensions to the learned representations of trained transformers, where the i.i.d.\ assumption is not known to hold---is logically separate from Proposition~\ref{thm:rg_conditional} and remains an open conjecture.
 
 \begin{conjecture}[Universality of the transformer limit on trained representations]
 \label{conj:rg_universality}
 Under the coarse-graining map $R_n$ applied to learned representations of trained transformer attention graphs:
 \begin{enumerate}
 \item[(a)] \textbf{Universality.} All finite-coupling gauge VFE models flow (in the intrinsic channel) to the transformer limit under repeated coarse-graining; transformers absorb the emergent anisotropy floor into $W_Q, W_K$ while the gauge VFE tracks it in $\Sigma_i$.
-\item[(b)] \textbf{Efficiency gap.} The absorbed degrees of freedom scale as $O(K^2)$, predicting an $O(\sqrt{K})$ sample-efficiency advantage for the gauge VFE relative to a parameter-matched standard transformer.
+\item[(b)] \textbf{Efficiency gap (heuristic).} The absorbed degrees of freedom scale as $O(K^2)$. We conjecture an $O(\sqrt{K})$-class sample-efficiency advantage for the gauge VFE relative to a parameter-matched standard transformer; the exponent is heuristic and is not derived from a quantitative sample-complexity bound (VC, PAC-Bayes, or Chinchilla-style power law) in this work. The prediction should be read as a class label for the expected scaling, to be falsified or refined by the experiments listed under Future Directions below.
 \end{enumerate}
 \end{conjecture}
 
 \paragraph{Scope and status.}
-The scaling dimensions in Eq.~\eqref{eq:rg_scaling} are textbook CLT averaging of independent perturbations and establish Theorem~\ref{thm:rg_conditional}; this content does not itself require the gauge framework. The non-trivial empirical content---Conjecture~\ref{conj:rg_universality}---requires that the i.i.d.\ assumption hold approximately on the attention graphs of trained transformers, which is the open question. We have verified that the CLT exponents are exact (to three significant figures) under direct averaging of synthetic i.i.d.\ perturbations, confirming Theorem~\ref{thm:rg_conditional}. When the same predictions are tested on attention-graph coarse-graining with spectral clustering, the measured exponents deviate: $y_2 \approx -0.6$ and $y_3 \approx +0.2$ versus the linear-norm predictions $-1$ and $-1$ (the action-norm prediction $y_3^{(\mathrm{action})} = -2$ applies to the squared holonomy $\|H-I\|^2$, not the linear form measured on the graph). The interpretation of these deviations is open. Two non-exclusive hypotheses are consistent with the data. (H1) Finite-size bias in the spectral coarse-graining map produces a correction of the form $y_3^{\mathrm{meas}}(L) = -1 + c L^{-\omega} + \ldots$~\citep{Cardy1996}; the measured shift would require the correction term to dominate the asymptotic at the system sizes tested, a regime standardly indicative of crossover behavior rather than small-$L$ corrections to an infrared-stable fixed point. (H2) Genuine cross-token correlation in trained transformer attention produces an $O(1)$ floor on $\mathrm{Var}(\bar{X}_n)$ that breaks the CLT $n^{-1/2}$ rate; this would classify $g_3$ as a relevant operator in the standard Wilsonian sense~\citep{Cardy1996,goldenfeld1992lectures}, falsifying part~(a) of Conjecture~\ref{conj:rg_universality}. The data do not discriminate H1 from H2. Validation on trained models---with quantitative finite-size scaling across multiple system sizes for H1 and direct correlation measurements for H2---is needed before either form of the conjecture can be considered empirically supported. We defer this analysis to a companion paper where it can be developed with trained-model evidence.
+The scaling dimensions in Eq.~\eqref{eq:rg_scaling} are textbook CLT averaging of independent perturbations and establish Proposition~\ref{thm:rg_conditional}; this content does not itself require the gauge framework. The non-trivial empirical content---Conjecture~\ref{conj:rg_universality}---requires that the i.i.d.\ assumption hold approximately on the attention graphs of trained transformers, which is the open question. We have numerically reproduced the CLT exponents to three significant figures under direct averaging of synthetic i.i.d.\ perturbations; this is a sanity check that the analytic prediction matches the CLT on synthetic data, not validation of the framework on trained models. When the same predictions are tested on attention-graph coarse-graining with spectral clustering, the measured exponents deviate: $y_2 \approx -0.6$ and $y_3 \approx +0.2$ versus the linear-norm predictions $-1$ and $-1$ (the action-norm prediction $y_3^{(\mathrm{action})} = -2$ applies to the squared holonomy $\|H-I\|^2$, not the linear form measured on the graph). The interpretation of these deviations is open. Two non-exclusive hypotheses are consistent with the data. (H1) Finite-size bias in the spectral coarse-graining map produces a correction of the form $y_3^{\mathrm{meas}}(L) = -1 + c L^{-\omega} + \ldots$~\citep{Cardy1996}; the measured shift would require the correction term to dominate the asymptotic at the system sizes tested, a regime standardly indicative of crossover behavior rather than small-$L$ corrections to an infrared-stable fixed point. (H2) Genuine cross-token correlation in trained transformer attention produces an $O(1)$ floor on $\mathrm{Var}(\bar{X}_n)$ that breaks the CLT $n^{-1/2}$ rate; this would classify $g_3$ as a relevant operator in the standard Wilsonian sense~\citep{Cardy1996,goldenfeld1992lectures}, falsifying part~(a) of Conjecture~\ref{conj:rg_universality}. The data do not discriminate H1 from H2. Validation on trained models---with quantitative finite-size scaling across multiple system sizes for H1 and direct correlation measurements for H2---is needed before either form of the conjecture can be considered empirically supported. We defer this analysis to a companion paper where it can be developed with trained-model evidence.
 
-The ordering of the three limits in Section~\ref{sec:transformer_limit} was determined algebraically by the structure of the $Q$-$K$-$V$ derivation and is consistent with---though not derived from---the RG hierarchy implied by Theorem~\ref{thm:rg_conditional}: gauge variation and linear holonomy contract under $R_n$ as $n^{-1}$ ($y_2 = y_3 = -1$) while anisotropy contracts more slowly as $n^{-1/2}$ ($y_1 = -\tfrac{1}{2}$), matching Limit~3 $\to$ Limit~2 $\to$ Limit~1 once one accounts for the action-norm intensification $y_3^{(\mathrm{action})} = -2$. The emergent anisotropy from Theorem~\ref{thm:rg_conditional}(iii) provides a geometric interpretation of LayerNorm as a projection back toward the isotropic submanifold at each layer.
+The ordering of the three limits in Section~\ref{sec:transformer_limit} was determined algebraically by the structure of the $Q$-$K$-$V$ derivation and is consistent with---though not derived from---the RG hierarchy implied by Proposition~\ref{thm:rg_conditional}: gauge variation and linear holonomy contract under $R_n$ as $n^{-1}$ ($y_2 = y_3 = -1$) while anisotropy contracts more slowly as $n^{-1/2}$ ($y_1 = -\tfrac{1}{2}$), matching Limit~3 $\to$ Limit~2 $\to$ Limit~1 once one accounts for the action-norm intensification $y_3^{(\mathrm{action})} = -2$. The emergent anisotropy from Proposition~\ref{thm:rg_conditional}(iii) provides a geometric interpretation of LayerNorm as a projection back toward the isotropic submanifold at each layer.
 \subsection{Limitations}
 
 The BERT validation (Supplementary Appendix~E) tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. The Regime~II edge-relaxed cocycle of Lemma~\ref{thm:vanishing_holonomy} (above) and the companion paper~\cite{Dennis2025it} acquires direct dynamical content under bidirectional attention, where closed loops in the data-flow graph make the Wilson observable a property of the message-passing pattern rather than a purely formal index-space invariant. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, non-English languages, and to non-trivial-holonomy training configurations on bidirectional attention all remain future work.
@@ -2355,7 +2359,7 @@ Claude Opus 4.5/4.6 was utilized for programming our variational free energy des
 
 \paragraph{Supplementary Material.} All appendices are provided in the Supplementary Material: Appendices~A through~D cover differential geometry, covariance dynamics, gauge frame gradients, and numerical methods; Appendices~E through~G present the BERT validation, RG universality conjecture, and symmetry breaking simulations; Appendix~H proves the conditional uniqueness of the forward KL divergence via variational duality.
 
-\bibliographystyle{plainnat}
+% bibliographystyle is set by jmlr2e
 \bibliography{references}
 
 \end{document}
