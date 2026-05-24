@@ -86,7 +86,7 @@ def _load_model(checkpoint_path: Optional[str], model_config: dict) -> VFEModel:
     cfg = VFEConfig(**model_config)
     model = VFEModel(cfg)
     if checkpoint_path is not None:
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
         model.load_state_dict(state)
         print(f"Loaded checkpoint: {checkpoint_path}")

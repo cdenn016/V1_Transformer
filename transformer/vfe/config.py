@@ -99,7 +99,7 @@ class VFEConfig:
     alpha_divergence: float = 1.0        # Rényi α (1.0=KL, 0.5=Bhattacharyya)
     E_learnable_alpha: bool = False      # Bayesian adaptive α_i = c0/(b0+KL) per dim
     lambda_align: float = 1.0            # Boltzmann GLU weight (beta * grad_KL)
-    lambda_soft: float = 1.0             # Attention-variance coupling (KL * grad_beta)
+    lambda_soft: float = 0.0             # Attention-variance coupling (KL * grad_beta); ONLY active when include_attention_entropy=False (the entropy-suppressed surrogate path)
     kappa: float = 1.0                   # Attention temperature
     # per_head_softmax: routing convention for multi-head (H > 1) attention.
     # True (default, canonical per manuscript eq:per_head_temperature at
@@ -476,6 +476,37 @@ class VFEConfig:
                 f"loop runs `for t in range(self.n_e_steps)`, so 0 yields a "
                 f"no-op forward and any negative value is meaningless."
             )
+        if self.n_layers < 1:
+            raise ValueError(
+                f"n_layers={self.n_layers} must be >= 1. VFEStack builds blocks "
+                f"with `range(cfg.n_layers)`, so 0 yields a silent empty stack "
+                f"and any negative value is meaningless."
+            )
+        if self.gauge_group not in ('SO3', 'SON', 'GLK'):
+            raise ValueError(
+                f"gauge_group={self.gauge_group!r} not in ('SO3', 'SON', 'GLK'). "
+                f"The Literal annotation is not enforced at runtime; an "
+                f"unrecognized string would otherwise fall through the n_gen "
+                f"property's SON branch and silently use the wrong generator count."
+            )
+        if self.epistemic_samples < 1:
+            raise ValueError(
+                f"epistemic_samples={self.epistemic_samples} must be >= 1. The "
+                f"EFE epistemic path averages over S=epistemic_samples draws and "
+                f"divides by S; 0 yields a division by zero."
+            )
+        if self.kappa <= 0:
+            raise ValueError(
+                f"kappa={self.kappa} must be > 0. The attention temperature is "
+                f"tau = kappa * sqrt(K); a non-positive kappa is meaningless and "
+                f"crashes math.log(kappa) when learnable_kappa=True."
+            )
+        if self.phi_trace_clamp is not None and self.phi_trace_clamp <= 0:
+            raise ValueError(
+                f"phi_trace_clamp={self.phi_trace_clamp} must be > 0 or None. "
+                f"A non-positive value silently disables the det-control clamp "
+                f"instead of capping |tr(phi·G)|; use None to disable explicitly."
+            )
         _valid_nan_modes = ('off', 'warn', 'revert', 'abort')
         if self.e_nan_check not in _valid_nan_modes:
             raise ValueError(
@@ -729,6 +760,24 @@ class VFEConfig:
                 f"gauge_parameterization={self.gauge_parameterization!r}) "
                 f"routes through a path that reconstructs the standard KL and "
                 f"will ignore the Renyi exponent.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # --- lambda_soft is inert under the canonical (entropy-on) path. ---
+        # Every E-step consumer routes `lambda_softmax = 0.0 if
+        # include_attention_entropy else lambda_soft`, so a non-zero lambda_soft
+        # has no effect while include_attention_entropy=True. Warn so the user
+        # is not silently tuning a dead knob; lambda_soft is only active on the
+        # entropy-suppressed surrogate path (include_attention_entropy=False).
+        if self.lambda_soft != 0.0 and self.include_attention_entropy:
+            import warnings
+            warnings.warn(
+                f"lambda_soft={self.lambda_soft} has no effect while "
+                f"include_attention_entropy=True. The attention-variance "
+                f"coupling is only applied on the entropy-suppressed surrogate "
+                f"path; set include_attention_entropy=False to activate it, or "
+                f"leave lambda_soft=0.0.",
                 UserWarning,
                 stacklevel=2,
             )

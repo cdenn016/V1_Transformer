@@ -190,10 +190,45 @@ def pre_exp_frobenius_clamp(
     return algebra * scale, scale
 
 
+def diag_kl(
+    mu_q: torch.Tensor,
+    mu_p: torch.Tensor,
+    sigma_q: torch.Tensor,
+    sigma_p: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    r"""Per-dimension standard :math:`\mathrm{KL}(q\|p)` for diagonal Gaussians.
+
+    .. math::
+        \mathrm{KL}_k = \tfrac{1}{2}\,\bigl(\sigma_{q,k}/\sigma_{p,k}
+        + (\mu_{q,k}-\mu_{p,k})^2/\sigma_{p,k}
+        - 1 + \log\sigma_{p,k} - \log\sigma_{q,k}\bigr)
+
+    Both :math:`\sigma_q` and :math:`\sigma_p` are floored at ``eps`` before
+    division and ``log``. Returns the per-dim tensor of shape ``(..., K)``;
+    callers sum (over K, over (N, K), or over all axes) as needed. Broadcasting
+    is permitted, so the pairwise non-flat path passes ``(B, N, 1, d_h)`` and
+    ``(B, N, N, d_h)`` operands and sums over the trailing axis.
+
+    Standard KL only; the Rényi alpha-divergence is handled by
+    ``_kl_kernel_diagonal`` in :mod:`transformer.vfe.e_step`.
+    """
+    _sp = sigma_p.clamp(min=eps)
+    _sq = sigma_q.clamp(min=eps)
+    return 0.5 * (
+        _sq / _sp
+        + (mu_q - mu_p) ** 2 / _sp
+        - 1.0
+        + _sp.log()
+        - _sq.log()
+    )
+
+
 __all__ = [
     'NanCheckMode',
     'VFENonFiniteError',
     'apply_mu_trust_region',
     'check_finite',
+    'diag_kl',
     'pre_exp_frobenius_clamp',
 ]
