@@ -240,7 +240,7 @@ class VFEConfig:
     # False: each token has its own Gaussian prior (μ_v, σ_v) looked up directly;
     #   phi is retained as the per-token gauge frame for cross-token transport
     #   only, not for prior construction. Per-token capacity = V × (2K + n_gen).
-    gauge_fixed_priors: bool = True
+    gauge_fixed_priors: bool = False
 
     # === Decode and generation-time EFE (canonical path) ===
     # decode_tau is the *fixed* component of the decode softmax temperature
@@ -339,6 +339,17 @@ class VFEConfig:
     use_non_flat_transport: bool = False
     non_flat_max_strength: float = 1.0       # s_max in s = s_max·tanh(ρ)
     non_flat_per_edge_delta_max: float = 1.0  # δ_max bound on ‖δ_ij·G‖_F
+    # When False, the E-step μ-gradient treats δ as a snapshot (detached from μ)
+    # in _iter_nonflat, dropping the second-order "δ moves with μ" term ∂F/∂μ
+    # that flows back through exp(δ·G). This removes the matrix_exp backward
+    # (~17% of non-flat CUDA time, measured) and the d(Omega)/dμ bmm backward.
+    # Forward β/KL/Ω are numerically unchanged (detach changes the graph, not
+    # the value), and the M-step learning of W_raw/raw_strength is unaffected
+    # (those learn via the m_other_lr optimizer group, not _iter_nonflat's
+    # autograd.grad). The dropped term is ~0 early in training since the
+    # strength gate s = s_max·tanh(ρ) starts at 0. No-op unless
+    # use_non_flat_transport=True. Default True = exact (canonical) path.
+    nonflat_delta_through_mu: bool = True
 
     # === Head mixer ===
     # Schur-commutant per-irrep-type mixer applied after the E-step (and
