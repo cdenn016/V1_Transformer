@@ -25,13 +25,13 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 config = {
     # === Structure ===
     'vocab_size':               None,      # populated after dataloader build
-    'embed_dim':                20,
-    'irrep_spec':               [('fund', 2, 10)],
+    'embed_dim':                200,
+    'irrep_spec':               [('fund', 20, 10)],
     
-    'batch_size':               64,
+    'batch_size':               16,
     
     'max_seq_len':              128,
-    'max_steps':                15000,
+    'max_steps':                120000,
 
     'use_prior_bank':           False,
     'mask_self_attention':      False,
@@ -48,7 +48,7 @@ config = {
     'learnable_kappa':          False,
 
     
-    'use_equivariant_head_mixer':  False,
+    'use_equivariant_head_mixer':  True,
     'gauge_covariant_ridge':       True,
 
     # === E-step dynamics ===
@@ -67,13 +67,13 @@ config = {
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
-    'kappa':                    1.0,
+    'kappa':                    0.5,
 
 
 
     # === Cross-layer prior handoff ===
-    'prior_handoff_rho':        1.0,
-    'prior_handoff_sigma':      0.1,
+    'prior_handoff_rho':        0,
+    'prior_handoff_sigma':      0,
 
     # === Covariance ===
     'diagonal_covariance':      True,
@@ -96,9 +96,9 @@ config = {
     'rope_base':                150,
 
     # === Embedding init ===
-    'mu_init_std':              0.1,
-    'phi_scale':                0.1,
-    'sigma_init':               0.4,
+    'mu_init_std':              0.001,
+    'phi_scale':                0.001,
+    'sigma_init':               1,
 
     # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
     'epistemic_weight':         0.5,
@@ -126,13 +126,13 @@ config = {
 
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
-    'm_mu_lr':                  0.015,
-    'm_sigma_lr':               0.004,
+    'm_mu_lr':                  0.025,
+    'm_sigma_lr':               0.0025,
     'm_phi_lr':                 0.015,
     
-    'm_hyper_lr':               0.001,
-    'm_other_lr':               0.035,
-    'weight_decay':             0.075,
+    'm_hyper_lr':               0.0125,
+    'm_other_lr':               0.02,
+    'weight_decay':             0.05,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,
@@ -142,7 +142,7 @@ config = {
 
     # === Logging / evaluation ===
     'log_interval':             200,
-    'eval_interval':            2000,
+    'eval_interval':            5000,
     'checkpoint_interval':      25000,
 
     'track_layer_diagnostics':      False,
@@ -162,6 +162,54 @@ DATASET = 'wikitext-103'      # ~103M tokens, full-scale training
 # DATASET = 'wiki-en'         # English Wikipedia, ~5B cl100k tokens at full dump (no cap)
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# Post-training semantic-clustering figures (mu / Sigma / phi / Omega), written
+# to <output_dir>/semantic_clustering/{vocab,contextual}/. Opt-in extra compute
+# (O(n^2) geometry-faithful distances over up to MAX_POINTS tokens); set
+# RUN_SEMANTIC_CLUSTERING = False to skip. See transformer/vfe/semantic_clustering/.
+RUN_SEMANTIC_CLUSTERING = True
+SEMANTIC_CLUSTERING_MAX_POINTS = 200
+
+
+def run_post_training_semantic_clustering(
+    model, output_dir, loader, dataset=None, device='cpu',
+    max_points=200, seed=0,
+):
+    """Generate post-training semantic-clustering figures for a trained model.
+
+    Writes separate mu/Sigma/phi/Omega cluster figures + metrics for a
+    vocab-level view (the learned per-token-type priors) and a contextual view
+    (one real batch of token ids) into
+    ``<output_dir>/semantic_clustering/{vocab,contextual}/``. Never passes
+    targets — the E-step stays blind to labels (Law 1). Returns the output root.
+    """
+    from pathlib import Path as _Path
+    from transformer.vfe.semantic_clustering.pipeline import run_clustering
+
+    sc_root = _Path(output_dir) / 'semantic_clustering'
+    model.eval()
+
+    # Vocab view: cluster the learned per-token-type priors.
+    run_clustering(
+        model, source='vocab', token_ids=None, dataset=dataset,
+        outdir=sc_root / 'vocab', max_points=max_points, seed=seed,
+    )
+
+    # Contextual view: one real batch of token ids (inputs only — Law 1).
+    batch = next(iter(loader))
+    if isinstance(batch, dict):
+        ctx_ids = batch['input_ids']
+    elif isinstance(batch, (tuple, list)):
+        ctx_ids = batch[0]
+    else:
+        ctx_ids = batch
+    ctx_ids = ctx_ids.to(device)
+    run_clustering(
+        model, source='contextual', layer='final', token_ids=ctx_ids,
+        dataset=dataset, outdir=sc_root / 'contextual',
+        max_points=max_points, seed=seed,
+    )
+    return sc_root
 
 
 # ============================================================================
@@ -308,3 +356,17 @@ if __name__ == '__main__':
             )
         except (RuntimeError, ValueError) as exc:
             logger.warning(f"Final trainer.evaluate() on val_loader failed: {exc!r}")
+
+    # Post-training semantic-clustering figures (non-fatal: never break a
+    # completed run if visualization fails).
+    if RUN_SEMANTIC_CLUSTERING:
+        try:
+            sc_loader = val_loader if val_loader is not None else train_loader
+            sc_dataset = getattr(sc_loader, 'dataset', None)
+            sc_root = run_post_training_semantic_clustering(
+                model, output_dir, sc_loader, dataset=sc_dataset,
+                device=DEVICE, max_points=SEMANTIC_CLUSTERING_MAX_POINTS, seed=SEED,
+            )
+            logger.info(f"Semantic clustering figures written to {sc_root}")
+        except Exception as exc:
+            logger.warning(f"Semantic clustering step failed (non-fatal): {exc!r}")
