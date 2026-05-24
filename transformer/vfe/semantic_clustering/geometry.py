@@ -13,8 +13,8 @@ The four quantities mirror the components of a Gaussian belief tuple
   covariances.
 * :func:`phi_vector_distances` — PCA-whitened Euclidean distance between the raw
   Lie-algebra coefficient vectors.
-* :func:`omega_geodesic_distances` — block-wise (per-head) affine-invariant
-  geodesic between transport elements on the matrix Lie group.
+* :func:`omega_geodesic_distances` — block-wise (per-head) left-invariant
+  geodesic between transport elements on the matrix Lie group GL+(K).
 
 No neural-network components; pure NumPy / SciPy linear algebra.
 """
@@ -287,17 +287,20 @@ def omega_geodesic_distances(
     generators: torch.Tensor | np.ndarray,
     irrep_dims: list[int],
 ) -> np.ndarray:
-    r"""Block-wise affine-invariant geodesic distance between transport elements.
+    r"""Block-wise left-invariant geodesic distance between transport elements.
 
     Each token's algebra element is :math:`A = \sum_c \phi_c G_c`, restricted per
     head to its irrep block, and exponentiated to the group element
-    :math:`\Omega_h = \exp(A_h)`. The per-head geodesic on the matrix Lie group is
+    :math:`\Omega_h = \exp(A_h)`. The per-head distance is the left-invariant
+    Frobenius geodesic on the matrix Lie group :math:`GL^+(d_h)`,
 
     .. math::
         d_{ij,h} = \lVert \log\!\big(\Omega_{h,i}^{-1}\,\Omega_{h,j}\big) \rVert_F ,
 
-    and the total distance is the quadrature (Pythagorean sum) over the
-    block-independent heads,
+    which is invariant under left translation :math:`\Omega \mapsto A\,\Omega`
+    (it is *not* the affine-invariant SPD-cone distance, since :math:`\Omega` is a
+    general group element, not a symmetric positive-definite matrix). The total
+    distance is the quadrature (Pythagorean sum) over the block-independent heads,
 
     .. math::
         d_{ij} = \sqrt{\sum_h d_{ij,h}^2} .
@@ -320,6 +323,7 @@ def omega_geodesic_distances(
     G = _to_numpy(generators)  # (n_gen, K, K)
     n = phi_np.shape[0]
     n_heads = len(irrep_dims)
+    K = G.shape[-1]
 
     # head K-slices
     slices: list[tuple[int, int]] = []
@@ -327,6 +331,30 @@ def omega_geodesic_distances(
     for d in irrep_dims:
         slices.append((start, start + d))
         start += d
+
+    # Guard: restricting A_full to its diagonal blocks (A_h = A_full[a:b, a:b])
+    # and exponentiating per block recovers the true per-head transport only when
+    # the generator bank is block-diagonal in the irrep_dims partition — then
+    # A_full = sum_c phi_c G_c carries no off-block algebra for any phi, and
+    # exp(A_full) = blockdiag(exp(A_h)). This holds for the standard multihead
+    # glK bank and for super-block-contiguous cross-coupled banks. A bank with
+    # generators spanning blocks (e.g. auto_close_cross_head_basis=True closing
+    # under brackets across super-blocks) would make the slice silently drop the
+    # off-block components and return a wrong geodesic. Detect it once on the
+    # bank and fail loudly rather than computing a wrong-but-finite distance.
+    block_mask = np.zeros((K, K), dtype=bool)
+    for a, b in slices:
+        block_mask[a:b, a:b] = True
+    offblock = np.abs(G[:, ~block_mask])
+    if offblock.size and float(offblock.max()) > 1e-9:
+        raise ValueError(
+            "omega_geodesic_distances: the generator bank has off-block support "
+            f"(max |off-block entry| = {float(offblock.max()):.3e}), so the "
+            "per-head block restriction A_full[a:b, a:b] would silently drop "
+            "cross-block algebra. The per-head left-invariant geodesic requires a "
+            "block-diagonal bank in the irrep_dims partition "
+            f"(irrep_dims={list(irrep_dims)}, K={K})."
+        )
 
     # Precompute per-head Omega for every token: A_full = sum_c phi_c G_c, then
     # restrict to each head's K-block and exponentiate. Block-diagonal banks make

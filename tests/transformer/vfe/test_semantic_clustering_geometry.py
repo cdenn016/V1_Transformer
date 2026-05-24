@@ -103,3 +103,17 @@ def test_omega_geodesic_equals_quadrature_of_per_head():
         return np.linalg.norm(logm(np.linalg.inv(Ok) @ Ol).real, "fro")
     expected_01 = np.sqrt(head_geo(0, 1, 0)**2 + head_geo(0, 1, 1)**2)
     assert np.isclose(D[0, 1], expected_01, atol=1e-5)
+
+
+def test_omega_geodesic_raises_on_offblock_generators():
+    # A generator with support spanning two heads breaks the per-head block
+    # restriction A_full[a:b, a:b]; the guard must fail loudly, not silently
+    # return a wrong-but-finite distance.
+    d = 2
+    K = 2 * d
+    G = np.zeros((1, K, K))
+    G[0, 0, K - 1] = 1.0  # off-block entry (head 0 row, head 1 col)
+    G = torch.tensor(G, dtype=torch.float64)
+    phi = torch.randn(3, 1, dtype=torch.float64) * 0.1
+    with pytest.raises(ValueError, match="off-block"):
+        geo.omega_geodesic_distances(phi, generators=G, irrep_dims=[d, d])

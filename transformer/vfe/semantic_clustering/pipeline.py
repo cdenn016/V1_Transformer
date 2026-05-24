@@ -80,16 +80,19 @@ def _subsample(bundle: BeliefBundle, max_points: int, seed: int) -> BeliefBundle
     )
 
 
-# C0 control characters (U+0000–U+001F) and DEL (U+007F). A BPE tokenizer that
-# decodes a single byte-fallback id can return a string containing these (e.g.
-# NUL); matplotlib then maps them to the .notdef glyph and warns
-# "Glyph 0 (\x00) missing from font". Strip them at the source so every
-# downstream scatter annotation is renderable.
-_CTRL_CHARS = {chr(c) for c in range(0x20)} | {chr(0x7F)}
+# C0 control characters (U+0000–U+001F), DEL (U+007F), and the Unicode
+# replacement character U+FFFD. A byte-level BPE tokenizer (e.g. tiktoken
+# cl100k_base, whose first 256 ids are single-byte fallbacks) decodes an
+# id that spans only part of a multi-byte UTF-8 sequence to U+FFFD '�', and a
+# control-byte id to a C0 char; matplotlib renders these as the .notdef box or
+# warns "Glyph 0 (\x00) missing from font". Stripping them collapses a
+# byte-fallback label to the empty string, which the annotation selector then
+# skips as non-informative rather than printing a row of identical '�' markers.
+_CTRL_CHARS = {chr(c) for c in range(0x20)} | {chr(0x7F)} | {"�"}
 
 
 def _sanitize_label(s: str) -> str:
-    """Drop unrenderable C0/DEL control characters from a decoded token label."""
+    """Drop unrenderable C0/DEL/U+FFFD characters from a decoded token label."""
     return "".join(ch for ch in s if ch not in _CTRL_CHARS)
 
 
@@ -211,7 +214,7 @@ def run_clustering(
                                token_strings=strings)
     results["phi_vector"] = phi_metrics
 
-    # ---- Omega: per-head affine-invariant geodesic -------------------------
+    # ---- Omega: per-head left-invariant GL+(K) geodesic --------------------
     if bundle.generators is not None:
         D_om = geo.omega_geodesic_distances(bundle.phi, bundle.generators,
                                             bundle.irrep_dims)

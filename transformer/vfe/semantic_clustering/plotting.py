@@ -108,6 +108,53 @@ def _color_for_label(label: int) -> str:
     return PUB_CYCLE[int(label) % len(PUB_CYCLE)]
 
 
+def _select_annotation_indices(
+    coords: np.ndarray,
+    labels: np.ndarray,
+    token_strings: list,
+    max_annot: int,
+) -> list:
+    """Choose which points to annotate: informative labels, spread across clusters.
+
+    Only points whose decoded label is non-empty after sanitization are eligible
+    (byte-fallback ids collapse to ``''`` upstream in ``_sanitize_label``), and the
+    annotation budget is allocated round-robin across clusters in order of
+    proximity to each cluster's 2D centroid. The labelled tokens are therefore
+    cluster-representative rather than the arbitrary first ``max_annot`` rows in
+    array order (which, for the vocab view's sorted-id ordering, were the lowest,
+    least-meaningful ids).
+    """
+    n = min(len(token_strings), coords.shape[0])
+    eligible = [i for i in range(n) if str(token_strings[i]).strip()]
+    if not eligible:
+        return []
+
+    labels = np.asarray(labels)
+    per_cluster: dict = {}
+    for i in eligible:
+        per_cluster.setdefault(int(labels[i]), []).append(i)
+
+    # Order each cluster's members by distance to that cluster's 2D centroid.
+    for lab, idxs in per_cluster.items():
+        pts = coords[idxs]
+        centroid = pts.mean(axis=0)
+        order = np.argsort(np.linalg.norm(pts - centroid, axis=1))
+        per_cluster[lab] = [idxs[j] for j in order]
+
+    # Round-robin across clusters until the budget is filled.
+    queues = list(per_cluster.values())
+    selected: list = []
+    depth = 0
+    while len(selected) < max_annot and any(depth < len(q) for q in queues):
+        for q in queues:
+            if depth < len(q):
+                selected.append(q[depth])
+                if len(selected) >= max_annot:
+                    break
+        depth += 1
+    return selected
+
+
 def _metric_lines(metrics: dict, headline_key: str, headline_label: str) -> list[str]:
     """Build the text-box lines: silhouette, n_clusters, plus one headline.
 
@@ -221,10 +268,13 @@ def _scatter_figure(
             zorder=3,
         )
 
-    # Annotate a bounded number of token strings.
+    # Annotate a cluster-spread subset of informative labels (skips byte-fallback
+    # rows that sanitized to the empty string, and prefers cluster-representative
+    # points over the arbitrary first _MAX_ANNOTATIONS rows in array order).
     if token_strings is not None:
-        n_annot = min(len(token_strings), coords.shape[0], _MAX_ANNOTATIONS)
-        for i in range(n_annot):
+        for i in _select_annotation_indices(
+            coords, labels, token_strings, _MAX_ANNOTATIONS
+        ):
             ax.annotate(
                 str(token_strings[i]),
                 (coords[i, 0], coords[i, 1]),
