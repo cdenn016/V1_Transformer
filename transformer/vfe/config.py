@@ -209,8 +209,12 @@ class VFEConfig:
     # Gauge-covariant numerical ridge. When True, ε·I regularizers on
     # sandwich-transforming covariances Σ are replaced by ε·(gg^T) built from
     # the local frame g = exp(φ), preserving Σ → hΣh^T covariance exactly.
-    # Default False preserves bitwise numerics.
-    gauge_covariant_ridge: bool = False
+    # Default True: the full-covariance SPD floor must be a congruence; the
+    # diagonal-clamp alternative (gauge_covariant_ridge=False) is gauge-breaking
+    # under non-orthogonal Ω. Both entry points already set this True. The flag
+    # only affects the full-covariance prior assembly (diagonal_covariance=False);
+    # it is inert on the default diagonal path.
+    gauge_covariant_ridge: bool = True
 
     # === Positional encoding ===
     # NOTE: RoPE currently rotates only μ, not Σ. The framework-consistent gauge
@@ -737,6 +741,21 @@ class VFEConfig:
                     stacklevel=2,
                 )
                 self.use_autograd_mu_sigma = True
+
+        # --- Autograd μ/σ gradient is diagonal-only ------------------------
+        # _compute_mu_sigma_grad_autograd raises NotImplementedError for full
+        # covariance (vfe/e_step.py). The omega_direct / non_flat promotions
+        # above force use_autograd_mu_sigma=True but each also requires
+        # diagonal_covariance=True (guarded earlier), so the only way to reach
+        # the bad pair is a manual flag combination — reject it at config time
+        # rather than after a training step has begun.
+        if self.use_autograd_mu_sigma and not self.diagonal_covariance:
+            raise ValueError(
+                "use_autograd_mu_sigma=True requires diagonal_covariance=True. "
+                "The autograd μ/σ gradient kernel has no full-covariance path "
+                "(it raises NotImplementedError mid-forward); set "
+                "diagonal_covariance=True or use_autograd_mu_sigma=False."
+            )
 
         # --- alpha_divergence is only honored by the analytic gradient kernel.
         # The autograd, non-flat, and omega_direct paths reconstruct the
