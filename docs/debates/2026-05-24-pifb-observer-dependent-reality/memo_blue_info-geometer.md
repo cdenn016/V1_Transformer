@@ -1,0 +1,24 @@
+# Memo — info-geometer (BLUE) — pifb-observer-dependent-reality
+
+## Steelman of the attack
+Sub-point 3: $\beta_{ij}$ pairwise coupling delivers nothing stronger than local consistency — neighbors' beliefs are KL-close after transport. That is not shared reality, not inter-agent objectivity. "Not solipsism" is therefore unearned: pairwise KL constraints are compatible with every agent inhabiting a private world that merely happens to be locally consistent with its neighbors. Local consistency is not coordination toward a common geometry.
+
+## Defense, derived from external canon
+The defense does not need $\beta_{ij}$ to deliver shared geometry. The claim is "not solipsism," and solipsism is the thesis that no mind-independent other / no genuine other-relation exists. The refutation of solipsism requires only that there be a well-defined, frame-independent relation between agents — and that is exactly what the coupling supplies.
+
+The comparison functional $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ is well-defined and intrinsically frame-covariant. By Cencov's uniqueness theorem [Cencov1972; corroborated AmariNagaoka2000 Ch. 2], the Fisher metric and the KL divergence it generates are invariant under sufficient statistics, hence under the GL(K,ℝ) frame action on the Gaussian belief fiber. Debate 3 (BLUE_WINS, `docs/debates/2026-05-24-pifb-consensus-gauge-invariance/04_verdict.md`) established this with a Gaussian-KL finite-difference check invariant to 4×10⁻¹⁵ under $\mu \to g\mu$, $\Sigma \to g\Sigma g^\top$ on K=4, and confirmed GL(K)-invariance is intrinsic to the divergence and present at N=1. The consequence for "not solipsism": the quantity that couples two agents is not an artifact of either agent's arbitrary frame choice — after transport $\Omega_{ij}$ aligns frames, $\mathrm{KL}(q_i \| \Omega_{ij}q_j)$ is a genuine, frame-independent measure of inter-agent disagreement. A solipsist has no such frame-independent other-relation; this framework has one. That is precisely the "informationally coordinated" status the manuscript claims (:3094), and no more.
+
+This also answers the strength objection without overreaching. The forward KL coupling $\mathrm{KL}(q_i \| \Omega_{ij} q_j)$ is the standard variational direction (the prior-side argument is the transported neighbor) [external_canon_inference.md §4; BleiKuckelbirgJordan2017]. Forward-KL coupling enforces that $q_i$ places no mass where the transported neighbor places none — a real consistency constraint, frame-invariantly measured. The manuscript claims exactly this: "enforcing mutual consistency constraints without requiring identical perceptions … informationally coordinated" (:3094). It does not claim the coupling produces a shared metric — that load is explicitly handed to the regulator-conditional consensus construction (:3094), which Debate 3 correctly downgraded. The division of labor is honest: pairwise coupling = coordination (delivered); shared geometry = consensus metric (conditional, flagged).
+
+## The honest concession (own sub-point 3 head-on)
+Pairwise $\beta_{ij}$ coupling is strictly weaker than shared objective geometry. It gives frame-invariant pairwise disagreement measures and consistency pressure; it does not give a single geometry all agents agree on. The manuscript says "informationally coordinated," not "geometrically agreed," and routes the shared-geometry ambition to the (conditional) consensus metric. So the concession is: yes, coupling alone is not shared reality — and the manuscript does not claim it is. The weakness is owned in the text, which is what "appropriately qualified" means.
+
+## External citation
+- [Cencov1972]; [AmariNagaoka2000 Ch. 2]: Fisher metric / KL divergence is the unique divergence invariant under sufficient statistics; GL(K)-invariance is intrinsic, present at N=1 — so the cross-agent comparison functional is frame-independent.
+- [BleiKuckelbirgJordan2017]; external_canon_inference.md §4: forward KL $\mathrm{KL}(q_i \| \cdot)$ is the variational direction; coupling on it is a genuine consistency constraint.
+
+## Falsification condition (argued unmet)
+The claim fails (overclaim) if the manuscript claims $\beta_{ij}$ coupling delivers shared *geometry* (a common metric) rather than informational coordination. Direct quotation: "agents can disagree about geometry while remaining informationally coordinated. They inhabit different phenomenal spaces while coupled through a shared noumenal substrate" (:3094). Coordination, not shared geometry, is claimed. Condition unmet.
+
+## Newly-discovered canon
+- (Already-established external canon, carried forward from Debate 3.) [Cencov1972; AmariNagaoka2000 Ch. 2]: GL(K)-invariance of Gaussian KL is intrinsic to the divergence at N=1; the cross-agent comparison functional is frame-independent. Verdict file: `docs/debates/2026-05-24-pifb-consensus-gauge-invariance/04_verdict.md`.

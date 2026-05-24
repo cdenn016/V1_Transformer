@@ -1,0 +1,21 @@
+# Memo — philosophy-of-science (RED, opening)
+
+## Steelman of the claim
+The section is unusually careful for a speculative passage: it disambiguates base from fiber (:3019, :3073), labels the $(3+1)$ subsection "(Speculative)," and states outright that it "makes no quantitative predictions ... that could be tested experimentally" (:3071). On its face the speculative hedge is honest and the bookkeeping is correct.
+
+## Falsification target
+Two frame-level failures survive the hedging.
+
+(1) **Free-threshold structure-imposition.** The two thresholds $\Lambda_{\rm obs}, \Lambda_{\rm subthresh}$ are never fixed by anything. They are free parameters. The "structure" the section reports — three sectors with sizes $|\mathcal D_{\rm obs}| \ll |\mathcal D_{\rm sub}| \ll |\mathcal D_{\rm int}|$ (Eq. at :3057) and magnitudes $\lambda_{\rm obs} \gg \lambda_{\rm sub} \gg \lambda_{\rm int} \approx 0$ (Eq. at :3061) — is *asserted as a property the spectrum satisfies*, not derived. With two free cut points any monotone non-negative spectrum can be partitioned into three sets of any prescribed cardinalities. A construction whose output is fixed by a free dial is not a finding; it is the dial's image. This is the textbook ad-hoc move: a result is rescued (here, *produced*) by an adjustable auxiliary whose value is set after the fact to give the desired answer [Popper, *The Logic of Scientific Discovery* (Routledge classics ed.), §§19–20 on ad hoc auxiliary hypotheses and the demand that a hypothesis forbid something].
+
+(2) **Importing the explanandum.** The passage identifies the large-eigenvalue sector with "the perceived spacetime" (:3029) and then "we may suppose that the observable sector corresponds to the $(1+3)$ dimensions we perceive as spacetime" (:3065). Perceived $(1+3)$ spacetime is exactly what a "dimensional structure" account is supposed to *explain*. Naming the high-flux sector "spacetime" does not explain why experience is 4-dimensional; it relabels the conclusion as a premise. Then the $(3+1)$ subsection treats $|\mathcal D_{\rm obs}| = 4$ as a *hypothesis to be mechanistically explained* (neural, sensory, evolutionary at :3069) — which reverses the explanatory direction Hempel requires: the explanandum must be *derived from* the explanans, not assumed by the explanans and then re-posed as a puzzle [Hempel & Oppenheim 1948, "Studies in the Logic of Explanation," *Philosophy of Science* 15(2), the deductive-nomological adequacy conditions: the explanandum is a logical consequence of the explanans].
+
+## Where the hedge does not save it
+The "(Speculative)" label and "no quantitative predictions" disclaimer (:3071) defend against the charge *"you claimed an empirical prediction."* They do not defend against *"the construction has no content because its output is set by free thresholds"* or *"the identification with perceived spacetime is circular."* An honest speculative label on a vacuous construction leaves it vacuous. A demonstration that "dimensional structure *can* in principle emerge" (:3071) requires producing a *non-trivial* spectrum and *fixed* thresholds that yield exactly three separated sectors; the section produces neither.
+
+## Falsification condition (when RED is wrong here)
+RED loses this vector if the manuscript (or blue) exhibits a *principled* determination of $\Lambda_{\rm obs}, \Lambda_{\rm subthresh}$ — fixed by the dynamics, a gap criterion, or an external scale — such that the three-sector partition and its size/magnitude hierarchy follow rather than being imposed; AND if the spacetime identification is shown to be a derived consequence rather than a labeling of the conclusion. The "(Speculative)" disclaimer alone does not meet this.
+
+## Newly-discovered canon
+- Popper, *The Logic of Scientific Discovery*, §§6, 19–20 — falsifiability and the prohibition on ad-hoc auxiliary hypotheses introduced solely to fit; a theory must forbid something. (Free thresholds tuned to give the desired sector sizes forbid nothing.)
+- Hempel & Oppenheim 1948, "Studies in the Logic of Explanation," *Philosophy of Science* 15(2):135–175 — DN adequacy conditions; the explanandum must be a logical consequence of the explanans. (Assuming perceived $(1+3)$ to define the observable sector violates condition R1.)
