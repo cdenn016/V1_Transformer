@@ -70,6 +70,43 @@ class TestVFEConfig:
             VFEConfig(embed_dim=32, irrep_spec=[('l0', 2, 8)])  # 16 != 32
 
 
+class TestVFEConfigValidation:
+    """__post_init__ must reject silent-misconfiguration footguns (audit 2026-05-24)."""
+
+    def test_n_layers_below_one_rejected(self):
+        with pytest.raises(ValueError, match='n_layers'):
+            VFEConfig(n_layers=0)
+
+    def test_unrecognized_gauge_group_rejected(self):
+        # Bypasses the static Literal narrowing — a runtime typo would otherwise
+        # fall through n_gen's SON formula and silently use the wrong generator count.
+        with pytest.raises(ValueError, match='gauge_group'):
+            VFEConfig(gauge_group='glk')  # type: ignore[arg-type]
+
+    def test_known_gauge_groups_accepted(self):
+        for grp in ('SO3', 'SON', 'GLK'):
+            VFEConfig(gauge_group=grp)  # must not raise
+
+    def test_epistemic_samples_below_one_rejected(self):
+        with pytest.raises(ValueError, match='epistemic_samples'):
+            VFEConfig(epistemic_samples=0)
+
+    def test_nonpositive_kappa_rejected(self):
+        with pytest.raises(ValueError, match='kappa'):
+            VFEConfig(kappa=0.0)
+        with pytest.raises(ValueError, match='kappa'):
+            VFEConfig(kappa=-1.0)
+
+    def test_nonpositive_phi_trace_clamp_rejected(self):
+        with pytest.raises(ValueError, match='phi_trace_clamp'):
+            VFEConfig(phi_trace_clamp=0.0)
+        with pytest.raises(ValueError, match='phi_trace_clamp'):
+            VFEConfig(phi_trace_clamp=-2.0)
+
+    def test_none_phi_trace_clamp_accepted(self):
+        VFEConfig(phi_trace_clamp=None)  # disabling clamp is valid
+
+
 # ---------------------------------------------------------------------------
 # 2. VFEPriorBank
 # ---------------------------------------------------------------------------

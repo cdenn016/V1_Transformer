@@ -19,11 +19,14 @@ import csv
 import json
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
 import torch
 from scipy.linalg import expm
+
+if TYPE_CHECKING:
+    from transformer.vfe.model import VFEModel
 
 from transformer.vfe.semantic_clustering import geometry as geo
 from transformer.vfe.semantic_clustering import metrics as met
@@ -77,7 +80,7 @@ def _subsample(bundle: BeliefBundle, max_points: int, seed: int) -> BeliefBundle
     )
 
 
-def _decode_strings(token_ids: torch.Tensor, dataset) -> Optional[list[str]]:
+def _decode_strings(token_ids: torch.Tensor, dataset: Optional[Any]) -> Optional[list[str]]:
     """Best-effort token-id -> string decode via a dataset/tokenizer, else None."""
     if dataset is None:
         return None
@@ -118,13 +121,13 @@ def _project_and_cluster(
 
 
 def run_clustering(
-    model,
+    model: "VFEModel",
     *,
     source: str,
     layer: Union[str, int] = "final",
     token_ids: Optional[torch.Tensor] = None,
-    dataset=None,
-    methods: Optional[dict] = None,
+    dataset: Optional[Any] = None,
+    methods: Optional[dict[str, str]] = None,
     outdir: Union[str, Path],
     max_points: int = 200,
     seed: int = 0,

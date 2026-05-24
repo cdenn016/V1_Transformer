@@ -115,6 +115,7 @@ from transformer.vfe._numerics import (
     VFENonFiniteError,
     apply_mu_trust_region,
     check_finite,
+    diag_kl as _diag_kl,
 )
 
 
@@ -123,40 +124,6 @@ from transformer.vfe._numerics import (
 # safely above float64 underflow (~1e-323) and below any meaningful softmax
 # probability, so β·log β > -69 ≈ log(1e-30) is bounded.
 _BETA_LOG_FLOOR: float = 1e-30
-
-
-def _diag_kl(
-    mu_q: torch.Tensor,
-    mu_p: torch.Tensor,
-    sigma_q: torch.Tensor,
-    sigma_p: torch.Tensor,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    r"""Per-dimension standard :math:`\mathrm{KL}(q\|p)` for diagonal Gaussians.
-
-    .. math::
-        \mathrm{KL}_k = \tfrac{1}{2}\,\bigl(\sigma_{q,k}/\sigma_{p,k}
-        + (\mu_{q,k}-\mu_{p,k})^2/\sigma_{p,k}
-        - 1 + \log\sigma_{p,k} - \log\sigma_{q,k}\bigr)
-
-    Both :math:`\sigma_q` and :math:`\sigma_p` are floored at ``eps`` before
-    division and ``log``. Returns the per-dim tensor of shape
-    ``(..., K)``; callers sum (over K, or over (N, K), or over all axes) as needed.
-
-    Standard KL only; for the Rényi alpha-divergence the F-monotone monitor
-    delegates to ``_kl_kernel_diagonal`` (which supports ``alpha_div``).
-    Other callers (Bayesian-alpha auxiliary, prior-belief diagnostic,
-    autograd / non-flat paths) explicitly use standard KL.
-    """
-    _sp = sigma_p.clamp(min=eps)
-    _sq = sigma_q.clamp(min=eps)
-    return 0.5 * (
-        _sq / _sp
-        + (mu_q - mu_p) ** 2 / _sp
-        - 1.0
-        + _sp.log()
-        - _sq.log()
-    )
 
 
 def _f_monotone_step(
@@ -364,10 +331,6 @@ class VFEEStep(nn.Module):
         # per-block softmax / per-block KL / per-block Ω naturally operate on
         # the correct gauge-block-diagonal structure.
         self.irrep_dims: List[int] = cfg.effective_block_dims
-        # Preserve the original per-head layout for the rare consumer that
-        # genuinely needs per-head granularity (e.g. cross-head-coupling
-        # diagnostics that compare super-block aggregates to per-head values).
-        self._original_irrep_dims: List[int] = cfg.irrep_dims
         self.use_rope = cfg.use_rope
         self.rope_base = cfg.rope_base
         self.rope_full_gauge = cfg.rope_full_gauge
@@ -415,6 +378,14 @@ class VFEEStep(nn.Module):
         if not isinstance(generators, torch.Tensor):
             generators = torch.from_numpy(generators).float()
         self.register_buffer('generators', generators)
+        # Skew-symmetry (SO(N) vs GL(K)) is a static property of the generator
+        # bank, invariant under later .to(device)/.half() casts. Compute it once
+        # here and pass it explicitly to compute_gauge_transport so the per-call
+        # content-fingerprint cache key (4 GPU→CPU .item() syncs per E-step
+        # iteration) is bypassed entirely.
+        self._generators_skew: bool = bool(torch.allclose(
+            generators, -generators.transpose(-1, -2), atol=1e-6
+        ))
 
         # Non-flat parallel transport (opt-in). When enabled, transport
         # becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G) per block.
@@ -571,6 +542,7 @@ class VFEEStep(nn.Module):
         mu_p: torch.Tensor,
         sigma_p: torch.Tensor,
         mask: Optional[torch.Tensor],
+        omega: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
     ) -> Optional[torch.Tensor]:
         r"""Scalar F evaluated with hyperparameters live and beliefs detached.
 
@@ -592,6 +564,15 @@ class VFEEStep(nn.Module):
         DETACHED so this loss contributes nothing to base_mu /
         base_log_sigma / phi_embed / previous-layer phi gradients. The
         single backward path is hyperparameter -> F -> CE.
+
+        ``omega`` (the converged per-block transport ``(Ω_h, Ω_h^{-1})`` pairs)
+        is supplied by the omega-direct path. When present, the attention term
+        is built from this CONVERGED transport via the pairwise-Ω kernel —
+        mirroring ``_forward_omega_direct`` — rather than from the encode-time
+        ``phi`` (which is frozen in omega-direct mode, so an ``exp(phi)``
+        transport would be stale and deliver a misdirected ``log_kappa``
+        gradient). In the default phi-mode (``omega=None``) the attention term
+        is built from ``phi`` exactly as before.
 
         Returns ``None`` when neither hyperparameter is learnable; callers
         skip the aux-term contribution to ``loss`` in that case.
@@ -662,7 +643,45 @@ class VFEEStep(nn.Module):
                     )
                 log_N_const = math.log(max(mu_d.shape[1], 1))
 
-            if self._kappa_per_head and self.irrep_dims and len(self.irrep_dims) > 1:
+            if omega is not None:
+                # omega-direct: build the attention term from the CONVERGED
+                # transport, mirroring _forward_omega_direct's kernel (global
+                # softmax over the pairwise-Ω KL). κ is attached so both β's
+                # κ-dependence and the explicit τ factor deliver the log_kappa
+                # gradient. φ is NOT read here — under omega-direct φ is frozen
+                # at encode value and the live transport is Ω.
+                if self.use_non_flat_transport:
+                    with torch.no_grad():
+                        delta_det = self.non_flat_connection(mu_d, mask=mask).detach()
+                    omega_pairs_det = compute_pairwise_omega_from_endpoints(
+                        [(o.detach(), oi.detach()) for (o, oi) in omega],
+                        self.irrep_dims,
+                        delta=delta_det,
+                        generators=self.generators,
+                        phi_spec_max=self.phi_spec_max,
+                    )
+                else:
+                    omega_pairs_det = compute_pairwise_omega_from_endpoints(
+                        [(o.detach(), oi.detach()) for (o, oi) in omega],
+                        self.irrep_dims,
+                        phi_spec_max=self.phi_spec_max,
+                    )
+                beta, kl_attn = compute_kl_attention_pairwise(
+                    mu_d, sigma_d, omega_pairs_det, self.irrep_dims,
+                    kappa_attached,
+                    mask=mask, mask_self_attention=self.mask_self_attention,
+                    eps=1e-8,
+                )
+                beta_safe = beta.clamp(min=_BETA_LOG_FLOOR)
+                sum_beta_kl = (beta * kl_attn).sum()
+                tau = kappa_attached * self._dim_scale
+                entropy_term = (
+                    tau * (beta_safe * beta_safe.log()).sum()
+                    + tau * log_N_const * beta.sum()
+                )
+                attn_term = self.lambda_align * (sum_beta_kl + entropy_term) / token_count
+                aux = attn_term if aux is None else aux + attn_term
+            elif self._kappa_per_head and self.irrep_dims and len(self.irrep_dims) > 1:
                 # Per-head aux: build the F_attn term per head and sum.
                 # Each head's term carries gradient to its own
                 # log_kappa_per_head[h] via the kappa_attached[h] slice
@@ -841,6 +860,7 @@ class VFEEStep(nn.Module):
             block_exp_pairs = compute_gauge_transport(
                 phi, self.generators, self.irrep_dims,
                 enforce_orthogonal=self.enforce_orthogonal,
+                skew_symmetric=self._generators_skew,
             )
 
             # Bayesian adaptive alpha: α_k = c0/(b0 + KL_k) per dimension
@@ -1036,10 +1056,9 @@ class VFEEStep(nn.Module):
                     # Per-head β stack (B, H, N, N) — exposed for the trainer
                     # plot path; aggregated mean preserves the (B, N, N) shape
                     # of `_last_attention` that downstream consumers expect.
-                    self._last_attention_per_head = torch.stack(
-                        beta_heads, dim=1
-                    ).detach()
-                    beta = torch.stack(beta_heads, dim=1).mean(dim=1)
+                    _beta_stack = torch.stack(beta_heads, dim=1)  # (B, H, N, N)
+                    self._last_attention_per_head = _beta_stack.detach()
+                    beta = _beta_stack.mean(dim=1)
                     # kl_matrix is exposed for the F-monotone monitor and
                     # diagnostics; mean over heads keeps the (B, N, N) shape.
                     if all(k is not None for k in kl_heads):
@@ -1435,6 +1454,7 @@ class VFEEStep(nn.Module):
                         self.generators,
                         self.irrep_dims,
                         enforce_orthogonal=self.enforce_orthogonal,
+                        skew_symmetric=self._generators_skew,
                     )
                 # Store the kappa tensor (not a Python float) — converting
                 # on demand in _compute_per_head_beta avoids a host sync
@@ -1832,29 +1852,14 @@ class VFEEStep(nn.Module):
                 "this should have been rejected at config __post_init__."
             )
 
-        # Compute β + KL for the F-monotone monitor (no autograd needed here,
-        # detached). The same KL is then recomputed inside the autograd
-        # subgraph for the (μ, σ) gradient — duplicated compute but isolates
-        # the gradient path from the monitor's bookkeeping.
-        with torch.no_grad():
-            delta_det = self.non_flat_connection(mu.detach(), mask=mask).detach()
-            omega_pairs_det = compute_pairwise_omega_with_delta(
-                phi.detach(), delta_det,
-                self.generators, self.irrep_dims,
-                cached_block_exp_pairs=block_exp_pairs,
-                phi_spec_max=self.phi_spec_max,
-            )
-            beta_det, kl_det = compute_kl_attention_pairwise(
-                mu.detach(), sigma.detach(), omega_pairs_det,
-                self.irrep_dims, kappa,
-                mask=mask, mask_self_attention=self.mask_self_attention,
-                eps=1e-8,
-                use_rope=self.use_rope, rope_base=self.rope_base,
-            )
-
         # Autograd path for dF/d(μ, σ) over the full F functional. The
         # connection inputs μ here as a leaf so autograd captures the
-        # "δ moves with μ" contribution.
+        # "δ moves with μ" contribution. The detached β/KL/Ω returned for the
+        # F-monotone monitor and diagnostics are derived from this same pass
+        # (beta_g.detach() etc.): mu_g/sigma_g carry the same values as
+        # mu.detach()/sigma.detach(), phi_d == phi.detach(), and _kappa_d ==
+        # kappa.detach(), so the values are numerically identical to a separate
+        # no_grad pass — that redundant pass was removed (audit 2026-05-24).
         with torch.enable_grad():
             mu_g = mu.detach().requires_grad_(True)
             sigma_g = sigma.detach().requires_grad_(True)
@@ -1905,7 +1910,11 @@ class VFEEStep(nn.Module):
                 create_graph=False, retain_graph=False,
             )
 
-        return grad_mu, grad_sigma, beta_det, kl_det, omega_pairs_det
+        omega_pairs_det = [
+            (o[0].detach(), o[1].detach() if o[1] is not None else None)
+            for o in omega_pairs_g
+        ]
+        return grad_mu, grad_sigma, beta_g.detach(), kl_g.detach(), omega_pairs_det
 
     def _update_phi_nonflat(
         self,
@@ -2318,13 +2327,16 @@ class VFEEStep(nn.Module):
                     raise
 
         # Hyperparameter aux loss (raw_c0, raw_b0, log_kappa gradient delivery).
-        # phi is held at encode-time value in this path but is still the input
-        # the attention term reads from; aux loss only needs (mu, sigma, phi,
-        # mu_p, sigma_p) and uses them all detached so the omega-direct
-        # iteration semantics are not perturbed.
+        # phi is held at encode-time value in this path, so the attention term
+        # must be built from the CONVERGED omega transport — not exp(phi) — or
+        # the log_kappa gradient is computed against a stale transport. Pass the
+        # converged omega; the aux loss routes the κ term through the pairwise-Ω
+        # kernel. All inputs are detached so the omega-direct iteration
+        # semantics are not perturbed.
         self._aux_hyperparam_loss = self._auxiliary_hyperparam_loss(
             mu=mu, sigma=sigma, phi=phi,
             mu_p=mu_p, sigma_p=sigma_p, mask=mask,
+            omega=omega,
         )
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi, omega=omega)

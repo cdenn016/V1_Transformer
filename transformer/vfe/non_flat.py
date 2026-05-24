@@ -96,7 +96,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformer.vfe._numerics import pre_exp_frobenius_clamp
+from transformer.vfe._numerics import diag_kl, pre_exp_frobenius_clamp
 
 
 class VFENonFlatConnection(nn.Module):
@@ -523,13 +523,12 @@ def compute_kl_attention_pairwise(
         ).clamp(min=eps)
 
         # KL(N(μ_i, diag σ_i) || N(μ_target, diag σ_target)) summed over k.
+        # Shared diagonal-Gaussian KL kernel; broadcasts (B,N,1,d_h) against
+        # (B,N,N,d_h). σ_h and σ_target are already floored at `eps` above, so
+        # diag_kl's internal clamp (same eps) is a no-op here.
         sigma_i = sigma_h.unsqueeze(2)                  # (B, N, 1, d_h)
         mu_i = mu_h.unsqueeze(2)                        # (B, N, 1, d_h)
-        diff = mu_i - mu_target                         # (B, N, N, d_h)
-        trace_term = sigma_i / sigma_target             # (B, N, N, d_h)
-        mahal_term = diff ** 2 / sigma_target           # (B, N, N, d_h)
-        logdet_term = sigma_target.log() - sigma_i.log()  # (B, N, N, d_h)
-        kl_h = 0.5 * (trace_term + mahal_term - 1.0 + logdet_term).sum(dim=-1)
+        kl_h = diag_kl(mu_i, mu_target, sigma_i, sigma_target, eps=eps).sum(dim=-1)
         # (B, N, N)
         kl_total = kl_total + kl_h
         block_start = block_end

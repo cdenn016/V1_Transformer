@@ -278,6 +278,57 @@ def test_q8_omega_direct_model_forward_and_backward():
             assert torch.isfinite(p.grad).all(), f"{n}: non-finite grad"
 
 
+def test_q8_aux_hyperparam_loss_uses_converged_omega():
+    """Audit 2026-05-24: under omega_direct + learnable_kappa, the hyperparameter
+    aux loss must build its attention term from the CONVERGED omega transport,
+    not the stale encode-time phi. Two different omega transports (same beliefs)
+    must yield different aux losses — proving the log_kappa gradient tracks the
+    converged omega, not exp(phi)."""
+    cfg = VFEConfig(**CFG_KWARGS, gauge_parameterization='omega_direct',
+                    learnable_kappa=True)
+    model = VFEModel(cfg)
+    e_step = model.stack.blocks[0].e_step
+
+    token_ids = torch.randint(0, cfg.vocab_size, (2, 6))
+    beliefs = model.prior_bank.encode(token_ids)
+    mu, sigma, phi = beliefs.mu, beliefs.sigma, beliefs.phi
+    mask = torch.tril(torch.ones(6, 6)).unsqueeze(0).expand(2, -1, -1)
+
+    omega_A = init_omega_from_phi(phi, model.generators, cfg.effective_block_dims)
+    omega_B = init_omega_from_phi(phi * 1.7 + 0.3, model.generators,
+                                  cfg.effective_block_dims)
+
+    aux_A = e_step._auxiliary_hyperparam_loss(
+        mu=mu, sigma=sigma, phi=phi, mu_p=mu, sigma_p=sigma, mask=mask,
+        omega=omega_A,
+    )
+    aux_B = e_step._auxiliary_hyperparam_loss(
+        mu=mu, sigma=sigma, phi=phi, mu_p=mu, sigma_p=sigma, mask=mask,
+        omega=omega_B,
+    )
+    assert aux_A is not None and aux_B is not None
+    assert torch.isfinite(aux_A) and torch.isfinite(aux_B)
+    assert not torch.allclose(aux_A, aux_B), (
+        "aux loss is identical for two different omega transports — it is not "
+        "reading the converged omega (stale-phi bug)."
+    )
+
+
+def test_q8_aux_hyperparam_loss_phi_path_unchanged():
+    """omega=None preserves the phi-mode aux-loss path (regression guard)."""
+    cfg = VFEConfig(**CFG_KWARGS, learnable_kappa=True)  # phi-mode
+    model = VFEModel(cfg)
+    e_step = model.stack.blocks[0].e_step
+    token_ids = torch.randint(0, cfg.vocab_size, (2, 6))
+    beliefs = model.prior_bank.encode(token_ids)
+    mask = torch.tril(torch.ones(6, 6)).unsqueeze(0).expand(2, -1, -1)
+    aux = e_step._auxiliary_hyperparam_loss(
+        mu=beliefs.mu, sigma=beliefs.sigma, phi=beliefs.phi,
+        mu_p=beliefs.mu, sigma_p=beliefs.sigma, mask=mask,
+    )
+    assert aux is not None and torch.isfinite(aux)
+
+
 def test_q8_compute_pairwise_omega_from_endpoints_flat():
     """Flat omega-direct transport: Omega_ij = Omega_i · Omega_j^{-1}."""
     torch.manual_seed(0)

@@ -28,11 +28,14 @@ passes ``targets`` into the model.
 from __future__ import annotations
 
 import warnings
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import torch
 
 from transformer.vfe.semantic_clustering.bundle import BeliefBundle
+
+if TYPE_CHECKING:
+    from transformer.vfe.model import VFEModel
 
 
 def _to_cpu(t: torch.Tensor) -> torch.Tensor:
@@ -41,7 +44,7 @@ def _to_cpu(t: torch.Tensor) -> torch.Tensor:
 
 
 def extract_contextual(
-    model,
+    model: "VFEModel",
     token_ids: torch.Tensor,
     layer: Union[str, int] = "final",
 ) -> BeliefBundle:
@@ -119,7 +122,7 @@ def extract_contextual(
 
 
 def extract_vocab(
-    model,
+    model: "VFEModel",
     token_ids: Optional[torch.Tensor] = None,
     max_tokens: int = 4096,
 ) -> BeliefBundle:

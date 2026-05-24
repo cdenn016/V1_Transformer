@@ -108,7 +108,6 @@ class VFEPriorBank(nn.Module):
         # super-block (the determinant of each super-block GL(d_super)) which
         # is the correct constraint for the merged gauge group.
         self.irrep_dims: List[int] = cfg.effective_block_dims
-        self._original_irrep_dims: List[int] = cfg.irrep_dims
         self.diagonal_covariance = cfg.diagonal_covariance
         self.exact_full_cov_decode = getattr(cfg, 'exact_full_cov_decode', False)
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
