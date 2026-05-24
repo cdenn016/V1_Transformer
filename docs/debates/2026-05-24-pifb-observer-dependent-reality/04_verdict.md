@@ -1,0 +1,35 @@
+# Verdict — pifb-observer-dependent-reality (binding, chief reconciliation)
+
+## First-pass verdicts
+
+| Judge | Outcome | Decisive evidence |
+|-------|---------|-------------------|
+| canon-strict | REMAND | Kant CPR A42/B59–60, Bxviii, A239, A190/A387 via SEP "Kant's Transcendental Idealism" (verified WebFetch 2026-05-24, 01b_extended_evidence.md:99): "noumenal" imports mind-independent ontological status the bundle base does NOT discharge, while Blue's own Falsification Condition 4 (03_blue_rebuttal.md:43) concedes the :3098 ontological-existence wording is currently unqualified — present-tense "appropriately qualified" fails on the wording, near-tie on the dispositive proposition. |
+| code-truth   | N/A | No code conjunct. The claim is a theory/philosophy-of-science meta-claim about manuscript presentation (00_claim.md:3); not dispatched. |
+| scope        | BLUE_WINS | Sibling-debate precedent `docs/debates/2026-05-24-pifb-consensus-gauge-invariance/04_verdict.md` — structurally identical meta-claim with both judges agreeing and residual lexical repairs; the REMAND-on-equivocation trigger is absent (both sides argued the same conjunction and converged), so the disposition is BLUE_WINS-with-bound-trims. |
+
+## Reconciliation rule applied
+
+Rule 4 (mode-weighted tiebreak) — Rule 1 and Rule 2 are silent (scope declared neither OUT_OF_SCOPE nor REMAND-on-equivocation, and explicitly found no equivocation); Rule 3 cannot fire because with code-truth N/A and canon-strict at REMAND only one judge (scope) picked BLUE_WINS, which is not the two-judge agreement Rule 3 requires; the two active judges therefore disagree, and in `theory` mode the tiebreak goes to canon-strict → REMAND.
+
+## Decisive evidence (binding)
+
+Per Rule 4 the binding decisive evidence is canon-strict's. Kant, *Critique of Pure Reason* A42/B59–60, Bxviii, A239, A190/A387, read through SEP "Kant's Transcendental Idealism" (verified WebFetch 2026-05-24): the noumenon / thing-in-itself carries mind-independent ontological and causal status ("things in themselves affect us, activating our sensible faculty") while contributing none of the metric / spatio-temporal structure that grounds a shared geometry ("we can cognize of things a priori only what we ourselves have put into them"). The bundle apparatus licenses only a bare smooth common base [Nakahara2003 §10.1–10.4; Lee2013], so the manuscript's words "shared noumenal substrate" (:3094) and "noumenal manifold C" (:3098) import an ontological commitment the bundle-base role does not discharge. Combined with Blue's own Falsification Condition 4 (03_blue_rebuttal.md:43) — "The :3098 ontological-existence language is left unqualified in the final manuscript. This is the one condition we concede is currently met at the level of wording" — this is the single fact that moves canon-strict off a near-tie to REMAND rather than a clean win: the present-tense "appropriately qualified" conjunct fails on the wording as written, and the :3094 "therefore" draws an unconditional band-conclusion from an antecedent the same sentence concedes is unsupplied.
+
+## Outcome (binding)
+
+REMAND
+
+## Reasoning
+
+Rule 4 fires: the two dispatched judges split (canon-strict REMAND, scope BLUE_WINS; code-truth N/A), Rules 1–3 are silent, and in `theory` mode the tiebreak is canon-strict's outcome. Scope is overridden not on the merits of its reasoning — both judges agree on the substance (the position is coherent perspectival realism; C is the structurally non-eliminable bundle base [Nakahara2003 §10.1–10.4; Lee2013]; "not solipsism" is earned by the frame-invariant KL coupling [Cencov1972]; exactly two wording fixes are conceded by both sides) — but because the reconciliation rules place the theory-mode tiebreak with canon-strict, and the chief may not override canon-strict on its own domain. The sibling Debate 3 resolved its structurally identical pattern as BLUE_WINS because there canon-strict itself returned BLUE_WINS, so Rule 3 fired on two-judges-agree; that precedent transfers the *method* (bind the conceded trims to the Action so the verdict is not read as endorsing the prose verbatim) but not the *outcome*, which is controlled by canon-strict's stance, and canon-strict's stance here is REMAND. The binding decisive evidence is Kant CPR / SEP-Kant on the ontological import of "noumenal," which the bundle base cannot cash, together with Blue's FC#4 conceding the :3098 wording is currently unqualified. Substantively this REMAND and a BLUE_WINS-with-trims would carry the identical Action and rest on the identical converged external canon; the difference is procedural, and resolving it as BLUE_WINS would require improvising past an explicit rule — forbidden. If future debates with this pattern should resolve as BLUE_WINS-with-trims, the methodology's Rule 3 / Rule 4 handling of an N/A code-truth panel needs amending, not this verdict.
+
+## Action
+
+REMAND with two bound wording fixes. Both first-pass judges and both debating sides agree on both; apply them, and the meta-claim is vindicable on the converged verified external canon (Cencov frame-invariant cross-perspectival assessability [Cencov1972; AmariNagaoka2000 Ch. 2]; the structurally non-eliminable common base [Nakahara2003 §10.1–10.4; Lee2013]; Kant CPR / SEP-Kant on the noumenon's ontological import as the canon that fixes the lexical ceiling). This REMAND must NOT be read as endorsing the prose verbatim, and is not a contradiction of the position's coherence — it is a wording-qualification remand on the second conjunct.
+
+1. **:3094 — carry the regulator-conditional into the conclusion.** The "therefore ... within-species consensus, not unconditional relativism" clause currently asserts present band-membership outside the syntactic scope of the parenthetical "(conditional on a regulator that the present manuscript does not supply)." Re-scope so the conclusion reads as conditional, e.g. "within-frame validity, plus within-species consensus *conditional on a regulator the present manuscript does not supply*, not unconditional relativism." What holds unconditionally now — within-frame validity plus frame-invariant pairwise coordination [Cencov1972] — is itself the coherent perspectival-realist band and should be stated as the present property. Phrase this as the substantive repair it is (a present property becomes a conditional one), not a cosmetic softening.
+
+2. **:3094 / :3098 — replace "noumenal substrate" / "noumenal manifold C" with "base manifold C"** (carrying smooth/differentiable structure, no intrinsic metric), unless the full Kantian noumenon machinery [Kant CPR A42/B59–60, A190/A239; SEP "Kant's Transcendental Idealism"] is imported and defended in place rather than deferred to §phenomenological_interpretation. The bundle apparatus discharges "common base manifold," not the loaded ontological term.
+
+After both edits, the section is coherent AND appropriately qualified on the converged verified canon; no sub-claims need be spawned as separate debates, since the sides did not argue distinct propositions — they converged on these two bounded fixes.
