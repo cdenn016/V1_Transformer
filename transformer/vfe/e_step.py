@@ -391,6 +391,10 @@ class VFEEStep(nn.Module):
         # becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G) per block.
         # Init at zero ⇒ flat path bitwise-equivalent at step 0.
         self.use_non_flat_transport = cfg.use_non_flat_transport
+        # When False, _iter_nonflat detaches μ from the connection so the E-step
+        # μ-gradient drops the second-order "δ moves with μ" term (removes the
+        # matrix_exp backward). Default True = exact path. See VFEConfig.
+        self.nonflat_delta_through_mu = cfg.nonflat_delta_through_mu
         if cfg.use_non_flat_transport:
             # Under cross_couplings, supply the per-head sub-partition inside
             # each super-block so diagonal generators get a tight d_head mask
@@ -1881,8 +1885,12 @@ class VFEEStep(nn.Module):
                 self_kl_term = float(alpha_eff) * kl_qp_per_dim.sum()
 
             # Re-evaluate δ and pairwise Ω inside the graph so dF/dμ captures
-            # the connection's μ-dependence.
-            delta_g = self.non_flat_connection(mu_g, mask=mask)
+            # the connection's μ-dependence. When nonflat_delta_through_mu is
+            # False, δ is built from a detached μ — same forward value, but the
+            # μ-gradient no longer flows through exp(δ·G), dropping the
+            # second-order "δ moves with μ" term and the matrix_exp backward.
+            mu_for_delta = mu_g if self.nonflat_delta_through_mu else mu_g.detach()
+            delta_g = self.non_flat_connection(mu_for_delta, mask=mask)
             omega_pairs_g = compute_pairwise_omega_with_delta(
                 phi_d, delta_g,
                 self.generators, self.irrep_dims,

@@ -333,7 +333,8 @@ def compute_pairwise_omega_with_delta(
     cached_block_exp_pairs: Optional[List[Tuple[torch.Tensor, Optional[torch.Tensor]]]] = None,
     *,
     phi_spec_max: Optional[float] = None,
-) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    return_inverse: bool = False,
+) -> List[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
     r"""Build per-block pairwise Omega and its inverse from :math:`\phi` and
     :math:`\delta`.
 
@@ -345,9 +346,16 @@ def compute_pairwise_omega_with_delta(
     .. math::
         \Omega^{(h)-1}_{ij} = \exp(\phi_j \cdot G^{(h)}) \exp(-\delta_{ij} \cdot G^{(h)}) \exp(-\phi_i \cdot G^{(h)})
 
-    The inverse is computed via three additional matrix exponentials, not via
-    an explicit ``torch.linalg.inv`` — same FLOP cost, no condition-number
-    worry, matches the legacy ``(exp_h, exp_neg_h)`` pair contract.
+    The inverse, when requested, is computed via the matrix exponential of
+    ``-δ_ij·G`` flanked by the φ-exp factors (not via an explicit
+    ``torch.linalg.inv`` — no condition-number worry, matches the legacy
+    ``(exp_h, exp_neg_h)`` pair contract). It is **opt-in** (``return_inverse``)
+    and defaults off: the only /vfe consumers
+    (:func:`compute_kl_attention_pairwise`, the φ-update, and the diagnostic
+    :func:`triangle_holonomy_norm`) read only ``Omega_h`` and discard the
+    inverse, so for general GL(K) generators (no ``exp(-X)=exp(X)^T`` shortcut)
+    building it wastes a second per-pair ``matrix_exp`` and two
+    ``(B,N,N,d_h,d_h)`` matmuls per block.
 
     Args:
         phi: ``(B, N, n_gen)`` gauge frame coordinates.
@@ -360,10 +368,16 @@ def compute_pairwise_omega_with_delta(
             we reuse it; otherwise we rebuild. Caller is responsible for the
             ``phi`` ↔ cache identity (see :mod:`transformer.vfe.e_step`'s phi
             update path for the cache-discipline rationale).
+        return_inverse: When ``True``, also build ``Omega_inv_h`` (the second
+            tuple element). Default ``False`` — the inverse is unused on every
+            live /vfe path, so the default skips the extra ``matrix_exp`` and
+            matmuls. Mirrors the skew-path convention where the inverse half is
+            ``None`` (see :func:`transformer.core.gauge_utils.fused_block_matrix_exp_pairs`).
 
     Returns:
         List of length ``len(irrep_dims)``. Each element is a pair
-        ``(Omega_h, Omega_inv_h)`` with shape ``(B, N, N, d_h, d_h)``.
+        ``(Omega_h, Omega_inv_h)`` with shape ``(B, N, N, d_h, d_h)``;
+        ``Omega_inv_h`` is ``None`` unless ``return_inverse=True``.
     """
     from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
 
@@ -399,13 +413,17 @@ def compute_pairwise_omega_with_delta(
 
         # exp(δ_ij · G^(h)) — autograd through matrix_exp is supported as of
         # PyTorch 1.7. Float32 path; AMP off for stability (matrix_exp is
-        # sensitive to overflow at fp16).
+        # sensitive to overflow at fp16). exp_neg_delta is built only when the
+        # caller asks for the inverse (return_inverse=True). For general GL(K)
+        # generators _is_skew is False, so the second matrix_exp is paid in
+        # full — skipping it on the default path is the main saving here.
         with torch.amp.autocast('cuda', enabled=False):
             exp_delta = torch.linalg.matrix_exp(algebra.float())             # (B, N, N, d_h, d_h)
-            if _is_skew:
-                exp_neg_delta = exp_delta.transpose(-1, -2)
-            else:
-                exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())     # (B, N, N, d_h, d_h)
+            if return_inverse:
+                if _is_skew:
+                    exp_neg_delta = exp_delta.transpose(-1, -2)
+                else:
+                    exp_neg_delta = torch.linalg.matrix_exp(-algebra.float())     # (B, N, N, d_h, d_h)
 
         exp_phi_h = phi_pairs[h][0].to(exp_delta.dtype)            # (B, N, d_h, d_h)
         exp_neg_phi_h = phi_pairs[h][1].to(exp_delta.dtype) if phi_pairs[h][1] is not None else None
@@ -427,11 +445,16 @@ def compute_pairwise_omega_with_delta(
         )  # (B, N, N, d_h, d_h)
 
         # Omega_inv_ij = exp_phi_j @ exp_neg_delta_ij @ exp_neg_phi_i
-        Omega_inv = (
-            exp_phi_h.unsqueeze(1)            # (B, 1, N, d, d)
-            @ exp_neg_delta
-            @ exp_neg_phi_h.unsqueeze(2)      # (B, N, 1, d, d)
-        )  # (B, N, N, d_h, d_h)
+        # Opt-in: every live /vfe consumer discards the inverse, so the default
+        # path returns None here (no second matmul chain, no 419 MB tensor).
+        if return_inverse:
+            Omega_inv = (
+                exp_phi_h.unsqueeze(1)            # (B, 1, N, d, d)
+                @ exp_neg_delta
+                @ exp_neg_phi_h.unsqueeze(2)      # (B, N, 1, d, d)
+            )  # (B, N, N, d_h, d_h)
+        else:
+            Omega_inv = None
 
         out.append((Omega, Omega_inv))
         block_start = block_end

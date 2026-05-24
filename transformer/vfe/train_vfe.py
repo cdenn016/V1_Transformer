@@ -28,12 +28,14 @@ config = {
     'embed_dim':                20,
     'irrep_spec':               [('fund', 2, 10)],
     
-    'batch_size':               16,
+    'batch_size':               64,
     
     'max_seq_len':              128,
-    'max_steps':                60000,
+    'max_steps':                15000,
 
-    'use_prior_bank':           False,
+    'use_prior_bank':           True,
+    'exact_full_cov_decode':    False,
+    
     'mask_self_attention':      False,
     'causal_lower_triangle':    True,
     
@@ -76,7 +78,7 @@ config = {
     'prior_handoff_sigma':      0,
 
     # === Covariance ===
-    'diagonal_covariance':      True,
+    'diagonal_covariance':      False,
     'isotropic_covariance':     False,
     'exact_diagonal_transport': False,
     'enforce_orthogonal':       False,
@@ -92,7 +94,7 @@ config = {
 
     # === Positional encoding ===
     'use_rope':                 True,
-    'rope_full_gauge':          'off',
+    'rope_full_gauge':          'both',
     'rope_base':                150,
 
     # === Embedding init ===
@@ -108,6 +110,7 @@ config = {
     'use_non_flat_transport':       False,
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+    'nonflat_delta_through_mu':     True, # False = ~17% faster: drop δ-through-μ E-step grad (matrix_exp bwd)
 
     # === Cross-head coupling (GL(K) multi-head) ===
     # Off-diagonal gauge generators sparsely connecting selected head pairs.
@@ -141,8 +144,8 @@ config = {
     'bch_order':                3,
 
     # === Logging / evaluation ===
-    'log_interval':             200,
-    'eval_interval':            5000,
+    'log_interval':             100,
+    'eval_interval':            2000,
     'checkpoint_interval':      25000,
 
     'track_layer_diagnostics':      False,

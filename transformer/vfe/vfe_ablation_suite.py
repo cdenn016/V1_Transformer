@@ -92,6 +92,8 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'max_steps':                15000,
 
     'use_prior_bank':           False,
+    'exact_full_cov_decode':    False,
+    
     'mask_self_attention':      False,
     'causal_lower_triangle':    True,
     
@@ -106,7 +108,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'learnable_kappa':          False,
 
     
-    'use_equivariant_head_mixer':  False,
+    'use_equivariant_head_mixer':  True,
     'gauge_covariant_ridge':       True,
 
     # === E-step dynamics ===
@@ -125,13 +127,13 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'lambda_soft':              0.0,
     'mass_phi':                 0.0,
 
-    'kappa':                    1.0,
+    'kappa':                    0.5,
 
 
 
     # === Cross-layer prior handoff ===
-    'prior_handoff_rho':        1.0,
-    'prior_handoff_sigma':      0.1,
+    'prior_handoff_rho':        0.0,
+    'prior_handoff_sigma':      0.0,
 
     # === Covariance ===
     'diagonal_covariance':      True,
@@ -154,8 +156,8 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'rope_base':                150,
 
     # === Embedding init ===
-    'mu_init_std':              0.1,
-    'phi_scale':                0.1,
+    'mu_init_std':              0.001,
+    'phi_scale':                0.001,
     'sigma_init':               1,
 
     # === Decode and generation-time EFE (canonical path; consumed by vfe/efe.py) ===
@@ -166,6 +168,7 @@ BASELINE_CONFIG: Dict[str, Any] = {
     'use_non_flat_transport':       False,
     'non_flat_max_strength':        1.0,  # s_max in s = s_max·tanh(ρ)
     'non_flat_per_edge_delta_max':  1.0,  # δ_max bound on ‖δ_ij·G‖_F
+    'nonflat_delta_through_mu':     True, # False = ~17% faster: drop δ-through-μ E-step grad (matrix_exp bwd)
 
     # === Cross-head coupling (GL(K) multi-head) ===
     # Off-diagonal gauge generators sparsely connecting selected head pairs.
@@ -184,13 +187,13 @@ BASELINE_CONFIG: Dict[str, Any] = {
 
     # === Training ===
     # Per-group M-step LRs (see vfe/config.py for what each touches).
-    'm_mu_lr':                  0.015,
-    'm_sigma_lr':               0.004,
+    'm_mu_lr':                  0.025,
+    'm_sigma_lr':               0.0025,
     'm_phi_lr':                 0.015,
     
-    'm_hyper_lr':               0.001,
-    'm_other_lr':               0.035,
-    'weight_decay':             0.075,
+    'm_hyper_lr':               0.0125,
+    'm_other_lr':               0.02,
+    'weight_decay':             0.05,
     
     'warmup_steps':             100,
     'grad_clip':                50.0,
@@ -223,7 +226,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'alpha_divergence': {
         'description': 'alpha_divergence',
         'param': 'alpha_divergence',
-        'values': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
+        'values': [0.1, 0.3, 0.4, 0.6, 0.7, 0.9, 1],
         'baseline_value': 0.1,
     },
     
@@ -231,8 +234,8 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'e_mu_lr': {
         'description': 'E-step natural-gradient step size for mu_q',
         'param': 'e_mu_lr',
-        'values': [0.01, 0.1, 0.25, 0.4, 0.5],
-        'baseline_value': 0.1,
+        'values': [0.01, 0.1, 0.25, 0.5, 0.75],
+        'baseline_value': 0.5,
     },
 
     'e_sigma_lr': {
@@ -266,7 +269,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'lambda_align': {
         'description': 'Boltzmann GLU weight in F: beta_ij * grad_theta KL(q_i || Omega_ij q_j)',
         'param': 'lambda_align',
-        'values': [2.25, 2.45, 2.65],
+        'values': [0.25, 1, 2, 2.45, 3, 5],
         'baseline_value': 1.0,
     },
 
@@ -289,7 +292,7 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'kappa': {
         'description': 'Attention temperature: beta = softmax(-KL / (kappa * sqrt(K)))',
         'param': 'kappa',
-        'values': [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 8.0],
+        'values': [0.1, 0.25, 0.5],
         'baseline_value': 1.0,
     },
 
@@ -321,8 +324,8 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'mu_init_std': {
         'description': 'Embedding init: std of base_mu = randn(K) * mu_init_std',
         'param': 'mu_init_std',
-        'values': [0, 0.005, 0.01, 0.05, 0.075, 0.1],
-        'baseline_value': 0.01,
+        'values': [0.2, 0.3, 0.4, 0.5],
+        'baseline_value': 0.2,
     },
 
     'phi_scale': {
@@ -343,72 +346,75 @@ SWEEPS: Dict[str, Dict[str, Any]] = {
     'm_mu_lr': {
         'description': 'M-step LR for PriorBank.base_mu',
         'param': 'm_mu_lr',
-        'values': [0.001, 0.0125, 0.015, 0.02, 0.025, 0.03],
-        'baseline_value': 0.002,
+        'values': [0.0005, 0.001, 0.015,  0.025, 0.05, 0.1],
+        'baseline_value': 0.0015,
     },
 
     'm_sigma_lr': {
         'description': 'M-step LR for PriorBank.base_log_sigma and decode_log_scale',
         'param': 'm_sigma_lr',
-        'values': [0.001, 0.0025, 0.004, 0.005, 0.006, 0.0075],
-        'baseline_value': 0.05,
+        'values': [0.001, 0.0025, 0.004, 0.0075, 0.01, 0.05],
+        'baseline_value': 0.004,
     },
 
     'm_phi_lr': {
         'description': 'M-step LR for PriorBank.phi_embed and Positional.pos_phi',
         'param': 'm_phi_lr',
-        'values': [0.001, 0.015, 0.02,  0.035, 0.04],
+        'values': [0.001, 0.005, 0.01, 0.015, 0.025, 0.05, 0.1],
         'baseline_value': 0.01,
     },
 
     'm_hyper_lr': {
         'description': 'M-step LR for E-step learnable hyperparams (raw_c0, raw_b0, log_kappa, _phi_preconditioner)',
         'param': 'm_hyper_lr',
-        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2],
-        'baseline_value': 0.001,
+        'values': [0.005, 0.0075, 0.01, 0.0125, 0.015 ],
+        'baseline_value': 0.015,
     },
 
     'm_other_lr': {
         'description': 'M-step LR for catch-all group (head_mixer, non_flat W_raw, output projection, ...)',
         'param': 'm_other_lr',
-        'values': [0.025, 0.035, 0.045, 0.055, 0.065, 0.075],
-        'baseline_value': 0.001,
+        'values': [0.02, 0.025, 0.03, 0.035, 0.04],
+        'baseline_value': 0.02,
     },
 
     'weight_decay': {
         'description': 'M-step AdamW weight decay',
         'param': 'weight_decay',
-        'values': [0.001, 0.005, 0.0075, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1],
-        'baseline_value': 0.001,
+        'values': [0.04, 0.045, 0.05, 0.055],
+        'baseline_value': 0.05,
     },
 }
 
 
 # Sweep execution order (cheap-to-expensive; keep in sync with user priorities).
 SWEEP_ORDER: List[str] = [
-  #  'e_mu_lr',
+  
+    # 'e_mu_lr',
    # 'e_sigma_lr',
    # 'e_phi_lr',
-  # 'alpha_divergence',
-   #'m_mu_lr',
-  #  'm_sigma_lr',
-  # 'm_phi_lr',
-  #  'm_hyper_lr',
+  
+ #  'm_mu_lr',
+ #   'm_sigma_lr',
+ #  'm_phi_lr',
+ #   'm_hyper_lr',
   #  'm_other_lr',
 
-  #  'weight_decay',
-    
-  #  'lambda_align',
+    'weight_decay',
+   # 'alpha_divergence',
+    'lambda_align',
    # 'lambda_softmax',
-   
+    'kappa',
+    
    # 'rope_base',
   #  'mass_phi',
+      
+ 
+    # 'mu_init_std',
+   # 'phi_scale',
+   # 'sigma_init',
     
-    'mu_init_std',
-    'phi_scale',
-    'sigma_init',
-    # 'kappa',
-   # 'phi_trace_clamp',
+    'phi_trace_clamp',
 ]
 
 
