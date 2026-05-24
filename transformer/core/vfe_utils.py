@@ -277,6 +277,84 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6,
     return result.to(orig_dtype)
 
 
+class _GapRegularizedEigh(torch.autograd.Function):
+    r"""``torch.linalg.eigh`` with a gap-regularized backward.
+
+    The analytic eigh gradient routes the eigenvector contribution through
+    :math:`F_{ij} = 1/(\lambda_i - \lambda_j)`, which diverges as two
+    eigenvalues coincide. That divergence is not a numerical artefact: the
+    eigenvectors of a matrix with a repeated eigenvalue are not unique, so the
+    derivative :math:`\partial v / \partial M` is genuinely ill-defined on the
+    degenerate locus and PyTorch's stock backward returns NaN there (the
+    full-cov σ-retraction hits this whenever the loss sends a gradient to Σ;
+    see ``scripts/test_numerical_edge_cases.py`` and
+    ``docs/edits/edits-2026-05-24.md``).
+
+    We replace the singular kernel with the bounded Lorentzian
+
+    .. math::
+        F_{ij} = \frac{\lambda_i - \lambda_j}{(\lambda_i - \lambda_j)^2 + \varepsilon^2},
+
+    which equals :math:`1/(\lambda_i - \lambda_j)` to first order when the gap
+    dominates :math:`\varepsilon` and saturates at :math:`1/(2\varepsilon)`
+    instead of blowing up when the gap collapses. The forward is the exact
+    ``eigh``; only the (otherwise undefined) degenerate gradient is regularized.
+    The eigenvalue contribution ``diag(grad_L)`` is exact and untouched.
+
+    ``gap_eps`` is per-batch-element ``(..., 1, 1)`` (scaled to the eigenvalue
+    magnitude by the caller) or a scalar.
+    """
+
+    @staticmethod
+    def forward(ctx, M: torch.Tensor, gap_eps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        L, V = torch.linalg.eigh(M)
+        ctx.save_for_backward(L, V, gap_eps)
+        return L, V
+
+    @staticmethod
+    def backward(ctx, grad_L, grad_V):
+        L, V, gap_eps = ctx.saved_tensors
+        Vt = V.transpose(-2, -1)
+        inner = None
+        if grad_V is not None:
+            # diff[..., i, j] = L_i - L_j ; F is the Lorentzian-regularized 1/diff
+            diff = L.unsqueeze(-1) - L.unsqueeze(-2)          # (..., K, K)
+            eps2 = (gap_eps * gap_eps)                         # (..., 1, 1) or scalar
+            F = diff / (diff * diff + eps2)
+            F = F - torch.diag_embed(torch.diagonal(F, dim1=-2, dim2=-1))  # zero diagonal
+            inner = F * (Vt @ grad_V)
+        if grad_L is not None:
+            diag_gl = torch.diag_embed(grad_L)
+            inner = diag_gl if inner is None else inner + diag_gl
+        if inner is None:
+            return None, None
+        grad_M = V @ inner @ Vt
+        grad_M = 0.5 * (grad_M + grad_M.transpose(-2, -1))     # symmetric input
+        return grad_M, None
+
+
+def safe_eigh_backward(
+    M: torch.Tensor,
+    rel_gap_eps: float = 1e-5,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""``torch.linalg.eigh`` with the gap-regularized backward of
+    :class:`_GapRegularizedEigh`.
+
+    For call sites that need the EXACT eigh forward (no jitter / escalation /
+    SVD fallback — unlike :func:`_safe_eigh`) but must not emit NaN gradients
+    when the spectrum is degenerate or clustered (e.g. an aggregated or
+    post-retraction Σ ≈ cI). The forward is bit-identical to
+    ``torch.linalg.eigh``; only the otherwise-undefined degenerate eigenvector
+    gradient is regularized. ``rel_gap_eps`` scales the Lorentzian gap floor to
+    λ_max per batch element so it is negligible for separated spectra.
+
+    Returns ``(eigenvalues, eigenvectors)`` exactly like ``torch.linalg.eigh``.
+    """
+    mag = M.detach().abs().amax(dim=(-2, -1), keepdim=True).clamp(min=1.0)
+    gap_eps = rel_gap_eps * mag
+    return _GapRegularizedEigh.apply(M, gap_eps)
+
+
 def _safe_eigh(
     M: torch.Tensor,
     jitter: float = 1e-6,
@@ -325,26 +403,53 @@ def _safe_eigh(
             R_unit = _gf @ _gf.transpose(-1, -2)
         else:
             R_unit = I_K
-        # Break eigenvalue degeneracy: add linearly-spaced diagonal perturbation
-        # so that eigenvalues of identical magnitude are separated by ~jitter/K.
-        # This prevents NaN in the eigh backward pass (1/(λ_i - λ_j) terms).
-        degeneracy_breaker = torch.linspace(
-            0, jitter, K, device=device, dtype=torch.float32
-        ).diag()
+        # Break eigenvalue degeneracy: add a linearly-spaced diagonal
+        # perturbation so adjacent eigenvalues separate by MORE than the
+        # float32 round-off at their own magnitude. The eigh/SVD backward has
+        # 1/(λ_i − λ_j) terms that go NaN when eigenvalues coincide. A breaker
+        # whose span is just `jitter` (spacing jitter/(K−1)) is silently lost
+        # to round-off when jitter/(K−1) < ULP·λ_max — e.g. jitter≈1e-6, K=20,
+        # Σ≈I gives spacing 5e-8 < float32 ULP 1.2e-7, leaving the spectrum
+        # numerically degenerate and detonating the backward (this is the
+        # full-cov + prior-bank σ-gradient NaN; see scripts/test_numerical_
+        # edge_cases.py and docs/edits/edits-2026-05-24.md). Scale the breaker
+        # span to λ_max so the spacing clears ULP at any σ scale, while never
+        # dropping below the caller's requested level (so the spd_eigfloor
+        # "breaker ≤ floor" invariant holds whenever `floor` dominates).
+        _f32_eps = torch.finfo(torch.float32).eps
+        # Per-batch-element magnitude proxy for λ_max (where round-off bites).
+        _mag = M.detach().abs().amax(dim=(-2, -1), keepdim=True).clamp(min=1.0)
+        # Backward gap-regularization scale (see _GapRegularizedEigh). Scaled to
+        # λ_max so it is negligible for separated spectra (gaps ≳ 1e-3·λ_max bias
+        # < 0.01%) yet bounds 1/(λ_i−λ_j) when eigenvalues collapse. A diagonal
+        # breaker alone cannot separate a NON-diagonal degenerate matrix (the
+        # whitened tangent R and the post-retraction Σ_new are near-I with
+        # off-diagonal structure and min eigenvalue-gap ≈ 0), so the regularized
+        # backward — not the breaker — is what makes the σ-gradient finite.
+        _gap_eps = (1e-5 * _mag).to(torch.float32)            # (..., 1, 1)
+        # Unit ramp 0..1 across the K diagonal entries (spacing 1/(K−1)).
+        _ramp = torch.linspace(0.0, 1.0, K, device=device, dtype=torch.float32)
+
+        def _make_breaker(level: float) -> torch.Tensor:
+            # Span = max(level, 16·(K−1)·ULP·λ_max); per-eigenvalue spacing
+            # then exceeds 16·ULP·λ_max ≫ round-off. Shape (..., K, K).
+            gap_span = (16.0 * max(K - 1, 1) * _f32_eps) * _mag   # (..., 1, 1)
+            span = gap_span.clamp(min=level)                       # (..., 1, 1)
+            return torch.diag_embed(_ramp * span.squeeze(-1))      # (..., K, K)
+
         current_jitter = jitter
+        degeneracy_breaker = _make_breaker(current_jitter)
 
         while current_jitter <= max_jitter:
             try:
                 M_reg = M + current_jitter * R_unit + degeneracy_breaker
-                eigvals, eigvecs = torch.linalg.eigh(M_reg)
+                eigvals, eigvecs = _GapRegularizedEigh.apply(M_reg, _gap_eps)
                 return eigvals.to(orig_dtype), eigvecs.to(orig_dtype)
             except (RuntimeError, torch.linalg.LinAlgError):
                 _nr("eigh_jitter_escalate")
                 current_jitter *= 10.0
                 # Scale degeneracy breaker with jitter
-                degeneracy_breaker = torch.linspace(
-                    0, current_jitter, K, device=device, dtype=torch.float32
-                ).diag()
+                degeneracy_breaker = _make_breaker(current_jitter)
 
         _nr("eigh_svd_fallback")
         # Ultimate fallback: SVD (gesdd algorithm, more numerically stable).
@@ -352,7 +457,7 @@ def _safe_eigh(
         # For symmetric indefinite M (after insufficient jitter): SVD returns
         # |λ_i| not λ_i.  We recover signs from the diagonal of U^T M U,
         # which equals diag(λ_i) for eigenvectors U of a symmetric matrix.
-        M_reg = M + max_jitter * R_unit + degeneracy_breaker
+        M_reg = M + max_jitter * R_unit + _make_breaker(max_jitter)
         U, s, Vh = torch.linalg.svd(M_reg, full_matrices=False)
         # Recover eigenvalue signs: diag(U^T M_reg U) = eigenvalues
         diag_check = torch.einsum('...ki,...kj,...ij->...i', U, M_reg, U)

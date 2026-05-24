@@ -54,6 +54,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from transformer.core.types import BeliefState
+from transformer.core.vfe_utils import safe_eigh_backward
 from transformer.core.gauge_utils import (
     stable_matrix_exp_pair,
     fused_block_matrix_exp_pairs,
@@ -514,7 +515,10 @@ class VFEPriorBank(nn.Module):
             # V diag(λ) Vᵀ product (an unbounded λ_max would swamp 1e-4 below fp32
             # epsilon and leave the matrix singular again). Matches stack.py.
             sigma_p_h = 0.5 * (sigma_p_h + sigma_p_h.transpose(-1, -2))
-            _evals, _evecs = torch.linalg.eigh(sigma_p_h)
+            # safe_eigh_backward: exact forward, gap-regularized backward
+            # (a per-token prior block A diag(s) Aᵀ near σ²I has clustered
+            # eigenvalues whose native eigh gradient would NaN).
+            _evals, _evecs = safe_eigh_backward(sigma_p_h)
             _evals = _evals.clamp(min=1e-4, max=self.sigma_max)
             sigma_p_h = _evecs @ torch.diag_embed(_evals) @ _evecs.transpose(-1, -2)
 

@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
 
 from transformer.core.types import BeliefState
+from transformer.core.vfe_utils import safe_eigh_backward
 from transformer.vfe.block import VFEBlock
 
 
@@ -149,7 +150,10 @@ class VFEStack(nn.Module):
                     new_prior_sigma = 0.5 * (
                         new_prior_sigma + new_prior_sigma.transpose(-1, -2)
                     )
-                    eigvals, eigvecs = torch.linalg.eigh(new_prior_sigma)
+                    # safe_eigh_backward: exact forward, gap-regularized backward
+                    # (a cross-layer prior Σ ≈ cI has clustered eigenvalues whose
+                    # native eigh eigenvector gradient would NaN).
+                    eigvals, eigvecs = safe_eigh_backward(new_prior_sigma)
                     eigvals = eigvals.clamp(min=1e-4, max=self.sigma_max)
                     new_prior_sigma = (
                         eigvecs @ torch.diag_embed(eigvals) @ eigvecs.transpose(-1, -2)

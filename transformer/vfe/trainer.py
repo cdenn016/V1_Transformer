@@ -386,14 +386,25 @@ class VFETrainer:
         per_block: List[torch.Tensor] = []
         for b in blocks:
             beta = getattr(b.e_step, '_last_attention', None)
-            kl = getattr(b.e_step, '_last_kl_matrix', None)
-            if beta is None or kl is None:
+            if beta is None:
                 continue
+            kl = getattr(b.e_step, '_last_kl_matrix', None)
             # Match e_step.py's _BETA_LOG_FLOOR = 1e-30 — same op (β·log β
             # entropy), same float64-underflow boundary.
             beta_safe = beta.clamp(min=1e-30)
+            # `beta_kl` (mean β·KL) needs the per-pair KL matrix. Some E-step
+            # paths do not surface one — notably the rope_full_gauge per-head
+            # branch (vfe/e_step.py:898-966) returns only β and sets
+            # `_last_kl_matrix=None`. Emit NaN for that single field but still
+            # report the β-only statistics so the summary is non-empty;
+            # otherwise the trainer prints a bare `β: nan` that reads like a
+            # numerical blow-up rather than an unavailable diagnostic.
+            beta_kl = (
+                (beta * kl).mean() if kl is not None
+                else torch.full((), float('nan'), device=beta.device, dtype=beta.dtype)
+            )
             per_block.append(torch.stack([
-                (beta * kl).mean(),
+                beta_kl,
                 beta.mean(),
                 -(beta_safe * beta_safe.log()).sum(-1).mean(),
                 beta.max(dim=-1)[0].mean(),
@@ -1703,11 +1714,19 @@ class VFETrainer:
                     rate = (1.0 / step_time) if step_time > 0 else 0.0
                 attn = self._attention_summary()
                 beta_kl = attn.get('beta_kl', float('nan'))
+                # `beta_kl` (mean β·KL alignment energy) is undefined for E-step
+                # paths that surface no KL matrix (e.g. rope_full_gauge). Fall
+                # back to the always-available attention entropy H(β) so the
+                # line reports a real β diagnostic instead of a bare `nan`.
+                if math.isfinite(beta_kl):
+                    beta_field = f"β·KL: {beta_kl:.4f}"
+                else:
+                    beta_field = f"H(β): {attn.get('attn_entropy', float('nan')):.3f}"
                 msg = (
                     f"Step {step+1}/{num_steps} | "
                     f"Loss: {metrics['loss']:.4f} | "
                     f"CE: {metrics['ce']:.4f} | "
-                    f"β: {beta_kl:.4f} | "
+                    f"{beta_field} | "
                     f"PPL: {metrics['ppl']:.1f} | "
                     f"it/s: {rate:.2f}"
                 )

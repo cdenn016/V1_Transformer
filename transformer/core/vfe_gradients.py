@@ -1877,7 +1877,10 @@ def compute_vfe_gradients_gpu(
                 M = torch.linalg.solve_triangular(
                     L_p, Lp_inv_Sq.transpose(-1, -2), upper=False
                 ).transpose(-1, -2)
-                eigvals, eigvecs = torch.linalg.eigh(M)  # (B,N,K), (B,N,K,K)
+                # safe_eigh_backward: exact forward, gap-regularized backward
+                # (clustered eigenvalues of Σ_p^{-1}Σ_q would NaN the native
+                # eigh eigenvector gradient — see vfe_utils._GapRegularizedEigh).
+                eigvals, eigvecs = _vfe_utils_mod.safe_eigh_backward(M)  # (B,N,K), (B,N,K,K)
                 eigvals = eigvals.clamp(min=eps).to(sigma_q.dtype)
                 eigvecs = eigvecs.to(sigma_q.dtype)
                 # Per-eigenmode KL: kl_mode_k = 0.5(λ_k - 1 - log λ_k) ≥ 0
