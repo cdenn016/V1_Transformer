@@ -65,7 +65,7 @@ import torch
 
 from transformer.core.attention import compute_attention_weights
 from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
-from transformer.core.vfe_utils import _retract_phi, _safe_spd_inv
+from transformer.core.vfe_utils import _retract_phi, _safe_spd_inv, safe_eigh_backward
 
 if TYPE_CHECKING:
     # Forward reference only — avoids a circular import at runtime
@@ -366,8 +366,10 @@ def run_closed_form_e_step(
             # destroy SPD structure (off-diagonal entries clamped to sigma_max
             # can make the matrix singular).  Instead, clamp eigenvalues.
             if Sigma_star_h.dim() == 4 and Sigma_star_h.shape[-1] > 1:
-                # Full covariance: spectral clamp
-                eigvals, eigvecs = torch.linalg.eigh(
+                # Full covariance: spectral clamp. safe_eigh_backward gives the
+                # exact forward with a gap-regularized backward (clustered/
+                # degenerate Σ* eigenvalues would NaN the native eigh gradient).
+                eigvals, eigvecs = safe_eigh_backward(
                     0.5 * (Sigma_star_h + Sigma_star_h.transpose(-1, -2))
                 )
                 eigvals_clamped = eigvals.clamp(min=1e-6, max=ffn.sigma_max ** 2)

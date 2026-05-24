@@ -47,7 +47,7 @@ from transformer.core.kl_computation import (
     _kl_kernel_dense,
     _kl_kernel_diagonal,
 )
-from transformer.core.vfe_utils import _safe_spd_inv
+from transformer.core.vfe_utils import _safe_spd_inv, safe_eigh_backward
 
 # Import transport operators (extracted to transport_ops.py)
 from transformer.core.transport_ops import (
@@ -1168,7 +1168,10 @@ def aggregate_messages(
                         # SPD protection: symmetrize + eigenvalue floor
                         sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
                         try:
-                            eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
+                            # safe_eigh_backward: exact eigh forward, gap-regularized
+                            # backward (degenerate aggregated Σ has clustered eigenvalues
+                            # whose 1/(λ_i−λ_j) eigenvector gradient would otherwise NaN).
+                            eigvals, eigvecs = safe_eigh_backward(sigma_aggregated)
                             eigvals = eigvals.clamp(min=1e-4)
                             sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
                         except (RuntimeError, torch.linalg.LinAlgError):
@@ -1275,7 +1278,8 @@ def aggregate_messages(
                 # SPD protection
                 sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
                 try:
-                    eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
+                    # safe_eigh_backward: exact forward, gap-regularized backward.
+                    eigvals, eigvecs = safe_eigh_backward(sigma_aggregated)
                     eigvals = eigvals.clamp(min=1e-4)
                     sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
                 except (RuntimeError, torch.linalg.LinAlgError):
