@@ -23,9 +23,12 @@ input is clamped to ``>= 0`` defensively before any projector sees it.
 """
 from __future__ import annotations
 
+import logging
 import warnings
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def project(
@@ -62,7 +65,9 @@ def project(
     -----
     For tiny inputs (``n <= n_components + 1``) no projector can produce a
     well-defined embedding, so a zero-padded ``(n, n_components)`` array is
-    returned. A :func:`warnings.warn` names the backend actually used.
+    returned. The selected backend is logged at INFO; degraded fallbacks
+    (umap-unavailable -> t-SNE, t-SNE-failed -> MDS, tiny-n zero-pad)
+    additionally emit a :func:`warnings.warn`.
     """
     X = np.asarray(matrix, dtype=np.float64)
     n = int(X.shape[0])
@@ -84,7 +89,7 @@ def project(
             )
         from sklearn.decomposition import PCA
 
-        warnings.warn("project: using backend=PCA.", stacklevel=2)
+        logger.info("project: using backend=PCA.")
         coords = PCA(
             n_components=n_components, random_state=random_state
         ).fit_transform(X)
@@ -116,13 +121,20 @@ def _project_precomputed(
     except ImportError:
         pass
     else:
-        warnings.warn("project: using backend=UMAP (precomputed).", stacklevel=2)
+        logger.info("project: using backend=UMAP (precomputed).")
         reducer = umap.UMAP(
             metric="precomputed",
             n_components=n_components,
             random_state=random_state,
         )
-        coords = reducer.fit_transform(D)
+        # These two UMAP notices are expected consequences of our deliberate
+        # choices (metric='precomputed' disables inverse_transform; a fixed
+        # random_state forces single-threaded fit). Filter by message so any
+        # other UMAP warning still surfaces.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="using precomputed metric")
+            warnings.filterwarnings("ignore", message="n_jobs value .* overridden")
+            coords = reducer.fit_transform(D)
         return np.asarray(coords, dtype=np.float64)
 
     # 2) t-SNE fallback. Bhattacharyya dissimilarities are non-metric and some

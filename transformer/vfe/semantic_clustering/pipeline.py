@@ -80,6 +80,19 @@ def _subsample(bundle: BeliefBundle, max_points: int, seed: int) -> BeliefBundle
     )
 
 
+# C0 control characters (U+0000–U+001F) and DEL (U+007F). A BPE tokenizer that
+# decodes a single byte-fallback id can return a string containing these (e.g.
+# NUL); matplotlib then maps them to the .notdef glyph and warns
+# "Glyph 0 (\x00) missing from font". Strip them at the source so every
+# downstream scatter annotation is renderable.
+_CTRL_CHARS = {chr(c) for c in range(0x20)} | {chr(0x7F)}
+
+
+def _sanitize_label(s: str) -> str:
+    """Drop unrenderable C0/DEL control characters from a decoded token label."""
+    return "".join(ch for ch in s if ch not in _CTRL_CHARS)
+
+
 def _decode_strings(token_ids: torch.Tensor, dataset: Optional[Any]) -> Optional[list[str]]:
     """Best-effort token-id -> string decode via a dataset/tokenizer, else None."""
     if dataset is None:
@@ -87,9 +100,9 @@ def _decode_strings(token_ids: torch.Tensor, dataset: Optional[Any]) -> Optional
     ids = token_ids.tolist()
     try:
         if hasattr(dataset, "decode"):
-            return [dataset.decode([i]) for i in ids]
+            return [_sanitize_label(dataset.decode([i])) for i in ids]
         if hasattr(dataset, "tokenizer") and hasattr(dataset.tokenizer, "decode"):
-            return [dataset.tokenizer.decode([i]) for i in ids]
+            return [_sanitize_label(dataset.tokenizer.decode([i])) for i in ids]
     except Exception as exc:  # noqa: BLE001 - decoding is best-effort only
         warnings.warn(f"token decode failed ({exc!r}); proceeding without labels.")
     return None
