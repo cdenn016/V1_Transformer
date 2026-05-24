@@ -106,6 +106,19 @@ class TestVFEConfigValidation:
     def test_none_phi_trace_clamp_accepted(self):
         VFEConfig(phi_trace_clamp=None)  # disabling clamp is valid
 
+    def test_autograd_with_full_cov_rejected(self):
+        # use_autograd_mu_sigma=True + diagonal_covariance=False would construct
+        # cleanly then raise NotImplementedError mid-forward (no full-cov autograd
+        # kernel). Reject at config time instead (audit 2026-05-24 full-cov).
+        with pytest.raises(ValueError, match='use_autograd_mu_sigma'):
+            VFEConfig(diagonal_covariance=False, use_rope=False,
+                      use_autograd_mu_sigma=True)
+
+    def test_gauge_covariant_ridge_default_true(self):
+        # The default full-cov SPD floor must be the gauge-covariant congruence
+        # ridge, not the gauge-breaking diagonal clamp (audit 2026-05-24 full-cov).
+        assert VFEConfig().gauge_covariant_ridge is True
+
 
 # ---------------------------------------------------------------------------
 # 2. VFEPriorBank

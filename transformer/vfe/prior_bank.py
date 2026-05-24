@@ -499,9 +499,27 @@ class VFEPriorBank(nn.Module):
             mu_p_h = mu_p[:, block_start:block_end]                            # (V, d_h)
             sigma_p_h = sigma_p[:, block_start:block_end, block_start:block_end]    # (V, d_h, d_h)
 
-            # Cholesky-based inverse and log-det of the per-block prior cov.
-            eye_h = torch.eye(d_h, device=sigma_p_h.device, dtype=sigma_p_h.dtype)
-            L_h = torch.linalg.cholesky(sigma_p_h + self.eps_small * eye_h)    # (V, d_h, d_h)
+            # Project the prior block onto the SPD cone before factoring. At
+            # large ‖φ‖ the fp32 sandwich A diag(s) Aᵀ loses positive-definiteness
+            # to catastrophic cancellation (genuinely indefinite, min eig ≈ −0.1
+            # at φ-scale 40); a single absolute ridge cannot lift a large negative
+            # eigenvalue and torch.linalg.cholesky raises mid-forward. symmetrize
+            # → eigh → clamp eigenvalues → reconstruct is the same SPD projection
+            # stack.py uses for the cross-layer floor (one pass suffices for the
+            # one-shot decode; floor 1e-4 matches stack.py). NOTE: at this scale
+            # the prior is numerically corrupt — this hardens decode against
+            # runaway φ, it is not a substitute for phi_trace_clamp.
+            # Clamp BOTH ends [1e-4, sigma_max]: bounding λ_max keeps the fp32
+            # reconstruction well-conditioned, so the clamped floor survives the
+            # V diag(λ) Vᵀ product (an unbounded λ_max would swamp 1e-4 below fp32
+            # epsilon and leave the matrix singular again). Matches stack.py.
+            sigma_p_h = 0.5 * (sigma_p_h + sigma_p_h.transpose(-1, -2))
+            _evals, _evecs = torch.linalg.eigh(sigma_p_h)
+            _evals = _evals.clamp(min=1e-4, max=self.sigma_max)
+            sigma_p_h = _evecs @ torch.diag_embed(_evals) @ _evecs.transpose(-1, -2)
+
+            # Cholesky-based inverse and log-det of the (now SPD) per-block prior.
+            L_h = torch.linalg.cholesky(sigma_p_h)                             # (V, d_h, d_h)
             log_det_p_h = 2.0 * torch.log(
                 torch.diagonal(L_h, dim1=-2, dim2=-1)
             ).sum(-1)                                                          # (V,)

@@ -152,8 +152,18 @@ def _compute_vfe_gradients_block_diagonal(
         # Product-rule correction for learnable alpha (full covariance):
         # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
         # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+        #
+        # HEURISTIC (not a canonical per-dimension KL): the full-covariance KL
+        # does not decompose per coordinate — log|Σ| is not a sum of per-dim
+        # terms unless Σ is diagonal. The trace/Mahalanobis parts below take
+        # diagonal elements and logdet is split uniformly across K (logdet/K).
+        # This per-dim kl_k is only the weight inside the Bayesian-α product-rule
+        # correction; it is reachable solely under E_learnable_alpha=True AND
+        # diagonal_covariance=False (a research combination). The driving belief
+        # KL is exact (full sandwich + Cholesky) elsewhere; this proxy does not
+        # affect it.
         if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-            # Per-dimension KL proxy from diagonal elements
+            # Per-dimension KL proxy from diagonal elements (see HEURISTIC note).
             prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
             trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
             sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
@@ -1683,8 +1693,12 @@ def compute_vfe_gradients_gpu(
             the diagonal from the result. Disables fused diagonal paths.
         alpha_div: Rényi divergence order α_d (default 1.0 = KL divergence).
             When != 1.0, both the self-coupling and belief-alignment terms use
-            D_{α_d} instead of KL. Only the diagonal and block-diagonal diagonal
-            paths implement this; the inline full-covariance path ignores it.
+            D_{α_d} instead of KL. Implemented by the analytic block-diagonal
+            path (`_compute_vfe_gradients_block_diagonal`, both its diagonal and
+            full-covariance branches) — the path actually reached whenever
+            irrep_dims is set, which is always the case in /vfe. The autograd,
+            non-flat, and omega_direct paths reconstruct standard KL and ignore
+            α_d (VFEConfig.__post_init__ warns on that combination).
 
     Returns:
         grad_mu: Gradient w.r.t. mu_q, shape (B, N, K).
