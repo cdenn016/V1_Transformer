@@ -1,0 +1,139 @@
+% =====================================================================
+% DRAFT replacement / augmentation prose for PIFB section
+%   \subsection{Time as Information Flow}   (Participatory_it_from_bit.tex:2584)
+%
+% Status: proposal for review, not yet merged into the manuscript.
+% Author decides placement and the manuscript-wide notation rename.
+%
+% TWO PIECES:
+%   (1) A small surgical revision to \subsubsection{Bit-Counting Time}
+%       and one added sentence in \subsubsection{Fisher Arc Length ...}
+%       fixing the KL = (1/2) ds^2 relation and the Fisher-ball reading.
+%   (2) A NEW \subsubsection introducing the scale-dependent clock,
+%       the coherence-filter result, the Laplacian derivation, and the
+%       renormalization discussion.
+%
+% NOTATION: this draft writes the information clock as \mathcal{T} to break
+% the collision with the softmax temperature tau = kappa sqrt(K) and the
+% dispersion temperatures tau_q, tau_s. If the manuscript keeps tau_i for
+% the clock, replace \mathcal{T} by tau throughout and add the footnote below.
+%
+% NEW BIB KEYS REQUIRED (entries supplied at the bottom of this file):
+%   Bateson1972, Fechner1860, Fiedler1973
+% Existing keys reused: CoverThomas2006, AmariNagaoka2000, Beal2003,
+%   Wilson1971, Cardy1996, Wilson1974.
+% =====================================================================
+
+
+% ---------------------------------------------------------------------
+% PIECE 1a. Revised opening of \subsubsection{Bit-Counting Time}
+% (keeps the existing dimensional disclaimer verbatim; appends the
+%  Fisher-ball reading and the exact KL = 1/2 ds^2 relation. Insert the
+%  following paragraph immediately after the bit-counting definition
+%  sentence "...$\tau_i$ is the counting parameter for information updates.")
+% ---------------------------------------------------------------------
+
+The unit "1 bit" in this definition is the coarse name for one unit of statistical distinguishability, and the precise content is set by the Fisher information. Two beliefs $q(\theta)$ and $q(\theta + \delta\theta)$ are distinguishable from a single observation when $\delta\theta^\top \mathcal{I}(\theta)\delta\theta \gtrsim 1$, where $\mathcal{I}$ is the Fisher information matrix~\cite{CoverThomas2006, AmariNagaoka2000}; the locus $\delta\theta^\top \mathcal{I}(\theta)\delta\theta = 1$ is the just-noticeable-difference ellipsoid, inside which belief changes are below resolution and across which they become noticeable. This is the information-geometric reading of Bateson's characterization of information as "a difference which makes a difference"~\cite{Bateson1972}: a belief update registers on the clock only insofar as it crosses the agent's distinguishability threshold. The clock of the preceding paragraph and the Fisher-Rao arc length of Section~\ref{sec:fisher_arc_length} are related by a square rather than an identity. For a Gaussian belief the Fisher metric on the mean sector is the precision $\Lambda = \Sigma^{-1}$, so for a pure mean step at fixed covariance,
+\begin{equation}
+\mathrm{KL}(q^{\text{new}} \| q^{\text{old}}) = \tfrac{1}{2}\delta\mu^\top \Lambda \delta\mu = \tfrac{1}{2}ds^2,
+\label{eq:kl_arclength}
+\end{equation}
+where $ds$ is the Fisher-Rao line element. The bit-counting clock accumulates squared Fisher length and the arc-length clock of Section~\ref{sec:fisher_arc_length} accumulates Fisher length; one just-noticeable-difference unit $ds = 1$ is therefore $\tfrac{1}{2}$ bit of belief update, not one bit. We keep the bit-counting definition as the primary clock because the Kullback-Leibler divergence is dimensionless and invariant under reparametrization of the belief coordinates, which makes the bit a scale-invariant unit, a property used in the renormalization discussion below.
+
+% Optional footnote if the manuscript retains tau_i for the clock symbol:
+% \footnote{We write the information clock as $\mathcal{T}$ to avoid
+% collision with the softmax temperature $\tau = \kappa\sqrt{K}$ and the
+% dispersion temperatures $\tau_q, \tau_s$ of Section~\ref{sec:meta_agent_threshold};
+% earlier occurrences of $\tau_i$ for this clock should be read as $\mathcal{T}_i$.}
+
+
+% ---------------------------------------------------------------------
+% PIECE 1b. One sentence to append at the end of
+% \subsubsection{Fisher Arc Length Along Belief Trajectories}
+% (after the existing closing paragraph). Ties the arc length to the JND.
+% ---------------------------------------------------------------------
+
+Through the relation~\eqref{eq:kl_arclength} this arc length is the same object the bit-counting clock measures, up to the square: one unit of accumulated arc length is one just-noticeable difference, and the choice between counting arc length and counting its square is the choice between two clocks that run at rates differing by a Jacobian factor, with consequences for the cross-scale slowdown derived next.
+
+
+% ---------------------------------------------------------------------
+% PIECE 2. NEW \subsubsection inserted after the Fisher arc length one.
+% This is the main new content answering the scale-dependence question.
+% ---------------------------------------------------------------------
+
+\subsubsection{Scale-Dependent Resolution and the Meta-Agent Clock}
+\label{sec:scale_dependent_time}
+
+A clock with a single universal quantum treats every bit of belief update as equally noticeable regardless of the agent that performs it. The hierarchical construction of Section~\ref{sec:meta_agent_rg} forces a refinement, because a meta-agent that aggregates many constituents does not move through its belief manifold at the same rate its constituents do. Bateson's criterion supplies the principle: a difference makes a difference to a meta-agent only to the extent that it is shared across the constituents, since the meta-agent belief is their gauge-covariant barycenter and idiosyncratic constituent fluctuations cancel in the average.
+
+We make this quantitative in the Gaussian mean sector. Let the constituent beliefs be $q_i = \mathcal{N}(\mu_i, \Sigma)$ with common precision $\Lambda = \Sigma^{-1}$, undergoing per-step information injections that move their means by $\Delta\mu_i$. The meta-agent mean is the barycenter $\mu_I = |I|^{-1}\sum_{i\in I}\mu_i$ of Eq.~\eqref{eq:meta_agent_mu_impl}, so $\Delta\mu_I = |I|^{-1}\sum_i \Delta\mu_i$. Writing $N = |I|$ and using Eq.~\eqref{eq:kl_arclength}, the expected belief update per step at the meta level is $\tfrac{1}{2}\mathrm{tr}(\Lambda\mathrm{Cov}(\Delta\mu_I))$, against $\tfrac{1}{2}\mathrm{tr}(\Lambda\mathrm{Cov}(\Delta\mu_i))$ per constituent. The dimensionless carrier of the scale dependence is their ratio,
+\begin{equation}
+Z_I := \frac{\mathbb{E}[\Delta\mathcal{T}_I]}{\mathbb{E}[\Delta\mathcal{T}_i]} = \frac{\mathrm{tr}\big(\Lambda\mathrm{Cov}(\Delta\mu_I)\big)}{\mathrm{tr}\big(\Lambda\mathrm{Cov}(\Delta\mu_i)\big)},
+\label{eq:bit_production_ratio}
+\end{equation}
+the number of meta-agent ticks produced per constituent tick. Decomposing each injection into a coherent common mode and an idiosyncratic part, $\Delta\mu_i = c + \xi_i$ with $\xi_i$ independent across constituents of covariance $v_\xi$, gives $\mathrm{Cov}(\Delta\mu_I) = \mathrm{Cov}(c) + v_\xi/N$, so that
+\begin{equation}
+Z_I = (\text{coherent fraction}) + O(1/N),
+\label{eq:Z_decomposition}
+\end{equation}
+with the two limits $Z_I \to 1$ for fully coherent activity and $Z_I \to 1/N$ for fully incoherent activity. A meta-agent therefore does not carry a larger quantum; it counts only the coherent share of belief updates, and because incoherent activity is suppressed as $1/N$, registering one meta-agent tick requires of order $N$ bits of constituent activity. This is the operational content of the original intuition that a large meta-agent requires a large informational change before it registers a change of state, with the operative quantity being the constituent information needed per meta-tick rather than a redefined unit.
+
+The direction of this effect is tied to the covariance-aggregation convention. The averaging form of Eq.~\eqref{eq:meta_agent_sigma_impl}, under which $\Lambda_I \approx \Lambda$, produces the slowdown $Z_I \in [1/N, 1]$ that the timescale hierarchy of Eq.~\eqref{eq:gauge_natural_gradient} and Section~\ref{sec:emergent_timescale} requires. A precision-pooling product-of-experts aggregation, $\Lambda_I = N\Lambda$, which Section~\ref{sec:meta_agent_state_construction} explicitly declines to adopt, would instead sharpen the meta-agent and shrink its just-noticeable difference, erasing the slowdown. The covariance-aggregation choice and the timescale-hierarchy prediction are thus a single modeling decision viewed from two sides.
+
+The bit-production ratio is fixed by the consensus coupling already present in the free energy. To leading order in the post-transport mean difference, with the symmetrized weights $(\beta_{ij}+\beta_{ji})/2$ and the common-precision regime that both hold to the order at which Eq.~\eqref{eq:meta_agent_sigma_barycenter} drops the dispersion term, the belief-coupling term reduces to a graph-Laplacian quadratic form,
+\begin{equation}
+\sum_{ij}\beta_{ij}\mathrm{KL}\big(q_i \| \Omega_{ij}[q_j]\big) \approx \mu^\top (L \otimes \Lambda)\mu,
+\qquad
+L_{ij} = -\beta_{ij}\ (i\neq j),\quad L_{ii} = \sum_{j}\beta_{ij},
+\label{eq:coupling_laplacian}
+\end{equation}
+where $\mu$ stacks the constituent means and $L$ is the weighted Laplacian of the belief-coupling graph. The natural-gradient belief flow of Eq.~\eqref{eq:gauge_natural_gradient}, preconditioned by the Fisher metric $\Sigma = \Lambda^{-1}$, is then the linear consensus dynamics $\dot\mu = -2\eta_\mu (L\otimes I)\mu$ driven by the injected information, and the spectrum of $L$ assigns three roles. The barycenter is the zero mode: since $L\mathbf{1} = 0$, the eigenvector of eigenvalue zero is the constant direction $\mathbf{1}/\sqrt{N}$ that the meta-agent reads off, and incoherent injection, with power spread uniformly over all $N$ eigenmodes, projects onto this single mode with weight $1/N$, which is the spectral origin of $Z_I = 1/N$ in Eq.~\eqref{eq:Z_decomposition}. This mode is undamped by the consensus coupling alone; the parent-shadow term $\mathrm{KL}(q_I \| p_I)$ with $p_I$ the cross-scale shadow of Eq.~\eqref{eq:cross_scale_shadow} supplies a separate restoring force on $\mu_I$ that bounds the meta-belief over long times without changing the per-step ratio $Z_I$, which is read off from the projection geometry alone. The nonzero modes carry the cross-scale information flow of Eq.~\eqref{eq:cross_scale_information_flow}, since the constituent dispersion about the barycenter is exactly the energy these modes hold,
+\begin{equation}
+\mathcal{I}_{s\to s+1} = \sum_{i} \tfrac{1}{2}(\mu_i - \mu_I)^\top \Lambda (\mu_i - \mu_I) = \tfrac{1}{2}\sum_{a\ge 2}\|\hat\mu_a\|_\Lambda^2,
+\label{eq:Ilow_eq_dispersion}
+\end{equation}
+so the injected information partitions cleanly: the zero-mode share advances the meta-clock and the nonzero-mode share is the standing disagreement that Eq.~\eqref{eq:cross_scale_information_flow} already names. The spectral gap $\lambda_2$, the algebraic connectivity of the coupling graph~\cite{Fiedler1973}, sets the rate $2\eta_\mu\lambda_2$ at which disagreement relaxes, so a cluster reaches consensus and the detector of Section~\ref{sec:meta_agent_threshold} triggers on the timescale $1/(2\eta_\mu\lambda_2)$; this is the dynamical content of the closure condition of Eq.~\eqref{eq:culture_closure}, which holds when the internal gap dominates the external coupling, the same regime in which dropping the dispersion term of Eq.~\eqref{eq:meta_agent_sigma_barycenter} is justified.
+
+Whether the clock itself renormalizes across scales is then a precise question with a clean answer. Because the bit is reparametrization-invariant, it is a scale-invariant unit, and the slowdown cannot reside in a rescaling of the unit; it resides in the rate at which bits are produced, through $Z_I$. One may adopt a scale-adapted clock $\hat{\mathcal{T}}^{(s+1)} = \hat{\mathcal{T}}^{(s)}/Z^{(s)}$ in which each scale's natural clock runs at order one, the information-theoretic analogue of choosing comoving rather than physical time, but this is a choice of units and not a renormalization of the dimensionless bit. The unit-independent content is the ratio $Z^{(s)}$. We resist calling $Z^{(s)}$ a dynamical critical exponent: the $1/N$ suppression is the law of large numbers acting on the barycenter, whereas a dynamical exponent is defined at a critical point through $\tau \sim \xi^z$, and its identification would require the analytic renormalization-group fixed point, the closed-form pushforward of the Gibbs measure, and the relevant-operator analysis that Section~\ref{sec:meta_agent_rg} flags as open. The slowdown is also the kinematic face of the dynamical stiffness of Section~\ref{sec:emergent_timescale}: in the Laplace approximation of $\mathcal{F}$ at the consensus point~\cite[\S2.2.2]{Beal2003} the parent stiffness $[M_{\mu\mu}]_{II}$ is the Hessian on the mean sector, which coincides with the precision that enters the Fisher metric, so the consensus-averaging account and the stiffness-barrier account are one phenomenon read through covariance and through Hessian.
+
+
+% =====================================================================
+% NEW BIB ENTRIES TO ADD TO references.bib
+% =====================================================================
+%
+% @book{Bateson1972,
+%   author    = {Bateson, Gregory},
+%   title     = {Steps to an Ecology of Mind},
+%   publisher = {Ballantine Books},
+%   address   = {New York},
+%   year      = {1972}
+% }
+%
+% @article{Fiedler1973,
+%   author  = {Fiedler, Miroslav},
+%   title   = {Algebraic Connectivity of Graphs},
+%   journal = {Czechoslovak Mathematical Journal},
+%   volume  = {23},
+%   number  = {2},
+%   pages   = {298--305},
+%   year    = {1973}
+% }
+%
+% (Fechner1860 only needed if a primary Weber-Fechner citation is wanted;
+%  the JND content above is carried by the Cramer-Rao / Fisher citations
+%  CoverThomas2006 and AmariNagaoka2000, which already exist in the bib.)
+%
+% LABEL CHECK before merging: confirm these \ref targets exist with these
+% names, or adjust to the manuscript's actual labels --
+%   sec:fisher_arc_length        (exists, PIFB:2601)
+%   sec:meta_agent_rg            (exists, PIFB:4600)
+%   sec:meta_agent_threshold     (exists, PIFB:2171)
+%   sec:meta_agent_state_construction (exists, PIFB:2188)
+%   eq:meta_agent_mu_impl, eq:meta_agent_sigma_impl,
+%   eq:meta_agent_sigma_barycenter, eq:cross_scale_information_flow,
+%   eq:gauge_natural_gradient    (all exist)
+%   eq:culture_closure           (referenced at PIFB; confirm label string)
+%   sec:emergent_timescale       (the "Emergent Timescale Hierarchy" subsection
+%                                  at PIFB:2244 -- ADD this \label, it is
+%                                  currently unlabeled)
+% =====================================================================
