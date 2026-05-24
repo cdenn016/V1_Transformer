@@ -64,6 +64,13 @@ CONFIG = {
 
     # Vocab view inputs.
     "vocab_sample": 256,                    # number of token types to cluster
+    "vocab_id_start": 256,                  # first token id to sample. Byte-level
+                                            # BPE tokenizers (e.g. cl100k_base) put
+                                            # 256 single-byte fallback ids at the
+                                            # front; those decode to U+FFFD/empty
+                                            # and make a near-meaningless figure, so
+                                            # start at the first real merges. Set 0
+                                            # to include the byte band.
 }
 
 
@@ -149,8 +156,10 @@ def main() -> None:
     root = _resolve_output_root(config)
 
     if config["do_vocab"]:
-        n = min(config["vocab_sample"], cfg.vocab_size)
-        vocab_ids = torch.arange(n, dtype=torch.long)
+        start = max(0, int(config.get("vocab_id_start", 0)))
+        start = min(start, max(0, cfg.vocab_size - 1))
+        n = min(config["vocab_sample"], cfg.vocab_size - start)
+        vocab_ids = torch.arange(start, start + n, dtype=torch.long)
         out = run_clustering(
             model,
             source="vocab",
