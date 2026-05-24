@@ -25,13 +25,13 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 config = {
     # === Structure ===
     'vocab_size':               None,      # populated after dataloader build
-    'embed_dim':                200,
-    'irrep_spec':               [('fund', 20, 10)],
+    'embed_dim':                20,
+    'irrep_spec':               [('fund', 2, 10)],
     
     'batch_size':               16,
     
     'max_seq_len':              128,
-    'max_steps':                120000,
+    'max_steps':                60000,
 
     'use_prior_bank':           False,
     'mask_self_attention':      False,
@@ -339,6 +339,14 @@ if __name__ == '__main__':
         output_dir=output_dir,
     )
     trainer.train(num_steps=cfg.max_steps)
+
+    # trainer.train() may rename the run directory to the measured
+    # <test_ppl>=test-PPL_K=<K>_<gauge_label> form (trainer.py:1816-1831),
+    # updating trainer.output_dir but NOT this local variable. Refresh it so
+    # post-training artifacts (semantic-clustering figures) land in the renamed
+    # directory instead of recreating the stale timestamped one. Safe in every
+    # branch: when the rename is skipped, trainer.output_dir is the original Path.
+    output_dir = trainer.output_dir
 
     # Unconditional final validation pass. The trainer's periodic eval is
     # gated on (step+1) % eval_interval == 0 (trainer.py:1695); under defaults
