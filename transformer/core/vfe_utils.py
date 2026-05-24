@@ -333,6 +333,14 @@ class _GapRegularizedEigh(torch.autograd.Function):
         return grad_M, None
 
 
+# cusolverDnXsyevBatched rejects batchSize >= 32767 (signed-int16 batch limit;
+# empirically V=32767 raises CUSOLVER_STATUS_INVALID_VALUE while V=16384 works,
+# on CUDA 12.8 / RTX 5090). Chunk large CUDA batches to half that ceiling for
+# margin. CPU and small-batch CUDA take the single-call fast path below, so
+# existing callers (attention, small-batch retractions) are unaffected.
+_EIGH_BATCH_CHUNK = 16384
+
+
 def safe_eigh_backward(
     M: torch.Tensor,
     rel_gap_eps: float = 1e-5,
@@ -352,7 +360,34 @@ def safe_eigh_backward(
     """
     mag = M.detach().abs().amax(dim=(-2, -1), keepdim=True).clamp(min=1.0)
     gap_eps = rel_gap_eps * mag
-    return _GapRegularizedEigh.apply(M, gap_eps)
+
+    batch_shape = M.shape[:-2]
+    n_batch = 1
+    for s in batch_shape:
+        n_batch *= s
+    if not (M.is_cuda and n_batch > _EIGH_BATCH_CHUNK):
+        return _GapRegularizedEigh.apply(M, gap_eps)
+
+    # Large CUDA batch (e.g. a per-vocabulary prior Σ in the exact full-cov
+    # decode, where the leading dim is V ≈ 50k): cusolver's batched eigh caps
+    # at batchSize < 32767, so split the flattened batch into chunks. Each
+    # chunk is an independent autograd node; torch.cat over the outputs
+    # backprops to each chunk and the reshape carries gradients back to M, so
+    # the result is mathematically identical to a single eigh call.
+    K = M.shape[-1]
+    M_flat = M.reshape(n_batch, K, K)
+    eps_flat = gap_eps.reshape(n_batch, 1, 1)
+    L_parts = []
+    V_parts = []
+    for i in range(0, n_batch, _EIGH_BATCH_CHUNK):
+        L_c, V_c = _GapRegularizedEigh.apply(
+            M_flat[i:i + _EIGH_BATCH_CHUNK], eps_flat[i:i + _EIGH_BATCH_CHUNK]
+        )
+        L_parts.append(L_c)
+        V_parts.append(V_c)
+    L = torch.cat(L_parts, dim=0).reshape(*batch_shape, K)
+    V = torch.cat(V_parts, dim=0).reshape(*batch_shape, K, K)
+    return L, V
 
 
 def _safe_eigh(
