@@ -82,7 +82,7 @@ class PublicationMetricsTracker:
             'attention_entropy', 'attention_concentration',
 
             # Learning rates
-            'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
+            'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr', 'other_lr',
 
             # Gradient norms
             'grad_norm_total', 'grad_norm_mu', 'grad_norm_ffn',
@@ -189,6 +189,7 @@ class PublicationMetricsTracker:
             'sigma_lr': lrs.get('sigma_embed', 0),
             'phi_lr': lrs.get('phi_embed', 0),
             'ffn_lr': lrs.get('ffn', 0),
+            'other_lr': lrs.get('other', 0),
 
             # Gradients
             'grad_norm_total': grad_norms.get('total', 0) if grad_norms else 0,
