@@ -66,6 +66,29 @@ def _format_duration(secs: float) -> str:
     return f"{d}d{h:02d}h"
 
 
+def _gauge_group_label(cfg: VFEConfig) -> str:
+    r"""Folder/log tag for the gauge group.
+
+    For ``gauge_group='GLK'`` the reduced gauge group is the block-diagonal
+    product :math:`GL(d_1) \oplus \cdots \oplus GL(d_B)` over the effective
+    block partition, so the tag is ``GL(d_h)`` — the per-head block dimension —
+    NOT ``GL(embed_dim)``. Example: 2 heads of dimension 10 (``embed_dim=20``)
+    is ``GL(10)``, not ``GL(20)``. Mixed block dimensions are joined, e.g.
+    ``GL(1,3)``. ``effective_block_dims`` is used so cross-coupled super-blocks
+    report their merged ``GL(d_super)`` dimension.
+    """
+    gg = cfg.gauge_group
+    if gg == 'GLK':
+        dims = sorted(set(cfg.effective_block_dims))
+        inner = ",".join(str(d) for d in dims)
+        return f"GL({inner})"
+    if gg == 'SO3':
+        return "SO(3)"
+    if gg == 'SON':
+        return f"SO({cfg.embed_dim})"
+    return str(gg)
+
+
 class VFETrainer:
     # Class-level annotations for attributes set in __init__ to None
     # (Optional types so downstream methods type-check with mypy).
@@ -1794,15 +1817,7 @@ class VFETrainer:
             try:
                 test_ppl = float(test_results['test_ppl'])
                 K = int(self.cfg.embed_dim)
-                gg = self.cfg.gauge_group
-                if gg == 'GLK':
-                    group_label = f"GL({K})"
-                elif gg == 'SO3':
-                    group_label = "SO(3)"
-                elif gg == 'SON':
-                    group_label = f"SO({K})"
-                else:
-                    group_label = str(gg)
+                group_label = _gauge_group_label(self.cfg)
                 new_name = f"{test_ppl:.2f}=test-PPL_K={K}_{group_label}"
                 new_path = self.output_dir.parent / new_name
                 if new_path.exists() and new_path.resolve() != self.output_dir.resolve():
