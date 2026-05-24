@@ -3734,7 +3734,7 @@ Attention weights are defined by:
 
 The gradients below are $\nabla_x S$ for $x \in \{\mu_i, \Sigma_i, \phi_i\}$, taken with the softmax-defined $\beta_{ij}(x), \gamma_{ij}(x)$ attached. They are not equal to $\nabla_x \mathcal{F}_{\mathrm{red}}$ from~\eqref{eq:envelope_gradient}; the difference is the entropy-correction covariance $-\kappa_\beta^{-1}\mathrm{Cov}_{\beta^*}(\mathrm{KL}, \nabla_x \mathrm{KL})$ derived in Section~\ref{sec:envelope_theorem}. We give $\nabla_x S$ here because the implementation differentiates through the softmax; the envelope-theorem expression~\eqref{eq:envelope_gradient} is obtained by dropping every $\partial \beta_{ij}/\partial x$ and $\partial \gamma_{ij}/\partial x$ contribution below.
 
-\subsection*{Free Energy Gradient: Belief Means (Complete)}
+\subsection*{Free Energy Gradient: Belief Means (Receiver Contribution)}
 
 The belief alignment term is:
 \begin{equation}
@@ -3785,7 +3785,7 @@ The natural gradient is:
 \tilde{\nabla}_{\mu_i} S = \Sigma_i \nabla_{\mu_i} S.
 \end{equation}
 
-\subsection*{Free Energy Gradient: Belief Covariances (Complete)}
+\subsection*{Free Energy Gradient: Belief Covariances (Receiver Contribution)}
 
 Similarly for covariances, the product rule gives:
 \begin{equation}
@@ -3848,7 +3848,7 @@ where $\exp(\cdot)$ is the matrix exponential. This retraction:
 
 This is the Riemannian exponential map: the geodesic retraction following the unique geodesic from $\Sigma$ in direction $\Delta$ for unit parameter.
 
-\subsection*{Complete Gauge Frame Gradients (Product Rule)}
+\subsection*{Gauge Frame Gradients (Receiver Contribution)}
 
 The free energy contains gauge frames $\phi_i$ through both transport operators and attention weights. The precision-weighted self term $\alpha_i \mathrm{KL}(q_i \| p_i)$ carries no $\phi_i$ dependence, since the self prior $p_i$ is not transported by $\phi_i$, so the precision weight $\alpha_i$ does not enter $\nabla_{\phi_i} S$ and the $\alpha_i$ product rule of Eq.~\eqref{eq:alpha_product_rule_itfb} applies only to the $\mu_i$ and $\Sigma_i$ gradients. For the belief alignment term:
 \begin{equation}
@@ -3930,9 +3930,62 @@ The model-channel gauge-frame gradient has identical form on the model fiber, wi
 \end{equation}
 where $\mathrm{KL}^s_{ij} := \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])$. The $(1 - \mathrm{KL}^s_{ij}/\kappa_\gamma)$ reweighting on the direct-alignment term is required by the product rule through $\gamma_{ij}$; omitting it would compute the envelope-theorem gradient on the model fiber while retaining the autograd-surrogate gradient on the belief fiber, which is structurally inconsistent. (We assume tied gauge frames so that the same $\phi_i$ generates both $\Omega_{ij}$ on the state fiber and $\tilde\Omega_{ij}$ on the model fiber via the appropriate representation; under independent model-fiber gauge frames, the gradient is taken with respect to $\tilde\phi_i$ instead.)
 
+\subsection*{Sender Contributions and the Total Gradient}
+
+The belief-mean and belief-covariance gradients of the preceding subsections collect only the pairs $(i,j)$ over which agent~$i$ attends to its neighbors~$j$; they are the receiver contribution. The envelope expression~\eqref{eq:envelope_gradient} carries a second sum over the pairs $(\ell, i)$ in which other agents~$\ell$ attend to agent~$i$, because agent~$i$ enters those alignment energies $E_{\ell i} = \mathrm{KL}(q_\ell \| \Omega_{\ell i}[q_i])$ as the sender. Both sums are required for any gradient step on the beliefs of agent~$i$.
+
+\paragraph{Sender direct-KL gradients.}
+Differentiating $E_{\ell i} = \mathrm{KL}(q_\ell \| \Omega_{\ell i}[q_i])$ with respect to the sender's mean and covariance, using the GL-correct precision transport of Eq.~\eqref{eq:precision_transport}, gives
+\begin{align}
+\frac{\partial E_{\ell i}}{\partial \mu_i} &= \Lambda_{q_i}\Omega_{\ell i}^{-1}\left(\Omega_{\ell i}\mu_i - \mu_\ell\right), \\
+\frac{\partial E_{\ell i}}{\partial \Sigma_i} &= \frac{1}{2}\Omega_{\ell i}^{\top}\left[\tilde{\Lambda}_{q_i}^{(\ell)} - \tilde{\Lambda}_{q_i}^{(\ell)}\left(\Sigma_\ell + d_{\ell i}d_{\ell i}^{\top}\right)\tilde{\Lambda}_{q_i}^{(\ell)}\right]\Omega_{\ell i},
+\end{align}
+where $\Lambda_{q_i} = \Sigma_i^{-1}$, $\tilde{\Lambda}_{q_i}^{(\ell)} := (\Omega_{\ell i}\Sigma_i\Omega_{\ell i}^{\top})^{-1} = \Omega_{\ell i}^{-\top}\Lambda_{q_i}\Omega_{\ell i}^{-1}$ is agent $i$'s precision transported into agent $\ell$'s frame, and $d_{\ell i} := \Omega_{\ell i}\mu_i - \mu_\ell$ is the mean residual in agent $\ell$'s frame. These are the sender-side gradients of the consensus term of Section~\ref{sec:mass} under the relabeling $(i,k) \to (\ell, i)$; the rank-one piece $-\tilde{\Lambda}_{q_i}^{(\ell)}d_{\ell i}d_{\ell i}^{\top}\tilde{\Lambda}_{q_i}^{(\ell)}$ vanishes at consensus and contributes a stiffness aligned with $d_{\ell i}$ away from it. The inverse-transpose form of Eq.~\eqref{eq:precision_transport} is what makes these expressions valid for general $\Omega_{\ell i} \in \mathrm{GL}^{+}(K)$, where $\Omega_{\ell i}^{-1}$ does not collapse to $\Omega_{\ell i}^{\top}$.
+
+For the gauge frame, $\phi_i$ enters $\Omega_{\ell i} = \exp(\phi_\ell)\exp(-\phi_i)$ through the right factor $\exp(-\phi_i)$, so its directional derivative differs in sign and placement from the receiver case of Eq.~\eqref{eq:frechet_dexp}:
+\begin{equation}
+\frac{\partial \Omega_{\ell i}}{\partial \phi_i^a} = -\exp(\phi_\ell)\left(\int_0^1 e^{-(1-s)\phi_i} G_a e^{-s\phi_i} \mathrm{d}s\right),
+\label{eq:frechet_dexp_sender}
+\end{equation}
+with abelian approximation $\partial \Omega_{\ell i}/\partial \phi_i^a \approx -\Omega_{\ell i} G_a$, the right-action counterpart of the receiver's left-action $G_a\Omega_{ij}$. Writing $A := \Omega_{\ell i}\Sigma_i\Omega_{\ell i}^\top$, $r := \mu_\ell - \Omega_{\ell i}\mu_i$, $\Lambda := A^{-1}$, and $N_{\ell i} := I - \Lambda\Sigma_\ell - \Lambda r(\Omega_{\ell i}\mu_i)^\top - \Lambda r r^\top$ as in Eq.~\eqref{eq:kl_omega_directional} for the pair $(\ell, i)$, the chain rule contracts this right tangent against the same $\mathfrak{gl}(K)$ gradient $\partial_{\Omega_{\ell i}}\mathrm{KL} = N_{\ell i}\Omega_{\ell i}^{-\top}$, giving
+\begin{equation}
+\frac{\partial E_{\ell i}}{\partial \phi_i^a} = -\mathrm{tr}\left[G_a^\top\left(\Omega_{\ell i}^\top N_{\ell i} \Omega_{\ell i}^{-\top}\right)\right].
+\label{eq:sender_phi_gradient}
+\end{equation}
+The sender contracts $G_a$ against the conjugated bracket $\Omega_{\ell i}^\top N_{\ell i}\Omega_{\ell i}^{-\top}$, where the receiver of Eq.~\eqref{eq:kl_omega_directional} contracts against $N_{ij}$ directly; the conjugation is the matrix signature of $\phi_i$ acting through the right factor. At consensus $N_{\ell i} = 0$ and the contribution vanishes, consistent with the sender mean and covariance gradients above.
+
+\paragraph{Sender softmax cross-term.}
+The weight $\beta_{\ell i}$ sits in agent $\ell$'s attention row, so its derivative with respect to a parameter of agent~$i$ uses the row-$\ell$ softmax Jacobian. Because only $E_{\ell i}$ among the row-$\ell$ energies depends on $x_i$,
+\begin{equation}
+\frac{\partial \beta_{\ell m}}{\partial x_i} = -\frac{1}{\kappa_\beta}\beta_{\ell m}\left(\delta_{mi} - \beta_{\ell i}\right)\frac{\partial E_{\ell i}}{\partial x_i}, \qquad x_i \in \{\mu_i, \Sigma_i, \phi_i\}.
+\label{eq:sender_softmax_entry}
+\end{equation}
+Carrying this through the full row-$\ell$ energy $\sum_m \beta_{\ell m}E_{\ell m}$ and summing over senders~$\ell$, the complete autograd sender contribution to $\nabla_{x_i}S$ is
+\begin{equation}
+\sum_\ell \beta_{\ell i}\left[1 - \frac{\mathrm{KL}_{\ell i}}{\kappa_\beta}\right]\frac{\partial E_{\ell i}}{\partial x_i} + \frac{1}{\kappa_\beta}\sum_\ell \left(\sum_m \beta_{\ell m}\mathrm{KL}_{\ell m}\right)\beta_{\ell i}\frac{\partial E_{\ell i}}{\partial x_i},
+\label{eq:sender_autograd}
+\end{equation}
+with $\mathrm{KL}_{\ell i} \equiv \mathrm{KL}(q_\ell \| \Omega_{\ell i}[q_i])$. The sender contribution has the same row-centered structure as the receiver contribution, a direct piece reweighted by $[1 - \mathrm{KL}_{\ell i}/\kappa_\beta]$ and a piece carrying the row-mean divergence, and the difference is which softmax row supplies the reweighting. The receiver pieces are centered over agent $i$'s own row, the mean $\sum_k \beta_{ik}\mathrm{KL}_{ik}$ and the spread over the targets $k$ that $i$ attends to, whereas each sender piece is centered over agent $\ell$'s row, with agent~$i$ entering only through the single weight $\beta_{\ell i}$ and the single energy $E_{\ell i}$. The two reweightings are generated by distinct softmax normalizations and are independent.
+
+\paragraph{Total mean gradient.}
+Collecting the prior self term, the receiver sum, and the sender direct piece of Eq.~\eqref{eq:sender_autograd}, the complete belief-mean gradient is
+\begin{equation}
+\boxed{
+\begin{aligned}
+\nabla_{\mu_i} S &= \alpha_i^{\mathrm{eff}}\Sigma_{p,i}^{-1}(\mu_i - \mu_{p,i}) + \sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^{\top})^{-1}(\mu_i - \Omega_{ij}\mu_j)\left[1 - \frac{\mathrm{KL}_{ij}}{\kappa_\beta}\right] + R_\mu \\
+&\quad + \sum_\ell \beta_{\ell i}\Lambda_{q_i}\Omega_{\ell i}^{-1}\left(\Omega_{\ell i}\mu_i - \mu_\ell\right)\left[1 - \frac{\mathrm{KL}_{\ell i}}{\kappa_\beta}\right] + R_\mu^{(s)},
+\end{aligned}}
+\label{eq:total_gradient_mu_complete}
+\end{equation}
+where $R_\mu$ is the receiver reweighting defined above and the sender reweighting is
+\begin{equation}
+R_\mu^{(s)} = \frac{1}{\kappa_\beta}\sum_\ell \left(\sum_m \beta_{\ell m}\mathrm{KL}_{\ell m}\right)\beta_{\ell i}\Lambda_{q_i}\Omega_{\ell i}^{-1}\left(\Omega_{\ell i}\mu_i - \mu_\ell\right).
+\end{equation}
+Holding the attention weights at their optimum drops both softmax cross-terms $R_\mu$ and $R_\mu^{(s)}$ and sends each reweighting bracket to unity, so Eq.~\eqref{eq:total_gradient_mu_complete} reduces to the complete mean gradient of Eq.~\eqref{eq:total_gradient_mu} with $\Lambda_{q_i} = \Sigma_i^{-1}$ and the sender index relabeled $\ell \to j$. The belief-covariance and gauge-frame gradients acquire their sender sums in the same way, with $\partial E_{\ell i}/\partial \Sigma_i$ and $\partial E_{\ell i}/\partial \phi_i^a$ from the expressions above substituted into Eq.~\eqref{eq:sender_autograd}.
+
 \subsection*{Complete Update Equations}
 
-The gauge-covariant update scheme uses a Fisher-Rao natural-gradient step on the Gaussian sector and a right-trivialized group retraction on the gauge sector (cf.\ Eqs.~\ref{eq:gauge_natural_gradient}--\ref{eq:gauge_group_retraction}):
+The gauge-covariant update scheme uses a Fisher-Rao natural-gradient step on the Gaussian sector and a right-trivialized group retraction on the gauge sector (cf.\ Eqs.~\ref{eq:gauge_natural_gradient}--\ref{eq:gauge_group_retraction}), with $\nabla_{\mu_i} S$, $\nabla_{\Sigma_i} S$, and $\nabla_{\phi_i} S$ understood as the complete receiver-plus-sender gradients assembled in Eq.~\eqref{eq:total_gradient_mu_complete} and the sender contribution Eq.~\eqref{eq:sender_autograd}:
 \begin{align}
 \mu_i^{t+1} &= \mu_i^t - \eta_\mu \Sigma_i^t \nabla_{\mu_i} S \\
 \Sigma_i^{t+1} &= \left(\Sigma_i^t\right)^{1/2} \exp\left[\left(\Sigma_i^t\right)^{-1/2}\left(-\eta_\Sigma \tilde{\nabla}_{\Sigma_i} S\right)\left(\Sigma_i^t\right)^{-1/2}\right] \left(\Sigma_i^t\right)^{1/2} \\
