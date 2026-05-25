@@ -568,13 +568,7 @@ def main() -> None:
           f"{PROD_EMBED_DIM // PROD_N_HEADS})])")
     print()
 
-    # Silence the orphaned-LR warning; we only run one E-step for the probe.
-    warnings.filterwarnings(
-        "ignore",
-        message="Orphaned E-step retraction",
-        category=UserWarning,
-    )
-
+    
     generators = build_generators()
     n_gen = generators.shape[0]
     print(f"Generators shape: {tuple(generators.shape)}  (n_gen={n_gen})")

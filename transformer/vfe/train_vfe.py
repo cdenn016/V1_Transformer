@@ -25,15 +25,15 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 config = {
     # === Structure ===
     'vocab_size':               None,      # populated after dataloader build
-    'embed_dim':                20,
-    'irrep_spec':               [('fund', 2, 10)],
+    'embed_dim':                40,
+    'irrep_spec':               [('fund', 4, 10)],
     
     'batch_size':               64,
     
     'max_seq_len':              128,
     'max_steps':                15000,
 
-    'use_prior_bank':           True,
+    'use_prior_bank':           False,
     'exact_full_cov_decode':    False,
     
     'mask_self_attention':      False,
@@ -78,7 +78,7 @@ config = {
     'prior_handoff_sigma':      0,
 
     # === Covariance ===
-    'diagonal_covariance':      False,
+    'diagonal_covariance':      True,
     'isotropic_covariance':     False,
     'exact_diagonal_transport': False,
     'enforce_orthogonal':       False,
@@ -93,8 +93,8 @@ config = {
     'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'killing_per_block', 'pullback'
 
     # === Positional encoding ===
-    'use_rope':                 True,
-    'rope_full_gauge':          'both',
+    'use_rope':                 False,
+    'rope_full_gauge':          'off',
     'rope_base':                150,
 
     # === Embedding init ===
@@ -124,7 +124,7 @@ config = {
     'validate_cross_head_closure':      True,
 
     # === Normalization ===
-    'norm_type':                'layernorm',
+    'norm_type':                'none', #'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm'
     'normalize_ce_by_dim':      True,
 
     # === Training ===

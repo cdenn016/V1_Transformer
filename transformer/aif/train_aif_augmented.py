@@ -185,7 +185,7 @@ aif_config = {
 
     # === Generation-time (unused at training; kept for AIFConfig schema) ===
     'horizon_D':                 1,
-    'beam_width':                16,
+    'beam_width':                4,
     'branching_strategy':        'beam',
     'sampling_strategy':         'multinomial',
     'sampling_temperature':      1.0,

@@ -10,7 +10,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug. diagonal approximation is allowable for speed
 
-**E-STEP MUST NOT SEE TARGETS**
 
 **KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'` (the diagonal-σ path forbids non-`'off'` values in `vfe/config.py::__post_init__`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation.
 
@@ -22,11 +21,11 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **Post Edit Policy**:  Always write a post-edit description of all changes made to the codebase as a .md.  The date the edits were made should be in the naming convention of the document.  there should be only one document per day.  you should update the same document as edits are made
 
-**ALWAYS PLAN MODE FIRST**
+**ALWAYS PLAN FIRST**
 
 **There should ALWAYS exist a theoretically/mathematically "pure" path under appropriate toggles.**  Computationally extreme paths should be 'opt in' toggles and clearly documented.
 
-**Check for sub-agents, skills, and plug-ins before deploying your own. 
+**Check for sub-agents, skills, and plug-ins before deploying your own** 
 
 **check claude-mem for prior session context when resuming work on a topic**
 
@@ -34,6 +33,9 @@ Before you say the fix is done: (1) open my active config file, (2) trace every 
 
 **CODE FOCUS** when investigating and/or auditing the codebase do NOT rely on code comments....focus on the actual code and paths
 
+**user has RTX5090 GPU** - use cuda and code accordingly where applicable
+
+**dont rely on codebase comments when auditing the codebase.  focus on the actual code and paths**
 
 ##Agent policy
 

@@ -36,14 +36,7 @@ class _LayerNormSigmaAdapter(nn.Module):
 
     def __init__(self, dim: int) -> None:
         super().__init__()
-        warnings.warn(
-            "VFE norm_type='layernorm' is gauge-blind: nn.LayerNorm operates "
-            "on mu only and ignores sigma, breaking strict gauge equivariance. "
-            "Use 'mahalnorm' (default) or 'centered_mahalnorm' for the "
-            "gauge-aware path; 'layernorm' is intended for ablation only.",
-            UserWarning,
-            stacklevel=2,
-        )
+        
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, mu: torch.Tensor, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:

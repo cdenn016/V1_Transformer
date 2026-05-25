@@ -145,7 +145,7 @@ EM_CONFIG = {
     
     'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
-  
+    'causal_lower_triangle':      False,
 
     'kappa_beta':                 1,
     'kappa_warmup_steps':         2000,  # freeze kappa for first n steps
@@ -259,7 +259,7 @@ EM_CONFIG = {
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
 
     # === Phi gradient geometry ===
-    'phi_natural_gradient':       'killing',
+    'phi_natural_gradient':       'killing', #'killing_per_block', 'pullback', 'cartan', 'clip'
 
     # === Position encoding ===
     'use_rope':                   True,
@@ -323,11 +323,12 @@ EM_CONFIG = {
     'sigma_max':                   12.0,
     'grad_clip':                   50.0,
     'hidden_dim':                  508,
-    'gauge_covariant_ridge':       False,
+    
     
     'spd_floor_mode':             'eigclamp',      # new default, can omit
     'enable_spd_diagnostics':     True,    # shows spd_eig_min_t/q and cond
     'assert_finite_loss':         True,        # raise instead of silent skip
+    'gauge_covariant_ridge':       True,
     
     'warmup_steps':                100,
     'num_workers':                 0,   # 0 is faster on Windows (spawn multiprocessing overhead)

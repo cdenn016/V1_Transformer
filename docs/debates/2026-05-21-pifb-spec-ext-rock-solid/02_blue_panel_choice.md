@@ -1,0 +1,13 @@
+# Blue Panel Choice — pifb-spec-ext-rock-solid
+
+Mode: theory. Default theory panel (5 experts). Each lens is independently relevant to defending §Speculative Extensions as a calibrated Outlook.
+
+| Tag | Justification |
+|---|---|
+| `geometer` | The load-bearing structural content (pullback bundle metric at 2687–2689; horizontal-vertical decomposition at 2682–2685; (0,2)-tensor pullback at 2705) is a well-posed differential-geometric construction in a fixed gauge; the geometer defends the mathematical existence content against any conflation with the prose lift at 2738. |
+| `info-geometer` | The Fisher arc length at 2600–2611 and the block-Fisher form at 2613–2655 are canonical information-geometric primitives [AmariNagaoka2000 Ch. 2]; the info-geometer defends the within-framework structural content (mass-from-precision identification at 3070 with its explicit "no operationally independent measurement is reported" disclaimer) as a postulate enumeration rather than an empirical claim. |
+| `variational` | The FEP literature explicitly tolerates Outlook-mode metaphysical extensions [ParrPezzuloFriston2022 Ch. 14] as long as they are registered as such; the variational lens defends the placeholder-isolation reading (sub-claim 8) by showing that structural existence content does not inherit empirical force from the §Results scaling fit. |
+| `gauge-theorist` | The 2722–2723 Maurer-Cartan disclosure, the 2928 regulator-conditional flag, and the 2922–2937 consensus-metric framing are the canonical hygiene moves [Nakahara2003 §10.3; KobayashiNomizu Vol. I §III.2] for naming a gauge-orbit average without claiming it has been constructed; the gauge theorist defends the framing as standard practice (analogous to lattice-gauge BRST construction discussions [Henneaux-Teitelboim 1992]) for naming an open problem honestly. |
+| `philosophy-of-science` | Mandatory in every mode. The 3084 symmetric-success-failure criterion and the 3094–3102 / 3127–3145 calibration mesh are explicitly Popperian / Lakatosian moves; the philosopher polices both directions — (i) red's likely "deferred falsifiability is not falsifiability" attack and (ii) blue's risk of citing the manuscript back at itself. The philosopher also frame-checks the section-level "rock-solid" claim against the OUT_OF_SCOPE / REMAND options. |
+
+Mode default for `theory` is `geometer, info-geometer, variational, gauge-theorist, philosophy-of-science`. No claim-keyword overrides forced a swap: the claim mentions Fisher (covered), bundle metric (geometer), gauge invariance (gauge-theorist), FEP-adjacent (variational), and falsifiability (philosophy-of-science).
