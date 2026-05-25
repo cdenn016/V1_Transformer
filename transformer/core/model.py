@@ -442,7 +442,10 @@ class GaugeTransformerLM(nn.Module):
         device: torch.device,
         inverse: bool = False,
         omega: Optional[torch.Tensor] = None,
-    ):
+    ) -> Union[
+        Tuple[torch.Tensor, Optional[torch.Tensor]],
+        Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor],
+    ]:
         r"""Apply (or invert) the cross-head dimension permutation.
 
         When GL(K) cross-head coupling is active, coupled heads are reordered
@@ -691,7 +694,7 @@ class GaugeTransformerLM(nn.Module):
         evolve_phi_e_step: bool,
         use_prior_bank: bool,
         isotropic_covariance: bool,
-    ) -> Tuple:
+    ) -> Tuple[str, int, str, str, bool, bool]:
         r"""Resolve gauge group, mode, and parameterization from config.
 
         Validates gauge_mode, prints informational messages for non-default
@@ -1669,7 +1672,7 @@ class GaugeTransformerLM(nn.Module):
         ema_decay: float = 0.99,
         sigma_beliefs: Optional[torch.Tensor] = None,
         pad_token_id: int = -100,
-    ):
+    ) -> None:
         """Thin delegator — see ``hebbian.p_flow_update_model``."""
         from transformer.core.hebbian import p_flow_update_model
         return p_flow_update_model(
@@ -1685,7 +1688,7 @@ class GaugeTransformerLM(nn.Module):
         prediction_errors: torch.Tensor,
         ema_decay: float = 0.99,
         pad_token_id: int = -100,
-    ):
+    ) -> None:
         """Thin delegator — see ``hebbian.phi_flow_update_model``."""
         from transformer.core.hebbian import phi_flow_update_model
         return phi_flow_update_model(
@@ -1699,7 +1702,7 @@ class GaugeTransformerLM(nn.Module):
         targets: torch.Tensor,
         lr: float = 0.1,
         pad_token_id: int = -100,
-    ):
+    ) -> None:
         """Thin delegator — see ``hebbian.delta_rule_update_w_out_model``."""
         from transformer.core.hebbian import delta_rule_update_w_out_model
         return delta_rule_update_w_out_model(

@@ -16,8 +16,8 @@ in the gauge-theoretic transformer. Visualizes:
 Input: metrics.csv from train_publication.py containing VFE dynamics columns.
 
 Usage:
-    python -m transformer.visualization.vfe_dynamics_plots --file metrics.csv
-    python -m transformer.visualization.vfe_dynamics_plots --file metrics.csv --mode dashboard
+    Edit the CONFIG dict at the bottom of this file (file/output/mode/smooth),
+    then run: python -m transformer.visualization.vfe_dynamics_plots
 """
 
 import csv

@@ -1029,15 +1029,14 @@ class IterationSnapshot:
 
 @runtime_checkable
 class RecorderProtocol(Protocol):
-    """Structural type for a trajectory recorder.
+    """Structural type for the global forward-pass trajectory recorder.
 
-    Conformers (`TrajectoryRecorder` in `analysis/trajectory.py`,
-    `PublicationMetrics` in `analysis/publication_metrics.py`) implement
-    these with concrete shared-prefix signatures; the trailing `**kwargs`
-    absorbs conformer-specific optional arguments.
+    The core forward pass (`blocks.py`, `model.py`) registers a recorder via
+    `set_global_recorder` and invokes `start_forward` at the top of each
+    forward, gated on the recorder's `enabled` flag. `TrajectoryRecorder`
+    (`analysis/trajectory.py`) is the conformer; the trailing `**kwargs`
+    absorbs its optional arguments.
     """
-    def record_step(self, step: int, epoch: float,
-                    train_metrics: Dict[str, float], **kwargs: Any) -> None: ...
     def start_forward(self, batch_size: int, seq_len: int,
                       **kwargs: Any) -> None: ...
 

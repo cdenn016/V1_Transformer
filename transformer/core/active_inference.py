@@ -228,7 +228,7 @@ def _compute_active_inference_gradient(
     # (pass-2) use the same point-conditional decoder — otherwise the KL
     # trace term in decode() counts sigma twice (once via reparameterization,
     # once via the direct Gaussian-decode path) and inflates predictive
-    # entropy. See transformer/vfe/efe.py:103-110 for the reference pattern.
+    # entropy: the point-conditional decoder must be used in both passes.
     #
     # Consequence for full-covariance: path-2 reparameterization uses
     # pre-scaled noise (no Cholesky differentiation), so with sigma=0 in the

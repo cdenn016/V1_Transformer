@@ -260,6 +260,17 @@ class BlockConfig:
             raise ValueError(
                 f"em_mode must be one of {list(_EM_MODE_TABLE.keys())}, got '{self.em_mode}'"
             )
+
+        # FFN mode validation: the gauge VFE block only implements the
+        # VFE_dynamic E-step. The 'standard'/'hybrid' values select a different
+        # model class upstream and never reach a BlockConfig, so a non-VFE_dynamic
+        # value here is a misconfiguration — fail loudly instead of silently
+        # running VFE_dynamic regardless.
+        if self.ffn_mode != 'VFE_dynamic':
+            raise ValueError(
+                f"ffn_mode must be 'VFE_dynamic' for the gauge VFE block, got '{self.ffn_mode}'"
+            )
+
         _flags = _EM_MODE_TABLE[self.em_mode]
         # ``_amortized_inference`` / ``_amortize_sigma`` / ``_exact_phi_grad``
         # used to be cached on the dataclass here; removed 2026-05-17 because

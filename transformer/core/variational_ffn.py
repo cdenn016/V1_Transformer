@@ -49,7 +49,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,7 @@ class VariationalFFNDynamic(nn.Module):
         learnable_head_kappa: bool =    False,# If True, learn per-head κ_h
         n_picard_steps: int =           0,  # Re-solve iterations (diagonal) or Picard steps (full-cov)
         picard_trust_region: float =    5.0,# Whitened trust region for Picard steps
-        e_step_early_exit_tol: float = None, # Relative change threshold for early E-step exit
+        e_step_early_exit_tol: Optional[float] = None, # Relative change threshold for early E-step exit
         compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
         alpha_divergence: float = 1.0,   # Renyi alpha-divergence parameter (1.0 = KL)
@@ -1424,7 +1424,7 @@ class VariationalFFNDynamic(nn.Module):
             for d_h in self.irrep_dims:
                 omega_h = omega_current[:, :, block_start:block_start + d_h,
                                         block_start:block_start + d_h]
-                _eye_h = torch.eye(d_h, device=omega_h.device, dtype=omega_h.dtype)
+                _eye_h = self._get_eye(d_h, omega_h.device, omega_h.dtype)
                 omega_h_reg = omega_h + _ridge * _eye_h
                 try:
                     omega_h_inv = torch.linalg.inv(omega_h_reg)
@@ -1678,8 +1678,8 @@ class VariationalFFNDynamic(nn.Module):
         omega_current: Optional[torch.Tensor],
         mu_p_current: torch.Tensor,
         sigma_p: torch.Tensor,
-        alpha_effective,
-        _alpha_c0,
+        alpha_effective: Union[float, torch.Tensor],
+        _alpha_c0: Optional[torch.Tensor],
         is_diagonal: bool,
         B: int,
         N: int,
@@ -1838,19 +1838,22 @@ class VariationalFFNDynamic(nn.Module):
         omega_current: Optional[torch.Tensor],
         mu_p_current: torch.Tensor,
         sigma_p: torch.Tensor,
-        alpha_effective,
-        _alpha_c0,
+        alpha_effective: Union[float, torch.Tensor],
+        _alpha_c0: Optional[torch.Tensor],
         is_diagonal: bool,
         B: int,
         N: int,
         eps: float,
         mask: Optional[torch.Tensor],
         _detach_e_step: bool,
-        _precomputed_block_exp_pairs,
+        _precomputed_block_exp_pairs: Optional[list],
         _nonflat_omega: Optional[torch.Tensor],
         _nonflat_exp_phi: Optional[torch.Tensor] = None,  # (B, N, K, K) per-token exp(φ); paired with _nonflat_omega so gauge_covariant_ridge does not silently degrade to eps*I
         return_beta_history: bool = False,
-    ):
+    ) -> Tuple[
+        torch.Tensor, torch.Tensor, list, torch.Tensor,
+        Optional[torch.Tensor], Optional[list],
+    ]:
         r"""Compute per-head β_h and VFE gradients for the multihead path.
 
         Each irrep block gets its own attention pattern β_h, maintaining head
@@ -2098,8 +2101,8 @@ class VariationalFFNDynamic(nn.Module):
         omega_current: Optional[torch.Tensor],
         mu_p_current: torch.Tensor,
         sigma_p: torch.Tensor,
-        alpha_effective,
-        _alpha_c0,
+        alpha_effective: Union[float, torch.Tensor],
+        _alpha_c0: Optional[torch.Tensor],
         is_diagonal: bool,
         B: int,
         N: int,
@@ -2372,7 +2375,8 @@ class VariationalFFNDynamic(nn.Module):
                     is_diagonal, mask, eps,
                 )
                 if grad_omega is not None:
-                    self._e_step_grad_norms['grad_phi'] = grad_omega.detach().norm().item()
+                    if _is_final_iter:  # avoid a CUDA sync on every non-final iteration
+                        self._e_step_grad_norms['grad_phi'] = grad_omega.detach().norm().item()
                     omega_current = self._retract_omega(
                         omega_current, grad_omega, self.phi_lr,
                         trust_region=getattr(self, 'omega_trust_region', 0.3),
@@ -2388,7 +2392,8 @@ class VariationalFFNDynamic(nn.Module):
                     beta_heads=beta_heads,
                 )
                 if grad_phi is not None:
-                    self._e_step_grad_norms['grad_phi'] = grad_phi.detach().norm().item()
+                    if _is_final_iter:  # avoid a CUDA sync on every non-final iteration
+                        self._e_step_grad_norms['grad_phi'] = grad_phi.detach().norm().item()
                     phi_current = _retract_phi(
                         phi=phi_current,
                         delta_phi=-grad_phi,
@@ -2519,11 +2524,25 @@ class VariationalFFNDynamic(nn.Module):
 
     def _forward_vfe_body(
         self,
-        mu, sigma, mu_prior, phi, omega, sigma_prior,
-        mask, token_ids, return_beta_history,
-        connection_delta, cocycle_relaxation, precomputed_block_exp_pairs,
-        B, N, K, device, dtype, eps,
-    ):
+        mu: torch.Tensor,
+        sigma: Optional[torch.Tensor],
+        mu_prior: Optional[torch.Tensor],
+        phi: Optional[torch.Tensor],
+        omega: Optional[torch.Tensor],
+        sigma_prior: Optional[torch.Tensor],
+        mask: Optional[torch.Tensor],
+        token_ids: Optional[torch.Tensor],
+        return_beta_history: bool,
+        connection_delta: Optional[torch.Tensor],
+        cocycle_relaxation: float,
+        precomputed_block_exp_pairs: Optional[list],
+        B: int,
+        N: int,
+        K: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        eps: float,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """VFE E-step body, factored out so forward() can wrap it in try/finally."""
         # ── Prepare all E-step inputs ────────────────────────────────────
         _state = self._prepare_e_step_inputs(

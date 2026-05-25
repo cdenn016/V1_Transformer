@@ -999,3 +999,32 @@ class TestCausalLowerTriangleLegacyWiring:
         )
         mu_out = out[0] if isinstance(out, tuple) else out
         assert torch.isfinite(mu_out).all()
+
+
+# =============================================================================
+# Trace-einsum equivalence (regression guard for the single-pass tr(Σ_j⁻¹ Σ_i))
+# =============================================================================
+
+def test_trace_einsum_single_pass_matches_two_step():
+    r"""The full-covariance KL trace term computes tr(Σ_j⁻¹ Σ_i).
+
+    vfe_gradients._compute_vfe_gradients_block_diagonal uses the single-pass
+    form ``einsum('bijkl,bijlk->bij', A, B)``; this guards that it equals the
+    earlier two-step ``einsum('bijkk->bij', einsum('bijkl,bijlm->bijkm', A, B))``
+    on random SPD inputs.
+    """
+    torch.manual_seed(0)
+    B, C, N, d = 2, 3, 4, 5
+    # SPD A (Σ_j⁻¹) and SPD B (Σ_i), shape (B, C, N, d, d)
+    M1 = torch.randn(B, C, N, d, d, dtype=torch.float64)
+    M2 = torch.randn(B, C, N, d, d, dtype=torch.float64)
+    A = M1 @ M1.transpose(-1, -2) + d * torch.eye(d, dtype=torch.float64)
+    Bmat = M2 @ M2.transpose(-1, -2) + d * torch.eye(d, dtype=torch.float64)
+
+    single = torch.einsum('bijkl,bijlk->bij', A, Bmat)
+    two_step = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', A, Bmat))
+    # Ground truth: explicit batched trace of A @ B
+    truth = torch.diagonal(A @ Bmat, dim1=-2, dim2=-1).sum(-1)
+
+    assert torch.allclose(single, two_step, rtol=1e-5, atol=1e-8)
+    assert torch.allclose(single, truth, rtol=1e-5, atol=1e-8)

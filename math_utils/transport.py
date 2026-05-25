@@ -386,7 +386,7 @@ def _validate_invertible(Omega: np.ndarray, eps: float = 1e-8) -> None:
 # ``_compute_dexp_generators`` were removed in the 2026-05-17 deep-audit
 # follow-up: each had zero production callers (verified by grep across the
 # repository), and the dexp/Fréchet path was superseded by PyTorch autograd
-# in ``transformer/core/variational_ffn.py`` and ``transformer/vfe/e_step.py``.
+# in ``transformer/core/variational_ffn.py``.
 # ``frechet_expm`` is retained — it has dedicated tests in
 # ``tests/test_math_utils.py`` and documents the mathematical reference.
 

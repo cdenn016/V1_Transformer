@@ -713,7 +713,7 @@ def main():
                             # Hybrid: gauge KL-attention + PriorBank + standard GELU FFN
                             'hybrid',
                         ],
-                        help='Training mode: standard, em, amortized, hebbian')
+                        help='Training mode: standard, em, hebbian, standard_attn_only, hybrid')
 
     # System
     parser.add_argument('--device', type=str, default='auto')
