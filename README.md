@@ -6,7 +6,7 @@ A research framework implementing gauge-covariant variational free energy (VFE) 
 > Robert C. Dennis
 > (`Attention/GL(K)_attention.tex`, with derivations in `Attention/GL(K)_supplementary.tex`)
 
-The canonical implementation lives in the `transformer/vfe/` package, a clean single-E-step formulation of the theory. The older `transformer/core/` and `transformer/pure_vfe/` packages are retained as research variants and are summarized at the end of this document.
+The implementation lives in the `transformer/core/` package as `GaugeTransformerLM`: a configuration-driven realization of the theory in which attention, transport, and belief updates are all KL-divergence and natural-gradient operations. The single-E-step `transformer/vfe/` reformulation and the active-inference `aif/` package have been moved to a separate repository; this repository is the frozen `core/`-centered implementation.
 
 
 ## Thesis
@@ -32,7 +32,7 @@ The only retained linear map is the output projection from `K` dimensions to the
 
 `GL(K)_attention.tex` develops the single-belief-channel theory on a flat bundle: one Gaussian belief per token, GL(K) gauge transport between tokens, and the reduction to standard attention. The two-channel hierarchical form (a model channel `s_i`, the hyper-prior weight `lambda_h`, and the meta-attention coupling `gamma_ij`) and the non-flat holonomy regime are explicitly deferred to the companion paper *Participatory Realization: It from Bit* (`Attention/Participatory_it_from_bit.tex`, referenced at `GL(K)_attention.tex:619,665,677`).
 
-The `transformer/vfe/` package realizes the single-channel theory directly. Its E-step minimizes three terms of the free energy: the self-coupling `alpha * D_KL(q_i || p_i)`, the alignment coupling `sum_j beta_ij * D_KL(q_i || Omega_ij q_j)`, and the attention-entropy term `tau * beta_ij * log(beta_ij / pi_j)`. The model-coupling channel and the hyper-prior term are not part of this package; they belong to the companion-paper extension. The non-flat connection is available as an opt-in research feature (`use_non_flat_transport`, `transformer/vfe/non_flat.py`) but is off by default and has one documented gap (below).
+The `transformer/core/` package realizes the single-channel theory through `GaugeTransformerLM`. Its variational FFN E-step minimizes the self-coupling `alpha * D_KL(q_i || p_i)`, the alignment coupling `sum_j beta_ij * D_KL(q_i || Omega_ij q_j)`, and the attention-entropy term `tau * beta_ij * log(beta_ij / pi_j)` by natural-gradient descent on `(mu, Sigma, phi)`. The model-coupling channel and the hyper-prior term are the companion-paper extension and are not implemented here. A large `BlockConfig` surface selects among gradient-flow modes, deep-equilibrium implicit differentiation, closed-form and Hebbian belief updates, reflection-augmented transport, and an opt-in non-flat connection.
 
 
 ## Free energy and attention
@@ -62,47 +62,36 @@ The supplementary material works with the surrogate for the covariance gradient 
 
 ## Architecture and forward pass
 
-The `transformer/vfe/` forward pass is a faithful realization of one variational E-step per layer, with no separate attention sublayer. Attention weights are recomputed inside the E-step at every inner iteration from the current beliefs, so there is no `skip_attention` toggle and no message-aggregation residual.
+`GaugeTransformerLM` (`transformer/core/model.py`) is a stack of `GaugeTransformerBlock`s. Each block has an optional attention sublayer followed by a variational FFN that runs the belief E-step; the pure-VFE form sets `skip_attention=True` so the FFN's internal attention is the only message-passing path.
 
 ```
 token_ids
   |
   v
-encode:  (mu, sigma, phi) <- VFEPriorBank.encode(token_ids)
+encode:  (mu, sigma, phi) <- token/prior embeddings   [PriorBank when use_prior_bank=True]
   |
   v
-positional:  phi <- BCH-compose(phi_token, phi_pos)        [position is gauge composition, not an additive feature]
+positional:  RoPE rotates mu (and sigma when rope_full_gauge != 'off'), or phi gauge composition
   |
   v
-[if gauge_parameterization == 'omega_direct']: initialize per-block (Omega, Omega^{-1}) from phi
-  |
-  v
-FOR EACH LAYER (VFEBlock):
-    E-step (t = 1 .. n_e_steps):                            [VFEEStep]
-        build transport Omega_ij = exp(phi_i) exp(-phi_j)
-        recompute beta_ij = softmax(-E_ij / tau)            [per-head, tau = kappa * sqrt(d_head)]
-        grad_F = alpha * grad D_KL(q || p)                  [self-coupling]
-               + sum_j beta_ij * grad E_ij                  [alignment]
-               + (attention-entropy contribution)
+FOR EACH LAYER (GaugeTransformerBlock):
+    [optional attention sublayer, unless skip_attention=True]:
+        beta_ij = softmax(-D_KL(q_i || Omega_ij q_j) / tau)       [tau = kappa * sqrt(d_head)]
+        aggregate beta-weighted messages, residual through W_O . mu_agg
+    variational FFN E-step (VariationalFFNDynamic):
+        recompute beta_ij from current beliefs
+        grad_F = alpha * grad D_KL(q || p)  +  sum_j beta_ij * grad E_ij  +  (attention entropy)
         natural gradient:  delta = Sigma * grad_F
-        mu  <- mu  - e_mu_lr  * delta_mu        (optional trust region)
-        sigma <- retract(sigma, -e_sigma_lr * delta_sigma, trust = e_sigma_q_trust)
-        phi <- Lie-retract(phi, -e_phi_lr * precond(grad_phi))   [Killing-preconditioned; skipped if e_phi_lr == 0]
-    optional equivariant head mixer (Schur commutant)       [use_equivariant_head_mixer]
-    optional norm
-  |
-  v
-cross-layer prior handoff:  next prior mu  <- prior_handoff_rho   blends posterior mu
-                            next prior sigma <- prior_handoff_sigma blends posterior sigma
-  |
-  v
-final norm
+        mu    <- mu    - self.lr  * delta_mu
+        sigma <- retract(sigma, -sigma_lr * delta_sigma, trust region)
+        phi   <- Lie-retract(phi, -lr * precond(grad_phi))        [geometric preconditioning]
+    norm (MahalanobisNorm or RMSNorm)
   |
   v
 decode:  logits = -D_KL(q || pi_v) / tau   [use_prior_bank=True]   or   linear projection mu -> vocab
 ```
 
-The natural-gradient preconditioning by `Sigma` is what makes the update a Fisher-metric descent rather than a raw Euclidean step. The three E-step learning rates are decoupled: `e_mu_lr` (config line 69), `e_sigma_lr` (line 70), and `e_phi_lr` (line 96), with the covariance trust region `e_sigma_q_trust` (line 71) clamping the whitened step `delta_sigma / sigma`. The prior covariance `sigma_p` is detached inside the E-step, enforcing the fast-belief / slow-model timescale separation.
+The natural-gradient preconditioning by `Sigma` makes the update a Fisher-metric descent rather than a raw Euclidean step. The μ retraction step size is `self.lr` and the σ step size is `sigma_lr`, independently learnable via the `raw_sigma_lr` Parameter in `VariationalFFNDynamic`; both follow the same cosine decay. The prior covariance `sigma_p` is detached inside the E-step, enforcing the fast-belief / slow-model timescale separation. The `em_mode` selector controls gradient flow at the EM boundary (below).
 
 
 ## Theoretical framework
@@ -150,28 +139,19 @@ and analogously for `Sigma` and `phi`. The belief update is thus a self-gated me
 The free energy separates into a fast E-step (belief inference within a forward pass) and a slow M-step (parameter learning by backpropagation across passes), with the prior covariance frozen relative to the E-step. Standard transformers operate in the adiabatic limit where the slow variables are held fixed during inference. Without observations, the free energy has a gauge-symmetric vacuum in which all agents converge to a common belief modulo the gauge orbit; observations break this symmetry explicitly (not spontaneously), driving agents toward specialized representations (`GL(K)_attention.tex`, §3.5).
 
 
-## Mechanisms in `transformer/vfe/`
+## Mechanisms in `transformer/core/`
 
-Each mechanism below is controlled by a field of `VFEConfig` (`transformer/vfe/config.py`); line numbers refer to that file.
+The gauge group structure is declared in `BlockConfig` (`transformer/core/block_config.py`), the single source of truth for generators, irrep dimensions, and head count; training hyperparameters live in `TrainingConfig`.
 
-Multi-head attention is the block-diagonal restriction `G = GL(d_head)^H` of the full gauge group, realized structurally through the irrep decomposition `irrep_spec` rather than a toggle (`GL(K)_attention.tex`, §3.9.1). Cross-head coupling adds a sparse off-diagonal `gl(K)` subspace through `cross_couplings` (line 303): selected head pairs are merged into super-blocks, and the basis is generically not closed under the matrix commutator. The startup check `validate_cross_head_closure` (default on) warns when the supplied basis is not a Lie subalgebra; `auto_close_cross_head_basis` (line 310) closes it under brackets at the cost of changing `phi_dim` and breaking checkpoint compatibility. The off-diagonal mixing construction is `GL(K)_attention.tex`, §3.9.3.
+Multi-head attention is the block-diagonal restriction `G = GL(d_head)^H` of the full gauge group, realized structurally through the irrep decomposition `irrep_spec` rather than a toggle (`GL(K)_attention.tex`, §3.9.1). Cross-head coupling adds a sparse off-diagonal `gl(K)` subspace through `cross_couplings`: selected head pairs are merged into super-blocks (`GL(K)_attention.tex`, §3.9.3).
 
-Rotary position embeddings are treated as the restriction of the gauge group to `SO(2)^{K/2}` (`GL(K)_attention.tex`, §3.10). The flag `use_rope` (line 220) enables them and `rope_full_gauge` (line 222) is a tri-state selector: `'off'` rotates only the mean (the standard-transformer convention), while `'vfe_only'` and `'both'` also apply the sandwich product to the covariance inside the E-step. The non-`'off'` settings require `diagonal_covariance=False`.
+Rotary position embeddings are treated as the restriction of the gauge group to `SO(2)^{K/2}` (`GL(K)_attention.tex`, §3.10). The flag `use_rope` enables them and `rope_full_gauge` is a tri-state selector: `'off'` rotates only the mean (the standard-transformer convention), while `'vfe_only'` and `'both'` also apply the sandwich product to the covariance. Under `diagonal_covariance` the non-`'off'` settings lift σ to full and the config validator warns about the cost; see the documented RoPE × MahalanobisNorm limitation in `CLAUDE.md`.
 
-Numerical regularization of small SPD matrices defaults to a uniform Tikhonov ridge, which is not gauge-covariant because the identity does not transform as `Sigma -> h Sigma h^T`. Setting `gauge_covariant_ridge=True` (line 213) replaces the ridge with `epsilon * (g g^T)`, where `g = exp(phi)` is the per-token frame, restoring covariance.
+Numerical regularization of small SPD matrices defaults to a uniform Tikhonov ridge, which is not gauge-covariant because the identity does not transform as `Sigma -> h Sigma h^T`. Setting `gauge_covariant_ridge=True` replaces the ridge with `epsilon * (g g^T)`, where `g = exp(phi)` is the per-token frame, restoring covariance.
 
-The gauge frame `phi` lives in `gl(K)` and requires geometric preconditioning because the backward pass through the matrix exponential amplifies non-compact directions. The `phi_preconditioner` field (line 150) selects among `'clip'`, `'cartan'`, `'killing'`, and `'killing_per_block'`; the exact-pullback metric is described in the supplementary (App. C.4) but is rejected at runtime in this package (config validation, lines 609–621), so it is documentation rather than a reachable code path.
+The gauge frame `phi` lives in `gl(K)` and requires geometric preconditioning because the backward pass through the matrix exponential amplifies non-compact directions; the preconditioners (clip / Cartan / Killing) are in `transformer/core/gauge_preconditioner.py`. Belief decoding through the prior bank computes `logits = -D_KL(q || pi_v) / tau` with a learnable decode temperature, replacing the linear output head when `use_prior_bank=True`.
 
-By default the gauge frame is parameterized through `phi` and transport is rebuilt each iteration. Setting `gauge_parameterization='omega_direct'` (line 277) switches to a canonical group-level retraction `Omega_new = Omega * exp(-eta * X)` on GL+(K), with `X` the projected pullback of `dF/dOmega` (`transformer/vfe/omega_direct.py`). This path requires `diagonal_covariance=True` (lines 579–585). The exact full-covariance decode `exact_full_cov_decode` requires the opposite, `diagonal_covariance=False` (lines 503–507), so the two canonical forms cannot coexist in a single configuration; each is independently reachable under its own toggle. Lifting the joint form would require implementing the open per-pair sandwich-KL kernel (`transformer/vfe/non_flat.py:483-487`).
-
-Non-flat transport relaxes the flat-bundle assumption through an edge-local connection `Omega_ij = exp(phi_i) exp(delta_ij) exp(-phi_j)`, with `delta_ij` a zero-initialized antisymmetric bilinear form on `(mu_i, mu_j)`. It is enabled by `use_non_flat_transport` (line 335). The full-covariance per-pair path is not yet wired (the `NotImplementedError` above); the diagonal path is functional. The GL(K) manuscript proves that the default flat connection has vanishing holonomy (Lemma `thm:vanishing_holonomy`, `GL(K)_attention.tex:641`); the non-flat regime is the subject of the companion paper.
-
-The self-coupling weight can be made adaptive through `E_learnable_alpha` (line 100), giving `alpha = c0 / (b0 + KL)` per latent dimension. The product-rule contribution from differentiating `alpha * KL` is included in the gradient kernel. This per-dimension Bayesian-precision generalization is a research-track feature and is not part of the manuscript derivation.
-
-
-## Generation by active inference
-
-Beyond likelihood decoding, the model can select continuations by minimizing expected free energy. The depth-1 policy `VFEExpectedFreeEnergy` (`transformer/vfe/efe.py`) scores each candidate next token by `G(a) = risk + ambiguity - epistemic`, then samples `q(a) ∝ exp(-gamma * G(a))`; it is reachable through `VFEModel.generate(use_efe=True)`. The standalone `transformer/aif/` package generalizes this to horizon-`D` policies through a beam tree search over candidate continuations, with the depth-1 case reproducing `vfe/efe.py`. Generation entry points are click-to-run: `transformer/aif/train_aif.py` runs generation (despite its name) and `transformer/aif/train_aif_augmented.py` adds a trajectory-as-policy EFE term to the training loss.
+The `em_mode` field (`transformer/core/em_modes.py`) selects gradient flow at the EM boundary: `'ift_phi'` (default) keeps `mu`, `sigma`, and `phi` attached through a single implicit-differentiation step; `'em_phi_q'` and `'em_phi_p'` detach the prior and treat `phi` as an E-step or M-step quantity respectively. The reflection-augmented O(K) transport and the opt-in non-flat connection (`transformer/core/connection.py`) are research variants.
 
 
 ## Results
@@ -186,18 +166,7 @@ The manuscript reports the headline language-modeling result on WikiText-103 (GP
 
 The single-layer gauge model improves on the embedding-matched standard transformer by 1.66× and on the KN-5 baseline by 1.88×. Random-chance perplexity is roughly 50,000. Learned gauge frames develop interpretable categorical structure (punctuation, content words, and letters separate in both belief space `mu` and frame space `phi`) without category supervision.
 
-### Current `transformer/vfe/` runs
-
-These are the numbers produced by the canonical `vfe/` package. Fill in from your own runs.
-
-| Configuration | K | Layers | Heads | Seq len | Train PPL | Test PPL |
-|---|---|---|---|---|---|---|
-| `vfe/` (WikiText-103) | __ | __ | __ | __ | __ | __ |
-| `vfe/` (wiki-ja) | __ | __ | __ | __ | __ | __ |
-
-### Legacy `transformer/core/` runs
-
-For reference, the earlier `transformer/core/` (`GaugeTransformerLM`) implementation reported approximately test perplexity 61 on WikiText-103 (BPE-2, K=90, GL(15), 6 heads, RoPE, sequence length 128, one epoch) and approximately 24 on wiki-ja, with an earlier K=80, GL(10) single-layer configuration reporting train/test perplexity near 63/76 at roughly 50M parameters. These values come from the prior implementation and are not directly comparable to the `vfe/` package; they are recorded here for continuity.
+The `transformer/core/` `GaugeTransformerLM` has also reported approximately test perplexity 61 on WikiText-103 (BPE-2, K=90, GL(15), 6 heads, RoPE, sequence length 128, one epoch) and approximately 24 on wiki-ja, with an earlier K=80, GL(10) single-layer configuration reporting train/test perplexity near 63/76 at roughly 50M parameters.
 
 
 ## Installation
@@ -212,34 +181,31 @@ pip install -e .[viz]       # + matplotlib, seaborn, plotly
 pip install -e .[all]       # + scikit-learn, umap-learn, shap, pymc, networkx
 ```
 
-Core dependencies are `torch>=2.1.0`, `pytorch-lightning>=2.2.0`, `torchmetrics`, `numpy`, `tiktoken`, `datasets`, `tqdm`, and `scipy`. Optional extras add experiment tracking (`wandb`), a tokenizer for active-inference generation (`transformers`), visualization, and analysis packages.
+Core dependencies are `torch>=2.1.0`, `pytorch-lightning>=2.2.0`, `torchmetrics`, `numpy`, `tiktoken`, `datasets`, `tqdm`, and `scipy`. Optional extras add experiment tracking (`wandb`), visualization, and analysis packages.
 
 
 ## Usage
 
-Entry points follow the click-to-run pattern: edit the config dictionary at the top of the file, then run it. There are no command-line arguments.
+Entry points follow the click-to-run pattern: edit the config dictionary at the top of the file, then run it. The sole sanctioned command-line entry point is `train_publication.py`, which exposes a `--mode` selector for publication runs.
 
 ```bash
-# Train the canonical VFE model (edit the config dict in the file first)
-python -m transformer.vfe.train_vfe
+# Publication training (standard / em / hebbian / standard_attn_only / hybrid)
+python -m transformer.train_publication --mode em
 
-# Hyperparameter sweeps over VFEConfig (one field at a time)
-python -m transformer.vfe.vfe_ablation_suite
+# Click-to-run training (edit the config dict in the file first)
+python -m transformer.train
 
-# Semantic-clustering visualization of mu / Sigma / phi / Omega
-python -m transformer.vfe.run_semantic_clustering
+# Resume from a checkpoint
+python -m transformer.resume_training
 
-# Active-inference generation, then training-time EFE augmentation
-python -m transformer.aif.train_aif
-python -m transformer.aif.train_aif_augmented
+# Text generation and inference against a GaugeTransformerLM checkpoint
+python generate.py
+python inference.py
 ```
-
-The root-level `generate.py` and `inference.py` scripts target the legacy `transformer/core/` `GaugeTransformerLM` and its checkpoints, not the `vfe/` package.
 
 ```bash
 pytest tests/                                  # full suite
-pytest tests/transformer/test_vfe_package.py   # vfe/ package
-pytest tests/transformer/test_aif_package.py   # aif/ package
+pytest tests/transformer/test_model.py         # GaugeTransformerLM
 pytest tests/ -m "not slow"                    # skip slow tests
 ```
 
@@ -249,44 +215,33 @@ pytest tests/ -m "not slow"                    # skip slow tests
 ```
 V13_Gauge_Transformer/
 ├── transformer/
-│   ├── vfe/                       # Canonical VFE transformer (this README's focus)
-│   │   ├── config.py              #   VFEConfig — single source of truth
-│   │   ├── model.py               #   VFEModel (encode -> E-step stack -> decode)
-│   │   ├── stack.py               #   VFEStack (layer loop + cross-layer prior handoff)
-│   │   ├── block.py               #   VFEBlock (E-step + optional head mixer + norm)
-│   │   ├── e_step.py              #   VFEEStep (natural-gradient belief inference)
-│   │   ├── prior_bank.py          #   VFEPriorBank (token priors + KL decode)
-│   │   ├── positional.py          #   Position as BCH gauge composition
-│   │   ├── attention.py           #   Stateless transport + KL-attention kernels
-│   │   ├── head_mixer.py          #   Schur-commutant equivariant head mixer
-│   │   ├── non_flat.py            #   Opt-in edge-local connection / holonomy
-│   │   ├── omega_direct.py        #   Group-level GL+(K) retraction
-│   │   ├── efe.py                 #   Depth-1 expected-free-energy generation
-│   │   ├── trainer.py             #   VFETrainer (AdamW + cosine schedule)
-│   │   ├── train_vfe.py           #   Click-to-run training entry point
-│   │   ├── vfe_ablation_suite.py  #   Click-to-run hyperparameter sweeps
-│   │   ├── run_semantic_clustering.py
-│   │   └── semantic_clustering/   #   Clustering of mu/Sigma/phi/Omega into figures
-│   ├── aif/                       # Active-inference generation (wraps VFEModel)
-│   │   ├── efe_score.py           #   Expected free energy (risk/ambiguity/epistemic)
-│   │   ├── tree_search.py         #   Horizon-D beam search over policies
-│   │   ├── generator.py           #   AIFGenerator
-│   │   ├── train_aif.py           #   Click-to-run generation
-│   │   └── train_aif_augmented.py #   Training with EFE-augmented loss
-│   ├── core/                      # Legacy GaugeTransformerLM stack + shared math
-│   ├── pure_vfe/                  # Legacy no-autograd PureVFETransformer
+│   ├── core/                      # GaugeTransformerLM stack + shared gauge/VFE math
+│   │   ├── model.py               #   GaugeTransformerLM (encode -> blocks -> decode)
+│   │   ├── blocks.py              #   GaugeTransformerBlock, MahalanobisNorm, RMSNorm
+│   │   ├── block_config.py        #   BlockConfig — gauge group structure
+│   │   ├── variational_ffn.py     #   VariationalFFNDynamic (natural-gradient E-step)
+│   │   ├── attention.py           #   Transport + KL-attention kernels
+│   │   ├── prior_bank.py          #   PriorBank (token priors + KL decode)
+│   │   ├── em_modes.py            #   em_mode gradient-flow selector
+│   │   ├── gauge_preconditioner.py#   phi preconditioning (clip / Cartan / Killing)
+│   │   ├── connection.py          #   Opt-in non-flat connection (research)
+│   │   ├── transport_ops.py       #   Sandwich transport, retraction utilities
+│   │   ├── kl_computation.py      #   Gaussian KL kernels
+│   │   ├── vfe_gradients.py       #   Analytic gradient kernels
+│   │   └── types.py               #   BeliefState
+│   ├── training/                  # Training infrastructure (experiment_runner, config)
 │   ├── analysis/                  # Holonomy, scaling, semantics, publication metrics
 │   ├── visualization/             # Plotting utilities
 │   ├── data/                      # datasets.py (WikiText, wiki-ja), synthetic_gauge.py
-│   ├── training/                  # Legacy training infrastructure (core/-oriented)
 │   ├── baselines/                 # Standard transformer + FLOPs counter
-│   └── utils/                     # Checkpoint, evaluation (core/-oriented)
+│   └── utils/                     # Checkpoint, evaluation
 ├── math_utils/                    # Generators, transport, push-pull, numerical helpers
-├── scripts/                       # Analysis and verification scripts (core/-oriented)
-├── tests/                         # Test suite (includes test_vfe_package, test_aif_package)
+├── scripts/                       # Analysis and verification scripts
+├── tests/                         # Test suite
 ├── Attention/                     # Manuscripts (GL(K)_attention, supplementary, PIFB)
-├── generate.py                    # Legacy core/ text generation
-├── inference.py                   # Legacy core/ inference
+├── train_publication.py           # see transformer/train_publication.py (CLI entry)
+├── generate.py                    # Text generation
+├── inference.py                   # Inference
 ├── pyproject.toml                 # Dependency and packaging declaration
 └── CLAUDE.md                      # Architecture reference and code standards
 ```
@@ -294,14 +249,12 @@ V13_Gauge_Transformer/
 
 ## Numerical stability
 
-Large gauge groups are kept stable by scaling the attention logits as `-E_ij / (kappa * sqrt(K))` to prevent softmax saturation, clamping the KL at a dimension-dependent ceiling, applying per-parameter trust regions on the `(mu, sigma, phi)` updates, and transporting through matrix exponentials that are guaranteed to have positive determinant (so no re-orthogonalization is needed; only invertibility is required). The covariance trust region `e_sigma_q_trust` clamps the whitened step `delta_sigma / sigma`, and the opt-in helpers in `transformer/vfe/_numerics.py` add NaN sentinels and a pre-exponential Frobenius clamp without changing the default numerical path.
+Large gauge groups are kept stable by scaling the attention logits as `-E_ij / (kappa * sqrt(K))` to prevent softmax saturation, clamping the KL at a dimension-dependent ceiling, applying per-parameter trust regions on the `(mu, sigma, phi)` updates, and transporting through matrix exponentials that are guaranteed to have positive determinant (so no re-orthogonalization is needed; only invertibility is required). The σ retraction applies a trust region to the whitened step `delta_sigma / sigma`, and the SPD eigenvalue path uses a gap-regularized backward to avoid degenerate-eigenvalue gradient blow-up.
 
 
-## Legacy and research variants
+## Research variants
 
-The `transformer/core/` package is the original `GaugeTransformerLM` implementation, a configuration-dictionary-driven model with a large `BlockConfig` surface, the five-mode `em_mode` gradient-flow selector, deep-equilibrium implicit differentiation, closed-form and Hebbian variants, and the optional reflection-augmented O(K) transport. The `vfe/` package deliberately drops all of these in favor of a single E-step path, but it imports the stateless mathematical kernels from `core/` (transport, KL computation, the shared `BeliefState` type, preconditioners, and retraction utilities), so `core/` is a dependency of `vfe/` and is not removable.
-
-The `transformer/pure_vfe/` package is an independent implementation with no `nn.Module`, no autograd, and no backpropagation: the model is a bank of Gaussian priors, the forward pass is the E-step, and learning is an analytic natural-gradient M-step on the priors and gauge frames. It serves as the most literal expression of the variational principle and is configured through its own `PureVFEConfig`.
+`GaugeTransformerLM` is configuration-driven through a large `BlockConfig` surface. Beyond the default amortized `ift_phi` path it supports deep-equilibrium implicit differentiation, closed-form and Hebbian belief updates, the reflection-augmented O(K) transport, and an opt-in non-flat edge-local connection (`transformer/core/connection.py`), whose holonomy is the subject of the companion paper. The GL(K) manuscript proves that the default flat connection has vanishing holonomy (Lemma `thm:vanishing_holonomy`, `GL(K)_attention.tex:641`).
 
 
 ## Citation

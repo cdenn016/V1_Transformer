@@ -64,7 +64,6 @@ from pathlib import Path
 #   'standard'   - Dot-product attention + MLP baseline (backprop)
 #   'em'         - Gauge VFE + IFT implicit differentiation M-step (backprop)
 #   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
-#   'pure_vfe'   - Pure natural gradient E/M (no autograd)
 #   'hybrid'
 
 # =================================================================
@@ -145,7 +144,7 @@ EM_CONFIG = {
     
     'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
-  
+    'causal_lower_triangle':      False,
 
     'kappa_beta':                 1,
     'kappa_warmup_steps':         2000,  # freeze kappa for first n steps
@@ -259,7 +258,7 @@ EM_CONFIG = {
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
 
     # === Phi gradient geometry ===
-    'phi_natural_gradient':       'killing',
+    'phi_natural_gradient':       'killing', #'killing_per_block', 'pullback', 'cartan', 'clip'
 
     # === Position encoding ===
     'use_rope':                   True,
@@ -323,11 +322,12 @@ EM_CONFIG = {
     'sigma_max':                   12.0,
     'grad_clip':                   50.0,
     'hidden_dim':                  508,
-    'gauge_covariant_ridge':       False,
+    
     
     'spd_floor_mode':             'eigclamp',      # new default, can omit
     'enable_spd_diagnostics':     True,    # shows spd_eig_min_t/q and cond
     'assert_finite_loss':         True,        # raise instead of silent skip
+    'gauge_covariant_ridge':       True,
     
     'warmup_steps':                100,
     'num_workers':                 0,   # 0 is faster on Windows (spawn multiprocessing overhead)
@@ -463,130 +463,6 @@ HEBBIAN_CONFIG = {
   
     'debug_vfe_grads':             False,
     'verbose_diagnostics':         False,
-}
-
-
-# =============================================================================
-# CONFIG: PURE VFE — No backprop, natural gradient only (mode='pure_vfe')
-# =============================================================================
-# The purest realization of the free energy principle for sequence modeling.
-# NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
-# learning — operates through natural gradient descent on the gauge-covariant
-# VFE with analytic closed-form gradients.
-#
-# Architecture:
-#   - Model: Prior bank {N(μ_v, Σ_v), Ω_v} per vocabulary token
-#   - Inference: E-step VFE descent (replaces forward pass)
-#   - Learning: M-step natural gradient on prior bank
-#   - Attention: KL-divergence based with gauge transport
-#   - No linear projections, no output head — logits = −KL(q||π_v)
-# =============================================================================
-PURE_VFE_CONFIG = {
-    # Belief geometry
-    'vocab_size': 50257,
-    'belief_dim': 32,             # K: full belief dimension
-    'n_heads':    4,                 # H: number of heads (block-diagonal)
-    'head_dim':   8,                # K_h = K / H
-
-    # Sequence
-    'max_seq_len': 64,           # Match other modes
-    'batch_size':  32,
-    'max_steps':   30000,
-
-    # VFE descent
-    'n_esteps': 24,                  # Iterations of VFE descent (replaces "depth")
-    'tau':      None,                # Attention temperature (defaults to √K_h)
-
-    # Per-variable natural gradient learning rates
-    'mu_q_lr':    0.1,               # Belief mean step size
-    'sigma_q_lr': 0.005,             # Belief covariance step size
-    'phi_lr':     0.1,               # Gauge connection step size (all frames)
-    'mu_p_lr':    0.05,              # Prior mean step size
-    'sigma_p_lr': 0.01,              # Prior covariance step size
-
-    # Prior precision (state-dependent α)
-    'alpha_b0': 1.0,
-    'alpha_c0': 1.0,
-
-    # Hyper-prior regularization
-    'hyper_var': 100.0,
-
-
-    # Initialization
-    'sigma_init':       1.0,
-    'omega_init_scale': 0.01,
-
-    # Numerical stability
-    'grad_clamp':      1e3,
-
-    # Trust regions
-    'trust_region_mu':    2.0,
-    'trust_region_sigma': 0.15,
-    'trust_region_omega': 0.3,
-
-    # SPD retraction
-    'spd_eps_min':   1e-3,
-    'spd_kappa_max': 1e4,
-    'spd_exp_clip':  20.0,
-
-    # Prior safeguards
-    'prior_sigma_floor': 0.5,
-    'prior_mu_max_norm': 10.0,
-    'm_step_trust_mu':   0.5,
-
-    # Gauge frame parameterization
-    # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
-    'gauge_param':    'omega',
-    'omega_cond_max': 100.0,
-
-    # Observation gradient options
-    'sigma_obs_grad':   'none',
-
-    # Recovery
-    'nan_recovery':     True,
-
-    # Causal masking
-    'causal':           True,
-
-    # --- New features ---
-
-    # RoPE: SO(2)^{K/2} position rotations on μ before KL scoring
-    'use_rope':         True,
-    'rope_base':        75.0,
-
-    # Adam momentum in M-step (variance reduction across batches)
-    'use_adam_m_step':  True,
-    'adam_beta1':       0.9,
-    'adam_beta2':       0.999,
-    'adam_eps':         1e-8,
-
-    # LR scheduling (warmup + cosine decay)
-    'warmup_steps':     500,
-    'lr_schedule':      'cosine',
-    'min_lr_ratio':     0.1,
-
-    # Diagonal covariance (faster, optional)
-    'diagonal_covariance': True,
-
-    # LayerNorm (optional, for testing)
-    'use_layernorm':    False,
-
-    # Holonomy monitoring (measure gauge curvature)
-    'use_holonomy':     False,
-
-    # Device & kernels
-    'device': 'cuda',
-    'use_cuda_kernels': True,
-
-    # Gradient accumulation (K micro-batches per M-step)
-    'grad_accum_steps':    1,
-
-    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
-    'log_interval':        100,
-    'eval_interval':       1000,
-    'checkpoint_interval': 25000,
-    'num_workers':         0,
-    'figure_interval':     2000,   # Save attention/diagnostic figures every N steps
 }
 
 
@@ -795,7 +671,6 @@ HYBRID_CONFIG = {
 
 from transformer.training.experiment_runner import (
     run_single_experiment,
-    run_pure_vfe_experiment,
     PublicationTrainer,
     PublicationMetricsTracker,
     LayerDiagnosticsTracker,
@@ -814,8 +689,8 @@ from transformer.training.experiment_runner import (
 def main():
     # DOCUMENTED EXCEPTION to CLAUDE.md "NO CLI ARGUMENTS" hard constraint.
     # This entry point is the single sanctioned argparse user of the project —
-    # it spans seven publication training modes (standard / em / hebbian /
-    # pure_vfe / attention-only / ffn-only / hybrid) and switches between
+    # it spans six publication training modes (standard / em / hebbian /
+    # attention-only / ffn-only / hybrid) and switches between
     # them based on the user's --mode selection. New entry points must still
     # follow the click-to-run pattern; this one is grandfathered for
     # publication-run convenience and should not be replicated.
@@ -832,15 +707,13 @@ def main():
                             'em',                       # Gauge VFE + IFT implicit differentiation M-step
                             # Gauge VFE + P-flow/delta-rule (no backprop)
                             'hebbian',
-                            # Pure natural gradient (no autograd)
-                            'pure_vfe',
                             # Peer review ablations
                             # (M2b) attention-only at d_model=90
                             'standard_attn_only',
                             # Hybrid: gauge KL-attention + PriorBank + standard GELU FFN
                             'hybrid',
                         ],
-                        help='Training mode: standard, em, amortized, hebbian, pure_vfe')
+                        help='Training mode: standard, em, amortized, hebbian')
 
     # System
     parser.add_argument('--device', type=str, default='auto')
@@ -895,37 +768,9 @@ def main():
         config = HYBRID_CONFIG.copy()
         ffn_mode = 'hybrid'
 
-    elif mode == 'pure_vfe':
-        config = PURE_VFE_CONFIG.copy()
-        config['dataset'] = args.dataset
-
-        if args.dataset in ('wiki-ja', 'wiki-en') and config['vocab_size'] == 50257:
-            config['vocab_size'] = 100277
-            print(
-                f"\n[{args.dataset}] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
-
-        result = run_pure_vfe_experiment(
-            config=config,
-            device=device,
-            checkpoint_dir=checkpoint_dir,
-            args=args,
-        )
-
-        if result is not None:
-            result_file = checkpoint_dir / f"result_{mode}.json"
-            result_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(result_file, 'w') as f:
-                json.dump(result, f, indent=2)
-            print(f"\nSaved result: {result_file}")
-
-        print("\n" + "="*70)
-        print("SESSION COMPLETE")
-        print("="*70)
-        return
-
     else:
         print(f"\nError: Unknown mode \'{mode}\'")
-        print("Valid modes: standard, em, hebbian, hybrid, pure_vfe, standard_attn_only")
+        print("Valid modes: standard, em, hebbian, hybrid, standard_attn_only")
         return
 
     config['dataset'] = args.dataset

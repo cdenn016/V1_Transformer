@@ -10,11 +10,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug. diagonal approximation is allowable for speed
 
-**E-STEP MUST NOT SEE TARGETS**
 
-**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'` (the diagonal-σ path forbids non-`'off'` values in `vfe/config.py::__post_init__`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation.
-
-**KNOWN GAP — omega_direct × exact full-cov sandwich**: `gauge_parameterization='omega_direct'` (canonical group-level Lie-group retraction `Ω^{t+1} = Ω^t · exp(-η · ∇̃F)` per PIFB:2566-2570) requires `diagonal_covariance=True` (`vfe/config.py:566-573`); `exact_full_cov_decode=True` (gating the exact `Ω·Σ·Ω^T` sandwich at `vfe/prior_bank.py:326-329` per Nakahara 2003 §10.3 / PIFB:1619-1626) requires `diagonal_covariance=False` (`vfe/config.py:484-507`). The two canonical forms therefore cannot coexist in a single `VFEConfig`. Per-construction reading: each canonical form is independently reachable under its own toggle. Single-config reading: the joint canonical form is not yet reachable; lifting it would require implementing the open `NotImplementedError` at `vfe/non_flat.py:500-505` (per-pair logdet-aware sandwich KL kernel) and removing the `vfe/config.py:566-573` guard. See `docs/debates/2026-05-20-single-config-mutual-exclusion/04_verdict.md` for the verdict and `docs/debates/2026-05-20-vfe-module-purity-for-pifb/05_action.md` for the framing.
+**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'`, RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `transformer/core/blocks.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Setting `rope_full_gauge != 'off'` instead lifts σ to full and applies `R Σ Rᵀ` (`transformer/core/block_config.py::__post_init__` warns about the O(K²) cost). Acceptable as documented research limitation.
 
 **Figures**: ALL Figures should be publication quality by default.
 
@@ -22,11 +19,11 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **Post Edit Policy**:  Always write a post-edit description of all changes made to the codebase as a .md.  The date the edits were made should be in the naming convention of the document.  there should be only one document per day.  you should update the same document as edits are made
 
-**ALWAYS PLAN MODE FIRST**
+**ALWAYS PLAN FIRST**
 
 **There should ALWAYS exist a theoretically/mathematically "pure" path under appropriate toggles.**  Computationally extreme paths should be 'opt in' toggles and clearly documented.
 
-**Check for sub-agents, skills, and plug-ins before deploying your own. 
+**Check for sub-agents, skills, and plug-ins before deploying your own** 
 
 **check claude-mem for prior session context when resuming work on a topic**
 
@@ -34,6 +31,9 @@ Before you say the fix is done: (1) open my active config file, (2) trace every 
 
 **CODE FOCUS** when investigating and/or auditing the codebase do NOT rely on code comments....focus on the actual code and paths
 
+**user has RTX5090 GPU** - use cuda and code accordingly where applicable
+
+**dont rely on codebase comments when auditing the codebase.  focus on the actual code and paths**
 
 ##Agent policy
 
@@ -77,7 +77,7 @@ F = alpha * KL(q_i || p_i)                                          # self-coupl
 
 **Timescales**: Fast E-step (belief q inference per forward pass) / Slow M-step (prior/model s,p parameter learning via backprop) / Static hyper-prior h (frozen at init, never learned). sigma_p is an M-step parameter — the E-step reads it but must not write gradients to it (detached in VFE iterations). sigma_ce_scale controls the residual CE→sigma_p gradient in decode (0.0 = fully detached).
 
-**E-step LRs are decoupled (2026-05-13 onward).** `e_mu_lr` controls the μ retraction step size; `e_sigma_lr` controls the σ retraction step size; `e_phi_lr` controls the φ retraction step size. All three are constant across the inner E-step iterations (no cosine decay in the current implementation — the `vfe_default` profile applies the same step size at every iteration). Earlier code (pre-2026-05-13) used `sigma_lr` only as a trust-region clamp on the whitened tangent δσ/σ, leaving the μ LR (`self.lr`) as the actual σ step — sweeping `e_sigma_lr` produced no visible effect when the clamp wasn't binding. The trust-region clamp is now a separate field `e_sigma_q_trust` (default 5.0, matches the historical `retract_spd_diagonal_torch` default). The σ retraction is `σ_new = σ · exp(e_sigma_lr · clamp(δσ/σ, ±e_sigma_q_trust))`.
+**E-step LRs.** The μ retraction step size is `self.lr`; the σ retraction step size is `sigma_lr`, decoupled from the μ LR and independently learnable via the `raw_sigma_lr` Parameter in `VariationalFFNDynamic` (`transformer/core/variational_ffn.py`, 2026-05-13 onward). Both follow the same cosine decay over training (the σ step recovers the decay factor as `effective_lr / self.lr`). A separate trust-region clamp bounds the whitened tangent δσ/σ before the σ retraction.
 
 **Attention sublayer is OPTIONAL.** The pure VFE architecture (`skip_attention=True`) is the theoretically clean form: the FFN's E-step computes its own β internally and updates beliefs. The separate attention sublayer at the top of `GaugeTransformerBlock.forward` is an engineering heuristic (β-weighted message aggregation through `W_O · μ_agg` residual). `skip_attention=True` works cleanly with `em_mode='ift_phi'` (default). It is INCOMPATIBLE with the detaching EM modes `em_phi_p`, `em_phi_q` — those modes detach σ_p and/or φ inside the FFN, so the attention sublayer is their sole autograd path back to `sigma_embed` and `phi_embed`. With `skip_attention=True` AND a detaching mode, σ_embed and φ_embed silently stay frozen at initialization. `BlockConfig.__post_init__` warns when this combination is detected.
 
@@ -88,9 +88,6 @@ F = alpha * KL(q_i || p_i)                                          # self-coupl
 | `'ift_phi'` (default) | attached | attached | full IFT | attached |
 | `'em_phi_q'` | detached | detached | evolves in E-step | all detached |
 | `'em_phi_p'` | detached | detached | frozen in E-step | mu,sigma detached |
-| `'vfe_default'` (transformer/vfe/) | attached | frozen at embedding¹ | full autograd | attached |
-
-¹ The `transformer/vfe/` package operates in its own gradient profile that does not correspond to any of the three `em_mode` values above. `mu_p` is attached (the previous layer's posterior `mu_q` becomes the next layer's `mu_p` via `vfe/stack.py`); `sigma_p` is structurally frozen at the embedding value when `prior_handoff_sigma=0` (the default); `phi` is updated each E-step iteration via `_update_phi` in `vfe/e_step.py`, which constructs a fresh detached leaf `phi_for_grad = phi.detach().requires_grad_(True)` for the local alignment-loss backward, then retracts `phi` and reassigns it. The iteration sequence as a whole is autograd-tracked, but `phi` is not globally cloned per outer iteration. The `vfe/` package does not currently honor `em_mode` switching — it is hardwired to this profile. Selecting any other `em_mode` requires routing through the legacy `transformer/core/variational_ffn.py` path.
 
 ## Communication Style
 
