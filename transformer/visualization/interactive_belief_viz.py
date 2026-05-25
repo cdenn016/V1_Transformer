@@ -719,64 +719,6 @@ def shap_embedding_attribution(
     }
 
 
-def shap_vfe_component_attribution(
-    model,
-    input_ids: torch.Tensor,
-    component_names: Optional[List[str]] = None,
-    save_path: Optional[Path] = None,
-) -> Optional[Dict[str, Any]]:
-    """SHAP attribution for VFE loss components.
-
-    Explains how KL divergence, log-likelihood, and gauge transport
-    terms each contribute to the model's predictions. This is the
-    key interpretability analysis for the gauge-theoretic framework.
-    """
-    if not SHAP_AVAILABLE or not MATPLOTLIB_AVAILABLE:
-        warnings.warn("shap and matplotlib required")
-        return None
-
-    if component_names is None:
-        component_names = ['KL divergence', 'Log-likelihood', 'Gauge transport', 'Prior term']
-
-    model.eval()
-    device = next(model.parameters()).device
-
-    # Extract VFE components from a forward pass
-    with torch.no_grad():
-        input_tensor = input_ids.to(device)
-        output = model(input_tensor)
-
-        # Collect available VFE components from model diagnostics
-        components = []
-        if hasattr(output, 'vfe_components'):
-            for name in component_names:
-                val = output.vfe_components.get(name, 0.0)
-                components.append(float(val) if torch.is_tensor(val) else float(val))
-        else:
-            # Fallback: use loss decomposition if available
-            components = [1.0] * len(component_names)
-
-    component_array = np.array(components).reshape(1, -1)
-
-    # For the SHAP plot, show the component magnitudes as a bar chart
-    fig, ax = plt.subplots(figsize=(8, 5))
-    colors = ['#E74C3C', '#3498DB', '#2ECC71', '#F39C12'][:len(component_names)]
-    ax.bar(component_names, components, color=colors, edgecolor='black', linewidth=0.5)
-    ax.set_ylabel('Component Value', fontsize=12)
-    ax.set_title('VFE Component Decomposition', fontsize=14, fontweight='bold')
-    plt.xticks(rotation=15)
-    plt.tight_layout()
-
-    if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
-
-    return {
-        'component_names': component_names,
-        'component_values': components,
-        'figure': fig,
-    }
-
-
 # ============================================================================
 # Interactive Attention + Belief Heatmap
 # ============================================================================

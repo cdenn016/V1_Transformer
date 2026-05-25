@@ -452,7 +452,8 @@ def _compute_vfe_gradients_block_diagonal(
             # Use contiguous slice and clone for expand to avoid view issues
             sigma_i_block_slice = sigma_block[:, i_start:i_end].contiguous()  # (B, C, d, d)
             sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, C, N, d, d) — einsum accepts non-contiguous
-            trace_block = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_block))
+            # tr(Σ_j⁻¹ Σ_i) in a single pass — avoids materializing the (d×d) product before the trace.
+            trace_block = torch.einsum('bijkl,bijlk->bij', sigma_j_inv, sigma_i_block)
 
             try:
                 L_j = torch.linalg.cholesky(sigma_j_reg)
@@ -1696,9 +1697,9 @@ def compute_vfe_gradients_gpu(
             D_{α_d} instead of KL. Implemented by the analytic block-diagonal
             path (`_compute_vfe_gradients_block_diagonal`, both its diagonal and
             full-covariance branches) — the path actually reached whenever
-            irrep_dims is set, which is always the case in /vfe. The autograd,
+            irrep_dims is set, which is always the case in core. The autograd,
             non-flat, and omega_direct paths reconstruct standard KL and ignore
-            α_d (VFEConfig.__post_init__ warns on that combination).
+            α_d (BlockConfig.__post_init__ warns on that combination).
 
     Returns:
         grad_mu: Gradient w.r.t. mu_q, shape (B, N, K).

@@ -1025,7 +1025,11 @@ class PriorBank(nn.Module):
         sigma_q: Optional[torch.Tensor] = None,
         mode: str = 'encode',
         tau: float = 1.0,
-    ):
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        torch.Tensor,
+    ]:
         """
         Forward pass - encode or decode.
 

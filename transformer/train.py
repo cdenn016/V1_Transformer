@@ -278,10 +278,6 @@ def compute_free_energy_loss(
     include_attention_entropy: bool = True,  # Add κ·Σβ·log(β/π) to F (manuscript eq:free_energy_functional_final). (grad through softmax)
     normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
     ce_label_smoothing: float = 0.0,  # Label smoothing on loss-path CE only; ce_loss_raw stays un-smoothed for PPL
-    # Backward-compatible aliases (deprecated)
-    alpha: float = None,
-    lambda_beta: float = None,
-    alpha_phi: float = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
@@ -321,14 +317,6 @@ def compute_free_energy_loss(
         total_loss: Scalar loss for backprop
         metrics: Dict with loss components
     """
-    # Backward-compatible aliases: old callers may pass alpha=, lambda_beta=, alpha_phi=
-    if alpha is not None:
-        M_alpha = alpha
-    if lambda_beta is not None:
-        M_beta = lambda_beta
-    if alpha_phi is not None:
-        mass_phi = alpha_phi
-
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================

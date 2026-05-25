@@ -39,7 +39,7 @@ class TrainingConfig:
     # ==========================================================================
     # Training Mode
     # ==========================================================================
-    training_mode: Literal['standard', 'vfe_dynamic', 'pure_fep'] = 'vfe_dynamic'
+    training_mode: Literal['standard', 'vfe_dynamic'] = 'vfe_dynamic'
 
     # ==========================================================================
     # Parameter Grouping Strategy
@@ -244,7 +244,8 @@ class TrainingConfig:
     # ==========================================================================
     use_p_flow: bool =           False          # EMA update of token embeddings toward successful beliefs
     p_flow_ema_decay: float =    0.99
-    sigma_ce_scale: float =      0.7      # Scale CE gradient to sigma_p (0=detach, 1=full)
+    sigma_ce_scale: float =      0.7      # Checkpoint round-trip slot only; the live runtime value comes from the
+                                          # entry-point flat CONFIG['sigma_ce_scale'] consumed by model.py (PriorBank). Tune it there.
     detach_phi: bool =           False           # Detach phi from backprop (enables backprop-free phi)
     use_delta_rule_w_out: bool = False # Delta rule for W_out (backprop-free)
     delta_rule_lr: float =       0.001
@@ -328,25 +329,6 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         M_output_lr=0.001,
         M_alpha=0.1,
         M_beta=1.0,
-        lambda_gamma=0.0,
-    )
-    for key, value in overrides.items():
-        setattr(config, key, value)
-    return config
-
-
-def get_pure_fep_config(**overrides) -> TrainingConfig:
-    """
-    Get configuration for Pure VFE transformer (no autograd, no optimizer).
-
-    PureFEP handles its own VFE loss and natural gradient updates internally,
-    so M_alpha/M_beta/lambda_gamma are set to 0 (unused by Lightning wrapper).
-    """
-    config = TrainingConfig(
-        training_mode='pure_fep',
-        use_param_groups=False,
-        M_alpha=0.0,
-        M_beta=0.0,
         lambda_gamma=0.0,
     )
     for key, value in overrides.items():

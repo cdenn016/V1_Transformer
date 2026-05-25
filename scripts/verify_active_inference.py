@@ -272,7 +272,7 @@ def measure_efe_grad_norm(cfg, input_ids):
     """Directly call the EFE helper on a representative belief to measure
     its gradient contribution.  Avoids the internal _VFE_GRAD_DEBUG dict
     which gets reset between iterations."""
-    from transformer.core.variational_ffn import _compute_active_inference_gradient
+    from transformer.core.active_inference import _compute_active_inference_gradient
 
     torch.manual_seed(0)
     model = GaugeTransformerLM(cfg).eval()
