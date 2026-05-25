@@ -2309,7 +2309,15 @@ def _compute_rope_full_gauge_gradient_per_head(
         sigma_var = sigma_h.detach().to(_f32).requires_grad_(True)
         mu_p_h_d = mu_p_h.detach().to(_f32)
         sigma_p_h_d = sigma_p_h.detach().to(_f32)
-        phi_d = phi.detach().to(_f32)
+        # Keep phi ATTACHED to its autograd graph (phi_embed / pos_phi). The
+        # E-step descent direction dF/dmu, dF/dsigma is a function of phi
+        # through Omega = exp(phi.G); the M-step learns phi_embed by
+        # backprop-through-the-E-step, so the returned grads must remain
+        # differentiable w.r.t. phi (create_graph below). When phi does not
+        # require grad (eval / frozen phi) we fall back to the historical
+        # detached fast path.
+        _need_phi_graph = bool(phi.requires_grad)
+        phi_var = phi.to(_f32)
 
         # Lift diagonal sigma to full covariance for the rope rotation,
         # or pass through if already full.
@@ -2324,27 +2332,31 @@ def _compute_rope_full_gauge_gradient_per_head(
 
         # Compute per-head Ω^learned via fused matrix exp pairs.
         #
-        # CRITICAL: we MUST detach the cached exp_phi/exp_neg_phi tensors.
-        # When update_phi_per_iteration=False and amortized_inference=True,
-        # the outer caller passes cached pairs that are STILL connected to
-        # the phi autograd graph (phi was NOT detached before caching).  If
-        # we use them as-is in the autograd-traced einsum below, the
-        # torch.autograd.grad(retain_graph=False) call at the bottom of
-        # this function will traverse and FREE the phi → exp_phi → Omega
-        # subgraph.  The subsequent M-step loss.backward() would then fail
-        # with "Trying to backward through the graph a second time" or
-        # "saved tensors freed" when it encounters the same exp_phi tensor
-        # from any other downstream path (e.g., the attention sublayer).
-        # Detaching here is semantically correct: phi is treated as a
-        # constant within the E-step gradient computation (the grad is
-        # w.r.t. mu and sigma only).
-        if cached_block_exp_pairs is not None:
+        # When the M-step needs phi's gradient (_need_phi_graph), rebuild the
+        # exp pair from an ATTACHED phi leaf — a FRESH, function-local subgraph
+        # that is not shared with any other downstream path. This is what makes
+        # the create_graph=True autograd.grad below safe: the cached pairs the
+        # caller may pass are shared with other consumers (e.g. the attention
+        # sublayer / next iteration), and traversing/retaining a shared
+        # phi→exp_phi→Omega subgraph here would risk double-backward / freed-
+        # saved-tensor errors. A fresh local subgraph cannot collide.
+        #
+        # When phi does not require grad, keep the historical detached fast
+        # path: phi is a constant within the E-step gradient (grad w.r.t. mu
+        # and sigma only), and the cache avoids a redundant matrix_exp.
+        if _need_phi_graph:
+            bep = fused_block_matrix_exp_pairs(
+                phi_var, gen_h, [d_h],
+                enforce_orthogonal=enforce_orthogonal,
+            )
+            exp_phi_h, exp_neg_phi_h = bep[0]
+        elif cached_block_exp_pairs is not None:
             exp_phi_h, exp_neg_phi_h = cached_block_exp_pairs[0]
             exp_phi_h = exp_phi_h.detach()
             exp_neg_phi_h = exp_neg_phi_h.detach()
         else:
             bep = fused_block_matrix_exp_pairs(
-                phi_d, gen_h, [d_h],
+                phi_var, gen_h, [d_h],
                 enforce_orthogonal=enforce_orthogonal,
             )
             exp_phi_h, exp_neg_phi_h = bep[0]
@@ -2512,9 +2524,19 @@ def _compute_rope_full_gauge_gradient_per_head(
 
         # Autograd through F_total to get gradients w.r.t. raw mu and raw sigma.
         # This handles the chain rule through R Σ R^T automatically.
+        # create_graph=_need_phi_graph keeps dF/dmu, dF/dsigma differentiable
+        # w.r.t. phi (second-order), so the outer M-step loss.backward() can
+        # reach phi_embed / pos_phi through the retracted beliefs — matching
+        # the analytic block-diagonal path. When phi is frozen, this stays
+        # first-order (the historical fast path).
         grad_mu_h, grad_sigma_h = torch.autograd.grad(
-            F_total, [mu_var, sigma_var], create_graph=False, retain_graph=False
+            F_total, [mu_var, sigma_var],
+            create_graph=_need_phi_graph, retain_graph=_need_phi_graph,
         )
 
-    return beta.detach(), grad_mu_h.detach(), grad_sigma_h.detach()
+    # beta is detached (used as attention weights, not a gradient route — the
+    # alignment term already weights KL by beta.detach()). grad_mu_h /
+    # grad_sigma_h are returned WITHOUT detach: when _need_phi_graph they carry
+    # the phi subgraph the M-step needs; otherwise they are already graph-free.
+    return beta.detach(), grad_mu_h, grad_sigma_h
 

@@ -21,6 +21,7 @@ No neural-network components; pure NumPy / SciPy linear algebra.
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -273,7 +274,19 @@ def phi_vector_distances(
 def _safe_logm(M: np.ndarray) -> np.ndarray:
     """Real matrix logarithm; returns a NaN-filled array on non-finite results."""
     try:
-        L = logm(M.astype(np.float64))
+        # scipy.linalg.logm emits a conservative RuntimeWarning ("logm result
+        # may be inaccurate") whenever its forward-error estimate exceeds a tiny
+        # threshold, which fires at machine-precision noise (~1e-13) for these
+        # well-conditioned SPD/transport matrices. The finiteness check below is
+        # the real correctness guard; silence the cosmetic warning. (disp=False
+        # is deprecated in scipy 1.16 and removed in 1.18, so filter instead.)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="logm result may be inaccurate",
+                category=RuntimeWarning,
+            )
+            L = logm(M.astype(np.float64))
         L = np.asarray(L).real
         if not np.isfinite(L).all():
             return np.full_like(M, np.nan, dtype=np.float64)
