@@ -358,7 +358,6 @@ class PriorBank(nn.Module):
         r"""Per-block sl(K) projection / soft trace clamp on the token gauge
         frames :math:`\phi`.
 
-        Mirrors :meth:`transformer.vfe.prior_bank.VFEPriorBank._apply_phi_det_control`.
         Called on every non-dummy ``phi_embed(token_ids)`` lookup so that the
         token phi entering pos-encoding and downstream attention/transport is
         already traceless per block.  A no-op when neither toggle is enabled,

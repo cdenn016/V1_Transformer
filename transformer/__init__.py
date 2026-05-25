@@ -23,8 +23,8 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", category=U
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=UserWarning, module="triton")
 
 # =============================================================================
-# Core Model, Training, Data — wrapped in try/except so that lightweight
-# subpackages (e.g. pure_vfe) can be imported without full deps like scipy.
+# Core Model, Training, Data — wrapped in try/except so that core
+# imports degrade gracefully when optional heavy deps (e.g. scipy) are missing.
 # =============================================================================
 try:
     from transformer.core.model import GaugeTransformerLM
@@ -72,5 +72,5 @@ try:
         'create_char_dataloaders',
     ]
 except ImportError:
-    # Allow pure_vfe subpackage to be imported without full deps (scipy, etc.)
+    # Degrade gracefully when optional heavy deps (scipy, etc.) are unavailable.
     __all__ = []
