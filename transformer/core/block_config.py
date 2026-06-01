@@ -284,45 +284,48 @@ class BlockConfig:
             self.evolve_phi = False
             self.evolve_phi_e_step = False
 
-        # Detaching EM modes are incompatible with skip_attention=True. These
-        # modes (em_phi_p, em_phi_q) detach σ_p and/or φ inside the FFN's
-        # E-step and rely on the attention sublayer as the sole autograd path
-        # back to σ_embed and φ_embed. With skip_attention=True there is no
-        # attention sublayer, so σ and φ embeddings receive no gradient and
-        # stay frozen at initialization — a silent failure that produces
-        # zero-variance Σ across tokens and overlapping φ/Ω clusters in
-        # token-level visualizations.
-        # Compatible mode for skip_attention=True: 'ift_phi'.
-        _detaching_modes = {'em_phi_p', 'em_phi_q'}
-        if self.skip_attention and self.em_mode in _detaching_modes:
+        # The separate attention sublayer was removed on 2026-06-01: the block is
+        # always the pure-VFE form. skip_attention is retained as an (informational)
+        # field but is effectively always True. A config that explicitly requests
+        # skip_attention=False is asking for a behavior that no longer exists.
+        if not self.skip_attention:
             import warnings as _warnings
             _warnings.warn(
-                f"em_mode={self.em_mode!r} combined with skip_attention=True will "
-                f"silently freeze σ_embed and φ_embed at initialization: the FFN's "
-                f"E-step detaches σ_p and/or φ, and the attention sublayer (the only "
-                f"remaining autograd path to those embeddings) is disabled. Use "
-                f"em_mode='ift_phi' for a clean skip_attention=True configuration "
-                f"where the FFN E-step itself provides the M-step gradients for σ "
-                f"and φ.",
+                "skip_attention=False is no longer supported: the IrrepMultiHeadAttention "
+                "sublayer was removed (2026-06-01) and the block is always the pure-VFE "
+                "form (the FFN E-step computes its own β). Forcing skip_attention=True.",
                 UserWarning,
                 stacklevel=2,
             )
-        # use_equivariant_head_mixer requires the attention sublayer to run —
-        # the mixer lives inside IrrepMultiHeadAttention.forward (attention.py:2018).
-        # With skip_attention=True the attention forward is bypassed
-        # (blocks.py:774), so mixer_params get allocated, registered in the
-        # state_dict, counted as trainable, but never receive gradient. We
-        # force-disable the flag at block construction (blocks.py:501 reads
-        # the flag through a `not self.skip_attention` guard) and warn here so
-        # the user can correct their config.
-        if self.skip_attention and self.use_equivariant_head_mixer:
+            self.skip_attention = True
+
+        # Detaching EM modes (em_phi_p, em_phi_q) detach σ_p and/or φ inside the
+        # FFN's E-step and historically relied on the attention sublayer as the
+        # sole autograd path back to σ_embed and φ_embed. With the attention
+        # sublayer gone, those embeddings receive no gradient under a detaching
+        # mode and stay frozen at initialization — a silent failure (zero-variance
+        # Σ across tokens, overlapping φ/Ω clusters). The clean mode is 'ift_phi',
+        # where the FFN E-step itself provides the M-step gradients for σ and φ.
+        _detaching_modes = {'em_phi_p', 'em_phi_q'}
+        if self.em_mode in _detaching_modes:
             import warnings as _warnings
             _warnings.warn(
-                "use_equivariant_head_mixer=True combined with skip_attention=True "
-                "has no effect: the mixer lives inside IrrepMultiHeadAttention.forward, "
-                "which is bypassed when skip_attention=True. mixer_params will be "
-                "force-disabled at block construction. Set use_equivariant_head_mixer=False "
-                "to silence this warning.",
+                f"em_mode={self.em_mode!r} will silently freeze σ_embed and φ_embed at "
+                f"initialization: the FFN E-step detaches σ_p and/or φ, and the attention "
+                f"sublayer that used to provide the only autograd path to those embeddings "
+                f"has been removed. Use em_mode='ift_phi' for a working configuration.",
+                UserWarning,
+                stacklevel=2,
+            )
+        # use_equivariant_head_mixer lived inside IrrepMultiHeadAttention.forward,
+        # which no longer exists. The flag is now always a no-op; the
+        # post-FFN use_block_equivariant_mixer is the live Schur-commutant mixer.
+        if self.use_equivariant_head_mixer:
+            import warnings as _warnings
+            _warnings.warn(
+                "use_equivariant_head_mixer=True has no effect: the mixer lived inside the "
+                "now-removed attention sublayer. Use use_block_equivariant_mixer=True for "
+                "the post-FFN Schur-commutant mixer instead.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -490,7 +493,10 @@ class BlockConfig:
                                         # for deep unnormalised stacks but empirically worse
                                         # for single-layer LayerNorm'd configs (see
                                         # edits_2026-04-08.md Round 3).
-    skip_attention: bool = False       # Skip attention sublayer; VFE E-step computes its own β
+    skip_attention: bool = True        # Vestigial (attention sublayer removed 2026-06-01);
+                                        # the block is always the pure-VFE form. Kept for
+                                        # config/diagnostic compatibility. False is forced to
+                                        # True with a warning in __post_init__.
     closed_form_e_step: bool = False   # Use closed-form precision-weighted fixed point instead of gradient descent
 
     # === Memory efficiency ===
@@ -675,7 +681,7 @@ class BlockConfig:
             norm_type=config.get('norm_type', 'layernorm' if config.get('use_layernorm', True) else 'none'),
             use_residual=config.get('use_residual', True),
             residual_type=config.get('residual_type', 'additive'),
-            skip_attention=config.get('skip_attention', False),
+            skip_attention=config.get('skip_attention', True),
             closed_form_e_step=config.get('closed_form_e_step', False),
             # Memory efficiency
             gradient_checkpointing=config.get('gradient_checkpointing', False),

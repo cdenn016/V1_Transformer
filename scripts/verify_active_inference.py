@@ -100,7 +100,7 @@ TRAIN_CONFIG = {
     'gauge_mode':               'learned',
     'gauge_param':              'phi',
 
-    'skip_attention':           False,   #skips ad hoc attention sublayer
+    'skip_attention':           True,   # attention sublayer removed 2026-06-01; always pure-VFE
     'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
 
 

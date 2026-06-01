@@ -357,10 +357,10 @@ def test_block_config_mutual_exclusion_errors():
 # =============================================================================
 
 def test_block_config_skip_attention_warns_and_force_disables_mixer():
-    """Under skip_attention=True the attention forward is bypassed, so any
-    mixer_params would be dead weight. BlockConfig.__post_init__ warns; the
-    block-construction path (blocks.py:501) gates the flag on
-    `not self.skip_attention` so mixer_params are not allocated.
+    """use_equivariant_head_mixer lived inside the attention sublayer, which was
+    removed 2026-06-01. BlockConfig.__post_init__ now warns that the flag has no
+    effect (use_block_equivariant_mixer is the live replacement), and the built
+    block has no attention submodule.
     """
     from transformer.core.block_config import BlockConfig
     from transformer.core.blocks import GaugeTransformerBlock
@@ -377,24 +377,16 @@ def test_block_config_skip_attention_warns_and_force_disables_mixer():
             irrep_spec=[('fund', n_heads, d_head)],
             hidden_dim=64,
             n_layers=1,
-            skip_attention=True,
             use_equivariant_head_mixer=True,
             generators=generators,
         )
     msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
-    assert any("force-disabled" in m and "skip_attention" in m for m in msgs), (
-        f"Expected UserWarning about force-disable under skip_attention; got: {msgs}"
+    assert any("use_equivariant_head_mixer" in m and "no effect" in m for m in msgs), (
+        f"Expected UserWarning that use_equivariant_head_mixer has no effect; got: {msgs}"
     )
 
-    # Build the block and confirm the mixer is not active inside the attention
-    # submodule (allocated but inert if force-disable did not propagate would be
-    # `_mixer_active=True` with mixer_params populated).
+    # The attention sublayer no longer exists, so there is no in-attention mixer.
     block = GaugeTransformerBlock(cfg)
-    assert getattr(block.attention, '_mixer_active', False) is False, (
-        "skip_attention=True must force-disable the mixer in IrrepMultiHeadAttention; "
-        f"_mixer_active={block.attention._mixer_active}"
-    )
-    assert block.attention.mixer_params is None, (
-        "skip_attention=True must skip mixer_params allocation; "
-        f"got {block.attention.mixer_params}"
+    assert not hasattr(block, 'attention'), (
+        "attention sublayer should have been removed"
     )

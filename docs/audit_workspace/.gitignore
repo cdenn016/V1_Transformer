@@ -1,0 +1,7 @@
+# Pinned weights for the equivalence gates are regenerable via
+#   python equivalence_harness.py            (learned-gauge baseline)
+#   python equivalence_gate_constant.py      (constant-gauge baseline)
+# Keep the large binaries and bytecode out of history.
+*.pt
+*.weights.pt
+__pycache__/

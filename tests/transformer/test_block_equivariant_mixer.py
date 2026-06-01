@@ -241,15 +241,20 @@ def test_block_forward_skip_attention_true():
 
 
 def test_block_forward_skip_attention_false():
-    """Same but with `skip_attention=False` — mixer still runs post-FFN."""
+    """`skip_attention=False` is forced to True (attention sublayer removed
+    2026-06-01); the post-FFN block mixer still runs in the pure-VFE block."""
+    import warnings
     from transformer.core.blocks import GaugeTransformerBlock
 
     torch.manual_seed(4)
-    cfg = _make_block_cfg(skip_attention=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cfg = _make_block_cfg(skip_attention=False)
+    assert cfg.skip_attention is True  # forced by BlockConfig.__post_init__
     block = GaugeTransformerBlock(cfg)
     assert block.block_mixer is not None
-    # Attention mixer must remain disabled (mutual exclusion enforces this).
-    assert not getattr(block.attention, '_mixer_active', False)
+    # The attention sublayer no longer exists.
+    assert not hasattr(block, 'attention')
 
     B, N, K = 1, 4, cfg.embed_dim
     n_gen = cfg.generators.shape[0]

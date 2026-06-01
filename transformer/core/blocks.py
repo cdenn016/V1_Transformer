@@ -22,10 +22,11 @@ from typing import Optional, Tuple, List, Union
 
 from transformer.core.block_config import BlockConfig
 
-# Import our gauge attention
-from transformer.core.attention import IrrepMultiHeadAttention
-
-# Import VFE FFN directly (no wrapper)
+# Import VFE FFN directly (no wrapper). The separate attention sublayer was
+# removed 2026-06-01; the VFE E-step is the entire block. The
+# IrrepMultiHeadAttention class still lives in transformer.core.attention for
+# the standalone tests and the hybrid baseline, and its module-level helpers
+# (compute_attention_weights, etc.) are used by the VFE loss.
 from transformer.core.variational_ffn import VariationalFFNDynamic
 
 from transformer.core.active_inference import configure_ffn_active_inference
@@ -473,49 +474,23 @@ class GaugeTransformerBlock(nn.Module):
         # edits_2026-04-08.md Round 3 for the history.
         self.residual_type = getattr(cfg, 'residual_type', 'additive')
         self.sigma_max = cfg.sigma_max
-        self.skip_attention = getattr(cfg, 'skip_attention', False)
+        # The separate attention sublayer was removed on 2026-06-01: the VFE FFN's
+        # E-step computes its own β internally and handles all cross-position
+        # communication, so this block is now always the pure-VFE form. The flag
+        # is pinned True for the diagnostics / harnesses that still read it.
+        self.skip_attention = True
 
         # =====================================================================
-        # Attention Sublayer
+        # Gauge group + per-head block structure
         # =====================================================================
-        gauge_group, gauge_dim_inferred = _infer_gauge_group(cfg.generators)
+        # gauge_group feeds the optional block-equivariant mixer (and previously
+        # the now-removed attention sublayer). The per-head irrep_dims is computed
+        # after the FFN (the FFN is the sole owner of the transport blocks now).
+        gauge_group, _ = _infer_gauge_group(cfg.generators)
 
-        self.attention = IrrepMultiHeadAttention(
-            embed_dim=cfg.embed_dim,
-            irrep_spec=cfg.irrep_spec,
-            kappa_beta=cfg.kappa_beta,
-            epsilon=1e-8,
-            aggregate_mode='full_distribution' if cfg.evolve_sigma else 'mean_only',
-            diagonal_covariance=cfg.diagonal_covariance,
-            exact_diagonal_transport=cfg.exact_diagonal_transport,
-            attention_pattern=cfg.attention_pattern,
-            attention_window=cfg.attention_window,
-            gauge_group=gauge_group,
-            gauge_dim=gauge_dim_inferred,
-            global_generators=cfg.generators,
-            alibi_slope=cfg.alibi_slope,
-            gauge_mode=cfg.gauge_mode,
-            mask_self_attention=cfg.mask_self_attention,
-            enforce_orthogonal=cfg.enforce_orthogonal,
-            use_output_projection=cfg.use_output_projection,
-            # Force-disable mixer under skip_attention: the attention forward is
-            # bypassed (see `if not self.skip_attention:` below), so mixer_params
-            # would be allocated but never participate in math or backprop.
-            # BlockConfig.__post_init__ warns when this combination is detected.
-            use_equivariant_head_mixer=(
-                getattr(cfg, 'use_equivariant_head_mixer', False)
-                and not self.skip_attention
-            ),
-            irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.ffn_irrep_dims is not None) else None,
-            use_rope=cfg.use_rope,
-            rope_base=cfg.rope_base,
-            sigma_aggregation=cfg.sigma_aggregation,
-            learnable_head_kappa=cfg.learnable_head_kappa,
-            alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
-            gauge_covariant_ridge=getattr(cfg, 'gauge_covariant_ridge', False),
-        )
-
-        # Normalization (LayerNorm, RMSNorm, or Identity)
+        # Pre-norm on means (LayerNorm, RMSNorm, MahalanobisNorm, or Identity).
+        # This is the single VFE sublayer's pre-norm (was norm1 in the two-sublayer
+        # design; norm2 is gone with the attention sublayer).
         self.norm1 = _make_norm(cfg.norm_type, cfg.embed_dim, sigma_floor=getattr(cfg, 'e_step_sigma_floor', None))
 
         # =====================================================================
@@ -559,11 +534,11 @@ class GaugeTransformerBlock(nn.Module):
             deq_neumann_terms=cfg.deq_neumann_terms,
             deq_include_phi=cfg.deq_include_phi,
             gauge_mode=cfg.gauge_mode,
-            # Pass constant_omega from the attention module so the FFN's VFE
-            # iterations use the same per-head Ω transport (manuscript Limit 2).
-            # Without this, the FFN would use Ω=I, computing inconsistent
-            # attention patterns relative to the attention sublayer.
-            constant_omega=self.attention.constant_omega,
+            # The FFN is now the sole owner of constant_omega: when
+            # gauge_mode='constant' it builds and registers its own per-head
+            # Ω ∈ GL(d_head) (init to identity). Passing None lets it do so.
+            # (Previously borrowed from the attention sublayer, now removed.)
+            constant_omega=None,
             em_mode=cfg.em_mode,
             isotropic_covariance=cfg.isotropic_covariance,
             sigma_max=cfg.sigma_max,
@@ -585,14 +560,23 @@ class GaugeTransformerBlock(nn.Module):
             enforce_orthogonal=cfg.enforce_orthogonal,
             track_iteration_diagnostics=getattr(cfg, 'track_iteration_diagnostics', False),
         )
+        # Per-head block structure, mirrored from the FFN (the sole owner of the
+        # transport blocks). Used by the optional non-flat GaugeConnection below
+        # and by offline holonomy diagnostics. Falls back to expanding irrep_spec
+        # when block-diagonal KL is disabled (ffn.irrep_dims is None).
+        self.irrep_dims = (
+            self.ffn.irrep_dims if self.ffn.irrep_dims is not None
+            else [dim for (_lbl, mult, dim) in cfg.irrep_spec for _ in range(mult)]
+        )
+
         # EXPERIMENTAL: rope_full_gauge rotates Σ as well as μ in the KL.
         # Dispatch lives in the per-head VFE loop (_compute_multihead_vfe_gradients).
         # Tri-state mode {'off', 'vfe_only', 'both'} — see block_config.RopeFullGaugeMode.
-        # FFN VFE-gradient helper fires for {'vfe_only', 'both'}.
-        # Attention-side σ rotation fires only for 'both' (gated inside attention).
+        # FFN VFE-gradient helper fires for {'vfe_only', 'both'}. The old
+        # attention-side σ rotation (mode 'both') is gone with the attention
+        # sublayer; the FFN-side rotation is the live path for {'vfe_only','both'}.
         _rope_mode = getattr(cfg, 'rope_full_gauge', 'off')
         self.ffn._rope_full_gauge_vfe = _rope_mode
-        self.attention.rope_full_gauge_mode = _rope_mode
 
         # Optional block-level gauge-equivariant mixer (post-FFN, pre-residual).
         # Same Schur-commutant math as IrrepMultiHeadAttention's in-attention
@@ -613,59 +597,10 @@ class GaugeTransformerBlock(nn.Module):
         # wire_readout_references() using __dict__ assignment.
         configure_ffn_active_inference(self.ffn, cfg)
 
-        # =====================================================================
-        # Share per-head learnable κ between attention sublayer and VFE FFN
-        # =====================================================================
-        # κ is the single temperature in β_ij = softmax(−KL/(κ·√d_h)).  Under
-        # the manuscript's framework β is the posterior p(j|i), a single
-        # physical quantity.  Historically the attention sublayer and the
-        # VFE FFN each owned their own nn.Parameter, so gradient descent
-        # could drive them apart and the two sublayers would end up
-        # describing different posteriors.
-        #
-        # Solution: store a reference to the attention *Module* (not to its
-        # tensors) on the FFN via __dict__.  This serves two purposes:
-        #
-        # 1. **Bypasses nn.Module.__setattr__** — direct attribute assignment
-        #    would auto-register the attention sublayer as a child module of
-        #    the FFN, causing its parameters to be double-counted in the
-        #    optimizer.  The __dict__ bypass is the same pattern that
-        #    active_inference.py uses for _prior_bank_ref.
-        #
-        # 2. **Survives .to(device)** — PyTorch's Module._apply walks the
-        #    module tree and REPLACES every Parameter/buffer with a fresh
-        #    tensor on the target device.  The Module object itself is
-        #    never replaced.  By storing a reference to the Module and
-        #    looking up its `.log_kappa_per_head` attribute at access time
-        #    (rather than caching the tensor at wiring time), every call
-        #    resolves to the current device-resident tensor.  An earlier
-        #    version of this fix cached the tensor directly and broke on
-        #    CUDA because the cache still pointed to the CPU-resident
-        #    tensor after model.to('cuda').
-        #
-        # _get_kappa_h in variational_ffn.py reads through the reference
-        # via `ref.log_kappa_per_head` / `ref._kappa_init` when the block
-        # has wired one up; otherwise it falls back to the FFN's local
-        # safety-net parameter (created for standalone unit-test use).
-        if cfg.learnable_head_kappa and getattr(self.attention, 'log_kappa_per_head', None) is not None:
-            # Drop the FFN's own parameter and buffer from its registered
-            # dicts so the optimizer does not see a duplicate.  The local
-            # attribute lookup would otherwise still find them on the FFN.
-            if 'log_kappa_per_head' in self.ffn._parameters:
-                del self.ffn._parameters['log_kappa_per_head']
-            if '_kappa_init' in self.ffn._buffers:
-                del self.ffn._buffers['_kappa_init']
-            # Store a plain Python reference to the attention *Module*.
-            # The reference survives .to(device) because the Module object
-            # itself is never replaced; only its internal tensors are.
-            self.ffn.__dict__['_kappa_attn_ref'] = self.attention
-            # Set the direct attributes to None so a naive
-            # `ffn.log_kappa_per_head` access (if any test does one)
-            # gets None rather than an AttributeError.
-            self.ffn.__dict__['log_kappa_per_head'] = None
-            self.ffn.__dict__['_kappa_init'] = None
-
-        self.norm2 = _make_norm(cfg.norm_type, cfg.embed_dim, sigma_floor=getattr(cfg, 'e_step_sigma_floor', None))
+        # Per-head learnable temperature κ_h (learnable_head_kappa=True): with the
+        # attention sublayer removed, the FFN's own `log_kappa_per_head` parameter
+        # (variational_ffn.py) is the single registered owner — no cross-module
+        # κ-sharing / __dict__ redirect is needed. `_get_kappa_h` reads it directly.
 
         # =====================================================================
         # Non-Flat Gauge Transport (optional)
@@ -687,10 +622,10 @@ class GaugeTransformerBlock(nn.Module):
             # coefficients for head-h's generators only.
             try:
                 per_head_gens = partition_generators_by_block(
-                    cfg.generators, self.attention.irrep_dims,
+                    cfg.generators, self.irrep_dims,
                 )
                 self.gauge_connection = PerHeadGaugeConnection(
-                    irrep_dims=self.attention.irrep_dims,
+                    irrep_dims=self.irrep_dims,
                     per_head_generators=per_head_gens,
                     connection_type=cfg.connection_type,
                     hidden_dim=cfg.connection_hidden_dim,
@@ -782,214 +717,40 @@ class GaugeTransformerBlock(nn.Module):
                      Unchanged when evolve_phi=False.
         """
         # =====================================================================
-        # 1. Attention Sublayer with Pre-Norm + Residual
+        # VFE E-step (the entire block)
         # =====================================================================
-        # When skip_attention=True, the VFE E-step IS the entire block:
-        # it computes its own β internally, so the separate attention sublayer
-        # is redundant. Skip it and go straight to VFE gradients.
-
+        # The VFE FFN's E-step computes its own β internally and handles all
+        # cross-position communication; there is no separate attention sublayer
+        # (removed 2026-06-01). β / kl_matrix from a distinct attention pass do
+        # not exist here — the FFN exposes its own final-iteration β through
+        # _last_beta, surfaced below when return_attention=True.
         beta = None
-        kl_matrix = None  # Set by attention sublayer; stays None when skip_attention=True
-        delta_ij = None  # Non-flat connection (frozen E-step constant when passed to FFN)
-        _shared_bep = None  # Shared block exp pairs for attention + FFN
-        if not self.skip_attention:
-            # Pre-layer normalization on means
-            # MahalanobisNorm requires sigma; CenteredMahalanobisNorm additionally
-            # requires mu_prior as a covariant affine shift; LayerNorm/RMSNorm
-            # ignore both.
-            if isinstance(self.norm1, CenteredMahalanobisNorm):
-                mu_normalized = self.norm1(mu_q, sigma_q, mu_prior=mu_prior)
-            elif isinstance(self.norm1, MahalanobisNorm):
-                mu_normalized = self.norm1(mu_q, sigma_q)
-            else:
-                mu_normalized = self.norm1(mu_q)
-
-            # Non-flat transport: compute edge-local connection δ_ij from the
-            # pre-iteration μ and hold it fixed for the entire E-step.
-            # This is intentional: re-computing δ(μ) per VFE iteration would
-            # create a coupled fixed-point (δ depends on μ, μ depends on δ)
-            # that complicates convergence. The frozen snapshot is a standard
-            # first-order approximation analogous to expectation-propagation.
-            if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
-                from transformer.core.transport_ops import compute_transport_operators
-                delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
-                transport = compute_transport_operators(
-                    phi, generators,
-                    gauge_mode='learned',
-                    connection_delta=delta_ij,
-                    cocycle_relaxation=self.cocycle_relaxation,
-                )
-                # Split full Omega into per-head cached transports
-                Omega_full = transport['Omega']  # (B, N, N, K, K)
-                exp_phi_full = transport['exp_phi']  # (B, N, K, K)
-                # Store exp_delta for holonomy penalty (if configured)
-                self._last_exp_delta = transport.get('exp_delta')
-                irrep_dims = self.attention.irrep_dims
-                cached_head_transports = []
-                dim_start = 0
-                for d in irrep_dims:
-                    # Include 'exp_phi' so downstream consumers (specifically the
-                    # gauge_covariant_ridge branches in attention.aggregate_messages)
-                    # can build the covariant ridge eps*(g·g^T). Without it, those
-                    # branches silently fall back to eps*I and the opt-in becomes
-                    # a no-op under non_flat_transport=True.
-                    cached_head_transports.append({
-                        'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
-                        'exp_phi': exp_phi_full[:, :, dim_start:dim_start+d, dim_start:dim_start+d],
-                    })
-                    dim_start += d
-
-            # Multi-head attention (gauge-theoretic!)
-            # For direct omega mode: build per-head cached transports from omega blocks
-            # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
-            if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
-                # Build per-head (omega_h, omega_h_inv) pairs using per-block inv
-                # (avoids full K×K inv when omega is block-diagonal).
-                # Ridge regularization + pinv fallback match the per-token
-                # pattern in transport_ops.compute_transport_operators_direct
-                # (line ~462).  Raw torch.linalg.inv on a near-singular GL(K)
-                # block silently produces NaN that poisons the entire forward
-                # pass.  Since omega_h is GL+ (not SPD), Cholesky does not
-                # apply — we stick with LU-based inv + pinv fallback.
-                irrep_dims = self.attention.irrep_dims
-                cached_head_transports = []
-                block_start = 0
-                _omega_ridge = 1e-6
-                for d_h in irrep_dims:
-                    omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                    _eye_dh = self.ffn._get_eye(d_h, omega_h.device, omega_h.dtype)
-                    omega_h_reg = omega_h + _omega_ridge * _eye_dh
-                    try:
-                        omega_h_inv = torch.linalg.inv(omega_h_reg)  # (B, N, d_h, d_h)
-                    except (torch.linalg.LinAlgError, RuntimeError):
-                        omega_h_inv = torch.linalg.pinv(omega_h_reg)
-                    cached_head_transports.append({
-                        'exp_phi': omega_h,
-                        'exp_neg_phi': omega_h_inv,
-                    })
-                    block_start += d_h
-
-            # SHARED TRANSPORT: Compute block exp pairs ONCE for both attention
-            # and FFN. Both sublayers use the same phi, so computing independently
-            # wastes 2× matrix_exp per block. Compute here, convert to
-            # cached_head_transports for attention and pass directly to FFN.
-            if (cached_head_transports is None
-                    and self.attention.gauge_mode not in ('trivial', 'constant')
-                    and self.attention.irrep_dims is not None):
-                _skew = getattr(self.attention, '_generators_are_skew', False)
-                _shared_bep = fused_block_matrix_exp_pairs(
-                    phi, generators, self.attention.irrep_dims,
-                    enforce_orthogonal=self.attention.enforce_orthogonal,
-                    skew_symmetric=_skew,
-                )
-                # Build cached_head_transports for attention from shared pairs
-                cached_head_transports = [
-                    {'exp_phi': bep[0], 'exp_neg_phi': bep[1]}
-                    for bep in _shared_bep
-                ]
-            elif (cached_head_transports is not None
-                  and _shared_bep is None
-                  and self.attention.gauge_mode not in ('trivial', 'constant')):
-                # Extract BEP from incoming cached_head_transports (e.g., from
-                # embedding cache in model._embed_and_prepare). The FFN needs
-                # the (exp_phi, exp_neg_phi) tuple format, not the dict format.
-                _try_bep = []
-                _bep_ok = True
-                for cht in cached_head_transports:
-                    if 'exp_phi' in cht and 'exp_neg_phi' in cht and 'Omega' not in cht:
-                        _try_bep.append((cht['exp_phi'], cht['exp_neg_phi']))
-                    else:
-                        _bep_ok = False
-                        break
-                if _bep_ok and _try_bep:
-                    _shared_bep = _try_bep
-
-            recorder = get_global_recorder()
-            recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
-            # Request attention weights for trajectory recording or when the caller
-            # requests them via return_attention=True (training path).
-            need_attention_output = recording_attention or return_attention
-
-            mu_attn, sigma_attn, beta, kl_matrix = self.attention(
-                mu_normalized,
-                sigma_q,
-                phi,
-                generators,
-                mask=mask,
-                return_attention=need_attention_output,
-                cached_head_transports=cached_head_transports,
-            )
-
-            # Record attention for trajectory tracking
-            if recording_attention and beta is not None:
-                recorder.record_attention(beta, kl_matrix)
-
-            # Store mu_attn for optional post-call diagnostics
-            # (model.forward_with_attention reads block._last_mu_attn when
-            # _collect_layer_diagnostics=True to avoid re-computing it externally).
-            self._last_mu_attn = mu_attn
-
-            # Residual connection (optional for pure VFE).
-            #
-            # As of edits_2026-04-08.md Round 3, the residual form is
-            # selected by self.residual_type.  The default is 'additive'
-            # (plain mu_q + mu_attn, matching the 71-PPL TransformerOld
-            # baseline).  The 'delta' form below was introduced by
-            # 2026-04-07 audit Fix #1 / Fix #20 — see the reasoning below
-            # — and is kept as an opt-in for configs where the audit
-            # pathology actually applies (deep unnormalised stacks where
-            # the residual stream would otherwise compound copies of the
-            # pre-normalization input).
-            #
-            # Delta-extraction rationale (Fix #1 / #20, retained for the
-            # 'delta' branch): mu_attn = Σ_j β_ij · Ω_ij · mu_normalized[j]
-            # is an aggregated version of the normalized input, NOT a
-            # zero-centered correction.  When self-attention dominates
-            # (KL(q_i||q_i)=0 makes β_ii maximal whenever
-            # mask_self_attention=False), mu_attn[i] ≈ mu_normalized[i],
-            # so the plain residual mu_q + mu_attn would dump norm(mu)
-            # into the residual stream each layer.  Extracting
-            # (mu_attn - mu_normalized) so the residual stream accumulates
-            # corrections rather than copies is mathematically
-            # defensible — it's just empirically worse on the
-            # single-layer K=90 GL(15) LayerNorm'd config because the
-            # LayerNorm Jacobian subtraction cancels part of the identity
-            # gradient path from the loss back to the embeddings.
-            if self.use_residual:
-                if self.residual_type == 'delta':
-                    mu_q = mu_q + (mu_attn - mu_normalized)
-                else:  # 'additive' 
-                    mu_q = mu_q + mu_attn
-            else:
-                mu_q = mu_attn
-
-            # Update covariances if evolving.
-            # Delta extraction: sigma_attn is computed by aggregate_messages
-            # from sigma_q (transport + weighted aggregation), so the delta is
-            # sigma_attn - sigma_q.  Adding delta to sigma_q yields sigma_attn —
-            # the same replacement semantics applied symmetrically to both
-            # attention and FFN sublayers.  Old additive behavior (sigma_q +
-            # sigma_attn) compounded multiplicatively across layers and pegged
-            # sigma at sigma_max within the first forward pass.
-            if self.evolve_sigma and sigma_attn is not None:
-                sigma_q = sigma_attn.clamp(min=1e-4, max=self.sigma_max)
-
-        # =====================================================================
-        # 2. VFE E-step (with optional Pre-Norm + Residual)
-        # =====================================================================
-        # When skip_attention=True, this is the ONLY sublayer: the VFE gradient
-        # computes β internally and handles all cross-position communication.
-
-        _active_norm = self.norm2 if not self.skip_attention else self.norm1
-        if isinstance(_active_norm, CenteredMahalanobisNorm):
-            mu_normalized = _active_norm(mu_q, sigma_q, mu_prior=mu_prior)
-        elif isinstance(_active_norm, MahalanobisNorm):
-            mu_normalized = _active_norm(mu_q, sigma_q)
-        else:
-            mu_normalized = self.norm2(mu_q) if not self.skip_attention else self.norm1(mu_q)
+        kl_matrix = None
+        delta_ij = None      # Non-flat connection (frozen E-step constant for the FFN)
+        _shared_bep = None   # The FFN computes its own per-head transport
 
         if mu_prior is None:
             raise ValueError("VFE_dynamic mode requires mu_prior argument")
+
+        # Pre-layer normalization on means. MahalanobisNorm requires sigma;
+        # CenteredMahalanobisNorm additionally requires mu_prior as a covariant
+        # affine shift; LayerNorm/RMSNorm ignore both.
+        if isinstance(self.norm1, CenteredMahalanobisNorm):
+            mu_normalized = self.norm1(mu_q, sigma_q, mu_prior=mu_prior)
+        elif isinstance(self.norm1, MahalanobisNorm):
+            mu_normalized = self.norm1(mu_q, sigma_q)
+        else:
+            mu_normalized = self.norm1(mu_q)
+
+        # Non-flat transport: compute the edge-local connection δ_ij from the
+        # pre-iteration μ and hand it to the FFN's E-step (held fixed for the
+        # whole E-step — a first-order, EP-style approximation). The FFN folds
+        # connection_delta into its own per-head transport. This was previously
+        # computed only inside the attention branch, so non-flat transport
+        # silently no-op'd whenever the attention sublayer was skipped (audit
+        # finding DS-4); routing it here fixes that.
+        if self.non_flat_transport and self.gauge_connection is not None:
+            delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
 
         mu_ffn, sigma_ffn, phi_out, _beta_history = self.ffn(
             mu=mu_normalized,

@@ -198,9 +198,10 @@ class TestModelIntegration:
         logits = model(x)
         assert logits.shape == (2, 8, 50)
         logits.sum().backward()
-        # Check super-block structure
-        attn = model.transformer.blocks[0].attention
-        assert attn.irrep_dims == [12, 12]
+        # Check super-block structure (block-level irrep_dims since the attention
+        # sublayer was removed 2026-06-01; mirrors ffn.irrep_dims).
+        blk = model.transformer.blocks[0]
+        assert blk.irrep_dims == [12, 12]
 
     def test_asymmetric_coupling(self, base_config):
         """Asymmetric coupling: only head 0→2."""
@@ -211,8 +212,8 @@ class TestModelIntegration:
         logits = model(x)
         assert logits.shape == (2, 8, 50)
         logits.sum().backward()
-        attn = model.transformer.blocks[0].attention
-        assert attn.irrep_dims == [12, 6, 6]
+        blk = model.transformer.blocks[0]
+        assert blk.irrep_dims == [12, 6, 6]
 
     def test_full_covariance_with_coupling(self, base_config):
         """Cross-coupling with full (non-diagonal) covariance."""
@@ -369,13 +370,14 @@ class TestModelGuardsAndConfig:
         assert model.phi_dim == 4 * 36 + 1 * 36
 
     def test_irrep_dims_override_forwarded_without_coupling(self, base_config):
-        """blocks.py:277 fix: ffn_irrep_dims must reach attention even when
-        cross_couplings is empty (use_block_diagonal_kl=True path)."""
+        """ffn_irrep_dims must reach the per-head block structure even when
+        cross_couplings is empty (use_block_diagonal_kl=True path). Checked on
+        the block-level irrep_dims (attention sublayer removed 2026-06-01)."""
         from transformer.core.model import GaugeTransformerLM
         model = GaugeTransformerLM(base_config)
-        attn = model.transformer.blocks[0].attention
+        blk = model.transformer.blocks[0]
         # Without cross-coupling, irrep_dims should match per-head: [6, 6, 6, 6].
-        assert attn.irrep_dims == [6, 6, 6, 6]
+        assert blk.irrep_dims == [6, 6, 6, 6]
 
     def test_warning_emitted_for_open_chain_basis(self, base_config, caplog):
         """A chain coupling [(0,1),(1,2)] produces a non-closed basis: the

@@ -568,40 +568,13 @@ class GaugeTransformerLM(nn.Module):
             batch_size, -1, -1
         )  # (B, N, N)
 
-        # 6. Precompute transport operators when phi does not evolve
-        if omega is not None and self.gauge_param == 'omega':
-            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
-            cached_head_transports = []
-            block_start = 0
-            _omega_ridge = 1e-6
-            for d_h in irrep_dims:
-                omega_h = omega[:, :, block_start:block_start + d_h, block_start:block_start + d_h]
-                # Ridge + fallback for GL(K) inversion.  Raw torch.linalg.inv
-                # has no safety on near-singular omega blocks; this matches
-                # transport_ops.compute_transport_operators_direct line ~462.
-                _eye_dh = torch.eye(d_h, device=omega_h.device, dtype=omega_h.dtype)
-                omega_h_reg = omega_h + _omega_ridge * _eye_dh
-                try:
-                    omega_h_inv = torch.linalg.inv(omega_h_reg)
-                except (torch.linalg.LinAlgError, RuntimeError):
-                    omega_h_inv = torch.linalg.pinv(omega_h_reg)
-                cached_head_transports.append({
-                    'exp_phi': omega_h,
-                    'exp_neg_phi': omega_h_inv,
-                })
-                block_start += d_h
-        elif not self.evolve_phi:
-            first_attention = self.transformer.blocks[0].attention
-            cached_head_transports = first_attention.precompute_head_transports(
-                phi, device, mu_q.dtype
-            )
-        else:
-            # evolve_phi=True: phi changes between blocks, so we CANNOT cache
-            # transport across layers. Leave cached_head_transports=None.
-            # Each block computes shared BEP internally (blocks.py shared
-            # transport logic) — this eliminates attention↔FFN redundancy
-            # within each block without risking stale cache across layers.
-            cached_head_transports = None
+        # 6. Cross-layer transport caching is obsolete under the pure-VFE block.
+        # The cached_head_transports value was consumed only by the (removed
+        # 2026-06-01) attention sublayer; the block forward never forwarded it to
+        # the FFN. The FFN now builds its own per-head transport from phi each
+        # block, and threads `omega` directly when gauge_param='omega'. So there
+        # is nothing to precompute here (audit findings DS-3 / BR-3 / BR-4).
+        cached_head_transports = None
 
         return {
             'mu_q': mu_q,

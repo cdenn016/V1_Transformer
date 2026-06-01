@@ -13,21 +13,19 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'`, RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `transformer/core/blocks.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Setting `rope_full_gauge != 'off'` instead lifts σ to full and applies `R Σ Rᵀ` (`transformer/core/block_config.py::__post_init__` warns about the O(K²) cost). Acceptable as documented research limitation.
 
+**KNOWN GAP — norm_type='layernorm' is not gauge-equivariant**: The production config uses `norm_type='layernorm'`, which sidesteps the RoPE × MahalanobisNorm gap above (`MahalanobisNorm` is never instantiated), but `nn.LayerNorm` operates against the global K-dimensional mean/variance and is itself not gauge-covariant — it reduces the block's exact gauge symmetry to unsigned coordinate permutations (and, with live RoPE on top, to the trivial frame). This is a deliberate, allowed speed choice. The gauge-equivariant analog is `norm_type='mahalnorm'` (the sl(K) theorem in the `MahalanobisNorm` docstring); the mathematically-pure equivariant path is `mahalnorm` + full covariance + `rope_full_gauge != 'off'` (or RoPE off) + `phi_project_slk=True`. Verified 2026-06-01 (`docs/audit_skip_attention_ift_phi_2026-06-01.md`, finding F01-D).
+
 **Figures**: ALL Figures should be publication quality by default.
 
 **LOCALLY DEFINED CONFIGS**: User may not be running the config values which match the repo.  always double check what values the user is using!
 
 **Post Edit Policy**:  Always write a post-edit description of all changes made to the codebase as a .md.  The date the edits were made should be in the naming convention of the document.  there should be only one document per day.  you should update the same document as edits are made
 
-**ALWAYS PLAN FIRST**
+**Audit/Verification policy** when verifying mathematical expressions and theory compile a verified.md document briefly stating what was checked, if it was incorrect, and if it was rigorously verified.  When auditing/verifying you should consult this document so you dont reverify things youve already verified. 
+
 
 **There should ALWAYS exist a theoretically/mathematically "pure" path under appropriate toggles.**  Computationally extreme paths should be 'opt in' toggles and clearly documented.
 
-**Check for sub-agents, skills, and plug-ins before deploying your own** 
-
-**check claude-mem for prior session context when resuming work on a topic**
-
-Before you say the fix is done: (1) open my active config file, (2) trace every relevant key through the config loader and any override logic, (3) confirm the exact line you changed is reached at runtime under my config, (4) only then run tests and report.
 
 **CODE FOCUS** when investigating and/or auditing the codebase do NOT rely on code comments....focus on the actual code and paths
 
@@ -79,7 +77,7 @@ F = alpha * KL(q_i || p_i)                                          # self-coupl
 
 **E-step LRs.** The μ retraction step size is `self.lr`; the σ retraction step size is `sigma_lr`, decoupled from the μ LR and independently learnable via the `raw_sigma_lr` Parameter in `VariationalFFNDynamic` (`transformer/core/variational_ffn.py`, 2026-05-13 onward). Both follow the same cosine decay over training (the σ step recovers the decay factor as `effective_lr / self.lr`). A separate trust-region clamp bounds the whitened tangent δσ/σ before the σ retraction.
 
-**Attention sublayer is OPTIONAL.** The pure VFE architecture (`skip_attention=True`) is the theoretically clean form: the FFN's E-step computes its own β internally and updates beliefs. The separate attention sublayer at the top of `GaugeTransformerBlock.forward` is an engineering heuristic (β-weighted message aggregation through `W_O · μ_agg` residual). `skip_attention=True` works cleanly with `em_mode='ift_phi'` (default). It is INCOMPATIBLE with the detaching EM modes `em_phi_p`, `em_phi_q` — those modes detach σ_p and/or φ inside the FFN, so the attention sublayer is their sole autograd path back to `sigma_embed` and `phi_embed`. With `skip_attention=True` AND a detaching mode, σ_embed and φ_embed silently stay frozen at initialization. `BlockConfig.__post_init__` warns when this combination is detected.
+**Attention sublayer REMOVED (2026-06-01).** The block is now always the pure-VFE form: the FFN's E-step computes its own β internally and handles all cross-position communication. The separate `IrrepMultiHeadAttention` sublayer (a β-weighted message-aggregation engineering heuristic) was removed from `GaugeTransformerBlock`; `skip_attention` is a vestigial field pinned `True` (a config requesting `False` is forced to `True` with a warning). The `IrrepMultiHeadAttention` class and `attention.py`'s module-level functions (`compute_attention_weights`, etc.) are kept — the VFE loss and the hybrid baseline use them. Because there is no attention autograd path any more, the detaching EM modes `em_phi_p`, `em_phi_q` now freeze `sigma_embed`/`phi_embed` for the same reason they did under the old `skip_attention=True` — `em_mode='ift_phi'` (default) is the working mode, where the FFN E-step itself provides the M-step gradients for σ and φ. See `edits_2026-06-01.md` and `docs/refactor_plan_remove_attention_2026-06-01.md`.
 
 **EM modes** (`em_mode`): Single string selector controlling gradient flow at the EM boundary. Replaces the old 5-flag system (`amortized_inference`, `amortize_sigma`, `exact_phi_grad`, `implicit_em`, `em_phi_mode`). Prior covariance sigma_p is always attached in amortized modes. Cross-layer cascade: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value.
 

@@ -1209,12 +1209,15 @@ class PublicationTrainer(FastTrainer):
         return generated_text
 
     def _set_kappa_frozen(self, frozen: bool):
-        """Freeze or unfreeze all log_kappa_per_head parameters across layers."""
+        """Freeze or unfreeze all log_kappa_per_head parameters across layers.
+
+        The FFN is the sole owner of log_kappa_per_head since the attention
+        sublayer was removed (2026-06-01).
+        """
         for block in self._model_blocks:
-            for module in [block.attention, block.ffn]:
-                param = getattr(module, 'log_kappa_per_head', None)
-                if param is not None:
-                    param.requires_grad = not frozen
+            param = getattr(block.ffn, 'log_kappa_per_head', None)
+            if param is not None:
+                param.requires_grad = not frozen
 
     def train(self):
         """Training loop with publication metrics."""

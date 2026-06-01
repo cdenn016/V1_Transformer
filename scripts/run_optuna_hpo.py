@@ -100,7 +100,7 @@ BASE_CONFIG = {
    'active_inference':           False,    #requires priorbank true
    
    'cache_decode_priors':        True,
-   'skip_attention':             False,   #skips ad hoc attention sublayer
+   'skip_attention':             True,   # attention sublayer removed 2026-06-01; always pure-VFE
    
    # === M-step: Optimizer ===  
    'optimizer_type':             'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'

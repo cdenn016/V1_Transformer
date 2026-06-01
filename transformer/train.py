@@ -381,17 +381,24 @@ def compute_free_energy_loss(
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
     if M_beta > 0.0:
-        if beta is None:
-            # skip_attention=True: attention sublayer is skipped, so beta/kl
-            # are None. The VFE E-step handles belief coupling internally;
-            # M_beta has no well-defined loss surface without the attention KL.
+        if beta is None or kl is None:
+            # Pure-VFE block (attention sublayer removed 2026-06-01): the FFN
+            # E-step surfaces its own β via _last_beta but does NOT retain the
+            # per-iteration KL matrix (kl is None). The M-step belief-coupling
+            # loss needs both β and KL, so it has no well-defined surface here.
+            # The VFE E-step already handles belief coupling internally; use
+            # M_beta=0. Guard on BOTH so a surfaced β with kl=None can't crash.
             import warnings
             warnings.warn(
-                "M_beta > 0 but attention beta unavailable (skip_attention=True). "
-                "Setting belief_align_loss=0. Use M_beta=0 with skip_attention.",
+                "M_beta > 0 but the attention KL matrix is unavailable (pure-VFE "
+                "block). Setting belief_align_loss=0. Use M_beta=0.",
                 stacklevel=2,
             )
             belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
+            # belief_entropy_loss is otherwise set only in the β-available branch;
+            # set it here too so the total-loss sum (train.py downstream) cannot
+            # hit an UnboundLocalError when β/KL are unavailable.
+            belief_entropy_loss = torch.tensor(0.0, device=ce_loss.device)
         else:
             # Detach β: correct EM formulation. In the M-step, β is held fixed at
             # its E-step value. At convergence ∂F/∂β = 0 (β* is optimal), so the

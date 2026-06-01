@@ -274,7 +274,12 @@ class TestGaugeCovariantRidgeUnderNonFlat:
     aggregate_messages then silently fell back to eps*I. Verify the cache
     now carries 'exp_phi' so the covariant ridge actually fires."""
 
-    def test_blocks_nonflat_cache_carries_exp_phi(self):
+    def test_blocks_nonflat_connection_reaches_ffn(self):
+        """DS-4 fix: under non_flat_transport=True the pure-VFE block routes the
+        edge-local connection delta_ij to the FFN E-step. Previously delta_ij was
+        computed only inside the attention branch, so non-flat transport silently
+        no-op'd whenever the attention sublayer was skipped (which is now always).
+        """
         import torch
         from transformer.core.model import GaugeTransformerLM
 
@@ -300,32 +305,23 @@ class TestGaugeCovariantRidgeUnderNonFlat:
         }
         model = GaugeTransformerLM(cfg)
 
-        # The blocks.py:566-575 cache producer feeds ATTENTION (not the FFN
-        # in VFE_dynamic mode). Hook attention to capture the dict keys.
         captured = {}
         block = model.transformer.blocks[0]
 
         def pre_hook(_module, args, kwargs):
-            ct = kwargs.get('cached_head_transports')
-            if ct is not None and len(ct) > 0:
-                captured['keys'] = sorted(ct[0].keys())
+            captured['delta_is_none'] = kwargs.get('connection_delta') is None
 
-        handle = block.attention.register_forward_pre_hook(pre_hook, with_kwargs=True)
+        handle = block.ffn.register_forward_pre_hook(pre_hook, with_kwargs=True)
         try:
             x = torch.randint(0, 50, (2, 8))
             model(x)
         finally:
             handle.remove()
 
-        assert 'keys' in captured, (
-            'pre_hook did not observe a non-None cached_head_transports — '
-            'either the non-flat code path is not firing or the FFN was bypassed.'
-        )
-        assert 'Omega' in captured['keys'], f'Omega missing: {captured["keys"]}'
-        assert 'exp_phi' in captured['keys'], (
-            f"exp_phi missing from non-flat cache; "
-            f"gauge_covariant_ridge would silently degrade to eps*I. "
-            f"Got keys: {captured['keys']}"
+        assert 'delta_is_none' in captured, 'FFN forward was not called'
+        assert captured['delta_is_none'] is False, (
+            'non_flat_transport=True must route a non-None connection_delta to the '
+            'FFN E-step (DS-4 fix); got None.'
         )
 
 
@@ -387,7 +383,7 @@ class TestRopeFullGaugeTriState:
         )
         model = GaugeTransformerLM(cfg)
         block = model.transformer.blocks[0]
-        assert block.attention.rope_full_gauge_mode == 'vfe_only'
+        # Attention sublayer removed 2026-06-01; the FFN side is the live path.
         assert block.ffn._rope_full_gauge_vfe == 'vfe_only'
 
     def test_string_off_explicit(self):
@@ -395,7 +391,6 @@ class TestRopeFullGaugeTriState:
         cfg = self._base_config(rope_full_gauge='off')
         model = GaugeTransformerLM(cfg)
         block = model.transformer.blocks[0]
-        assert block.attention.rope_full_gauge_mode == 'off'
         assert block.ffn._rope_full_gauge_vfe == 'off'
 
     def test_string_off_default(self):
@@ -404,22 +399,29 @@ class TestRopeFullGaugeTriState:
         cfg = self._base_config()
         model = GaugeTransformerLM(cfg)
         block = model.transformer.blocks[0]
-        assert block.attention.rope_full_gauge_mode == 'off'
         assert block.ffn._rope_full_gauge_vfe == 'off'
 
-    def test_both_requires_non_diagonal_covariance(self):
-        """'both' under diagonal_covariance must raise at attention forward."""
-        import pytest
+    def test_both_runs_under_diagonal_covariance_via_ffn(self):
+        """The attention-side 'both' σ-rotation (which required full covariance)
+        was removed 2026-06-01. 'both' is now served entirely by the FFN
+        rope-full path, which supports diagonal σ (lifting it to full
+        internally), so 'both' + diagonal_covariance=True now RUNS rather than
+        raising the old attention-side ValueError. BlockConfig still warns about
+        the O(K^2) lift cost.
+        """
+        import warnings
         import torch
         from transformer.core.model import GaugeTransformerLM
         cfg = self._base_config(
             rope_full_gauge='both',
             diagonal_covariance=True,
         )
-        model = GaugeTransformerLM(cfg)
-        x = torch.randint(0, 50, (2, 8))
-        with pytest.raises(ValueError, match="rope_full_gauge='both' requires diagonal_covariance=False"):
-            model(x)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = GaugeTransformerLM(cfg)
+            x = torch.randint(0, 50, (2, 8))
+            logits = model(x)  # must not raise
+        assert logits.shape == (2, 8, 50)
 
     def test_both_forward_backward_with_full_cov(self):
         """rope_full_gauge='both' + diagonal_covariance=False must construct,
@@ -433,7 +435,8 @@ class TestRopeFullGaugeTriState:
         )
         model = GaugeTransformerLM(cfg)
         block = model.transformer.blocks[0]
-        assert block.attention.rope_full_gauge_mode == 'both'
+        # Attention-side σ-rotation for 'both' was removed with the attention
+        # sublayer (2026-06-01); the FFN-side rope-full path is the live path.
         assert block.ffn._rope_full_gauge_vfe == 'both'
 
         x = torch.randint(0, 50, (2, 8))

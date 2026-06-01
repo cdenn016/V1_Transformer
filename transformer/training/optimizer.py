@@ -746,6 +746,14 @@ def create_param_groups(
         # attention.log_kappa_per_head being routed to attention_params.
         elif 'log_kappa' in name:
             no_decay_params.append(param)
+        # Constant-gauge per-head transport Ω (gauge_mode='constant'). Re-homed
+        # from the attention module to the FFN on 2026-06-01 (attention-sublayer
+        # removal). Pin it to the same lr group it had on the attention module
+        # (M_attention_lr) so the re-home is training-behavior-neutral. This MUST
+        # be checked before the generic 'ffn' fall-through, which would otherwise
+        # silently route ffn.constant_omega.* to M_vfe_hyperparam_lr.
+        elif 'constant_omega' in name:
+            attention_params.append(param)
         # Attention mechanism
         elif 'attention' in name or 'attn' in name:
             attention_params.append(param)

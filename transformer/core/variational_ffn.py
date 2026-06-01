@@ -423,16 +423,29 @@ class VariationalFFNDynamic(nn.Module):
         # VariationalFFNDynamic (tests/ablations) keeps the default 'off' unless
         # the caller monkey-patches this attribute afterward.
         self._rope_full_gauge_vfe = 'off'
-        # Constant gauge: store reference to attention module's per-head Ω parameters.
-        # When gauge_mode='constant', these are used to build transport operators
-        # in VFE iterations, ensuring consistency with the attention module.
-        # Without this, the FFN would use Ω=I (identity), computing different
-        # attention patterns than the attention module.
-        # Use __dict__ to bypass nn.Module.__setattr__ and prevent double-
-        # registration of the attention module's constant_omega ParameterList.
-        # Without this, state_dict() produces duplicate keys under both
-        # attention.constant_omega.* and ffn.constant_omega.*.
-        self.__dict__['constant_omega'] = constant_omega
+        # Constant gauge: per-head learnable Ω ∈ GL(d_head) used to build the
+        # transport operators in the VFE iterations (manuscript Limit 2).
+        #
+        # Ownership (changed 2026-06-01, attention-sublayer removal): the FFN is
+        # now the registered owner of constant_omega. When gauge_mode='constant'
+        # and no external ParameterList is supplied, the FFN constructs its own
+        # (per-head identity init, matching the old attention-side init at
+        # attention.py:1623-1633). Registering it as a real child means the
+        # optimizer sees it exactly once and .to(device) moves it natively — the
+        # job the old __dict__ borrow had to work around when constant_omega lived
+        # on the (separately-registered) attention module.
+        #
+        # The legacy borrow path is retained for callers that still pass an
+        # externally-owned ParameterList (e.g. standalone unit tests): in that case
+        # the __dict__ bypass prevents double-registration of the other module's
+        # params (duplicate state_dict keys under both owners).
+        if gauge_mode == 'constant' and constant_omega is None and irrep_dims is not None:
+            co = nn.ParameterList(
+                nn.Parameter(torch.eye(int(d_h))) for d_h in irrep_dims
+            )
+            self.constant_omega = co  # registered child — sole owner
+        else:
+            self.__dict__['constant_omega'] = constant_omega
 
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi

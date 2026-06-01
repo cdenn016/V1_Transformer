@@ -62,7 +62,7 @@ The supplementary material works with the surrogate for the covariance gradient 
 
 ## Architecture and forward pass
 
-`GaugeTransformerLM` (`transformer/core/model.py`) is a stack of `GaugeTransformerBlock`s. Each block has an optional attention sublayer followed by a variational FFN that runs the belief E-step; the pure-VFE form sets `skip_attention=True` so the FFN's internal attention is the only message-passing path.
+`GaugeTransformerLM` (`transformer/core/model.py`) is a stack of `GaugeTransformerBlock`s. Each block is the pure-VFE form: a variational FFN that runs the belief E-step, which computes its own attention distribution `beta` internally and is the only message-passing path. The separate attention sublayer was removed on 2026-06-01 (see `edits_2026-06-01.md`); the `IrrepMultiHeadAttention` class and its KL-attention kernels remain in `attention.py` for the variational loss and ablation baselines.
 
 ```
 token_ids
@@ -75,10 +75,7 @@ positional:  RoPE rotates mu (and sigma when rope_full_gauge != 'off'), or phi g
   |
   v
 FOR EACH LAYER (GaugeTransformerBlock):
-    [optional attention sublayer, unless skip_attention=True]:
-        beta_ij = softmax(-D_KL(q_i || Omega_ij q_j) / tau)       [tau = kappa * sqrt(d_head)]
-        aggregate beta-weighted messages, residual through W_O . mu_agg
-    variational FFN E-step (VariationalFFNDynamic):
+    variational FFN E-step (VariationalFFNDynamic):  [the entire block; computes its own beta]
         recompute beta_ij from current beliefs
         grad_F = alpha * grad D_KL(q || p)  +  sum_j beta_ij * grad E_ij  +  (attention entropy)
         natural gradient:  delta = Sigma * grad_F
