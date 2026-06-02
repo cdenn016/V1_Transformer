@@ -511,19 +511,7 @@ def resume_training():
         # Checkpointing
         checkpoint_dir=experiment_dir,
 
-        # Hardware / AMP / compile
-        use_amp=config.get('use_amp', False),
-        amp_dtype=config.get('amp_dtype', 'bfloat16'),
-        use_compile=config.get('use_compile', False),
-        compile_mode=config.get('compile_mode', 'reduce-overhead'),
-
-        # Gauge group
-        gauge_mode=config.get('gauge_mode', 'learned'),
-        gauge_param=config.get('gauge_param', 'phi'),
-        use_rope=config.get('use_rope', True),
-
-        # PriorBank decode slot & shared E-step flag
-        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
+        # Shared E-step flag
         detach_phi=config.get('detach_phi', False),
 
         # Phi preconditioning

@@ -186,43 +186,15 @@ class TrainingConfig:
     num_workers: int = 0     # DataLoader worker processes (0 = main thread; faster on Windows)
 
     # ==========================================================================
-    # Mixed Precision (AMP)
-    # ==========================================================================
-    # Selective AMP: only mu-path and output projection run in reduced precision.
-    # ALL sigma/covariance operations stay float32 (sandwich products, KL, decode,
-    # eigendecompositions, Cholesky). The VFE E-step already has autocast guards.
-    use_amp: bool = False           # Enable automatic mixed precision
-    amp_dtype: str = 'bfloat16'    # 'bfloat16' (no scaler needed) or 'float16'
-
-    # ==========================================================================
-    # torch.compile
-    # ==========================================================================
-    use_compile: bool = False       # Compile model with torch.compile
-    compile_mode: str = 'default'  # 'default' (safe with control flow),
-                                   # 'reduce-overhead' (CUDA graphs, requires fixed shapes + no control flow),
-                                   # 'max-autotune' (slow compile, best throughput)
-
-    # ==========================================================================
-    # Gauge Group
+    # Gauge Group (direct-Ω path: gauge_param='omega')
     # --------------------------------------------------------------------------
-    # NOTE: gauge_mode, gauge_param, isotropic_covariance, omega_trust_region
-    # below are MIRROR-ONLY fields. Architecture lives in the flat config dict
-    # consumed by BlockConfig.from_config — assigning these on a TrainingConfig
-    # instance has no runtime effect. They are preserved here only for callers
-    # that construct a TrainingConfig and read the dataclass for display/logging.
+    # omega_lr and omega_det_penalty ARE read off TrainingConfig (the optimizer
+    # and compute_free_energy_loss). The architecture selectors (gauge_mode,
+    # gauge_param, isotropic_covariance, omega_trust_region) live in the flat
+    # config dict consumed by BlockConfig.from_config, not here.
     # ==========================================================================
-    gauge_mode: str =           'learned'    # 'learned', 'trivial', 'constant' (mirror-only)
-    gauge_param: str =           'phi'       # 'phi' or 'omega' (mirror-only)
     omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
-    omega_trust_region: float =  0.3         # (mirror-only)
     omega_det_penalty: float =   0.0          # λ · mean (log|det Ω_h|)² regularizer (keeps Ω invertible under gauge_param='omega'; unused for 'phi')
-    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript) (mirror-only)
-
-    # ==========================================================================
-    # Positional Encoding (mirror-only — set via flat config dict)
-    # ==========================================================================
-    use_rope: bool =   True       # RoPE: SO(2)^{K/2} position rotations on μ (mirror-only)
-    rope_base: float = 75                                           # (mirror-only)
 
     # ==========================================================================
     # Model Architecture (mirror-only — set via flat config dict)
@@ -240,10 +212,8 @@ class TrainingConfig:
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
     # ==========================================================================
-    # PriorBank decode slot & shared E-step flag
+    # Shared E-step flag
     # ==========================================================================
-    sigma_ce_scale: float =      0.7      # Checkpoint round-trip slot only; the live runtime value comes from the
-                                          # entry-point flat CONFIG['sigma_ce_scale'] consumed by model.py (PriorBank). Tune it there.
     detach_phi: bool =           False           # Detach phi from backprop (enables backprop-free phi)
 
     # ==========================================================================
@@ -261,13 +231,6 @@ class TrainingConfig:
     # Emit per-batch SPD eigenvalue/cond/logdet counters from _kl_kernel_dense
     # through the _nr numerical monitor. Default off (observational only).
     enable_spd_diagnostics: bool = False
-
-    # When True, `safe_kl_clamp` does NOT replace NaN/±inf with kl_max —
-    # non-finite KL values propagate through the softmax into the loss so
-    # divergence trips `assert_finite_loss` instead of saturating silently.
-    # Intended for diagnostic runs; leave off for normal training.
-    # (mirror-only: read from flat config dict via BlockConfig.from_config)
-    propagate_kl_nonfinite: bool = False
 
     # Per-param-group warmup multipliers for _create_scheduler. Keys match
     # param-group 'name' entries (e.g. 'mu_embed', 'phi_embed', 'sigma_embed').

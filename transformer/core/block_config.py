@@ -224,9 +224,6 @@ class BlockConfig:
                                         # closed-form base point is already at the linear optimum.
 
     # === Performance ===
-    compile_vfe: bool = False           # torch.compile the VFE iteration inner loop.
-                                        # Fuses element-wise ops, reduces kernel launch overhead.
-                                        # Adds compilation latency on first forward pass.
     gradient_checkpoint_vfe: bool = False  # Activation checkpointing for VFE iterations.
                                         # Trades ~2x compute for ~3x memory savings with 3 iters.
 
@@ -592,7 +589,6 @@ class BlockConfig:
             propagate_kl_nonfinite=config.get('propagate_kl_nonfinite', False),
             e_step_early_exit_tol=config.get('e_step_early_exit_tol', None),
             # Performance
-            compile_vfe=config.get('compile_vfe', False),
             gradient_checkpoint_vfe=config.get('gradient_checkpoint_vfe', False),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
