@@ -216,14 +216,6 @@ class BlockConfig:
                                         # Diagonal covariance always uses elementwise clamp(min=floor)
                                         # regardless of this flag — it is already per-dim bounded.
     
-    n_picard_steps: int = 0            # Picard corrections after closed-form E-step.
-                                        # Preconditioned Picard iteration on the nonlinear VFE
-                                        # residual: mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
-                                        # where mu_0, sigma_0 are the closed-form linear fixed point.
-                                        # 0 = pure closed-form (no softmax coupling).
-                                        # 1-3 = recommended range. Requires closed_form_e_step=True.
-    
-    picard_trust_region: float = 5.0   # Whitened trust region for Picard corrections.
     e_step_early_exit_tol: Optional[float] = None  # Relative change threshold for E-step early exit.
                                         # When set, breaks the E-step loop if
                                         # ||Δμ||/||μ|| < tol between consecutive iterations.
@@ -363,26 +355,11 @@ class BlockConfig:
         # Backward compat: use_layernorm=False with default norm_type → 'none'
         if not self.use_layernorm and self.norm_type == 'layernorm':
             self.norm_type = 'none'
-        # Picard corrections are applied AFTER the closed-form fixed point
-        # (see variational_ffn._closed_form_e_step line 2252).  Setting
-        # n_picard_steps > 0 without closed_form_e_step=True is a silent
-        # no-op — the Picard branch is never entered.  Fail fast so the
-        # misconfiguration is visible at model construction rather than
-        # producing the same loss whether n_picard_steps=0 or 3.
-        if self.n_picard_steps > 0 and not self.closed_form_e_step:
-            raise ValueError(
-                f"n_picard_steps={self.n_picard_steps} requires "
-                f"closed_form_e_step=True (Picard corrections are applied "
-                f"after the closed-form fixed point; without closed-form, "
-                f"this field is silently ignored). Either set "
-                f"closed_form_e_step=True or set n_picard_steps=0."
-            )
         # use_output_projection and use_equivariant_head_mixer are mutually
         # exclusive: IrrepMultiHeadAttention.forward dispatches W_O over the
         # mixer when both are set (attention.py:2016-2022), leaving the
         # commutant mixer's mixer_params as dead state_dict weight. Fail fast
-        # on the same "allocated but silently ignored" principle the
-        # n_picard_steps check above enforces.
+        # on the "allocated but silently ignored" principle.
         if self.use_output_projection and self.use_equivariant_head_mixer:
             raise ValueError(
                 "use_output_projection=True and use_equivariant_head_mixer=True "
@@ -470,11 +447,6 @@ class BlockConfig:
     # === Memory efficiency ===
     ffn_irrep_dims: Optional[List[int]] = None  # Block dims for block-diagonal KL decomposition
 
-    # === DEQ (Deep Equilibrium) ===
-    use_deq: bool = False              # Use implicit differentiation for E-step fixed point
-    deq_neumann_terms: int = 5         # Neumann series terms for DEQ backward pass
-    deq_include_phi: bool = False      # Include phi in DEQ fixed-point (joint mu, sigma, phi IFT)
-
     # === Pure VFE mode flags ===
     # Note on LayerNorm: the 2026-04-08 deep audit (PR-1 C1) flagged the
     # learned-affine LayerNorm as a possible constraint violation relative
@@ -497,42 +469,13 @@ class BlockConfig:
                                         # the block is always the pure-VFE form. Kept for
                                         # config/diagnostic compatibility. False is forced to
                                         # True with a warning in __post_init__.
-    closed_form_e_step: bool = False   # Use closed-form precision-weighted fixed point instead of gradient descent
 
     # === Memory efficiency ===
     gradient_checkpointing: bool = False  # Checkpoint non-final layers (~60% memory savings, ~30% extra compute)
 
     # === Multi-layer depth signal ===
                                         # When False (default), all layers share the embedding prior.
-    # === Active inference / Expected Free Energy (E-step extension) ===
-    # When pragmatic_weight > 0, the E-step adds a term −H[p_pred(v|μ_i)] to F:
-    # this is the pragmatic component of EFE under self-observation, computed
-    # via PriorBank.decode (KL-based readout).  It pushes beliefs toward
-    # confident predictions without target leak.
-    #
-    # When epistemic_weight > 0, the E-step adds the BALD-style mutual
-    # information term I(v; μ | q_i) ≈ H[E_q p(v|μ)] − E_q[H[p(v|μ)]], computed
-    # by Monte Carlo sampling S values from N(μ_i, Σ_i).  This is the
-    # canonical epistemic value in active inference: it rewards beliefs whose
-    # predictive distribution depends meaningfully on the parameter, and
-    # counter-balances the pragmatic term's self-reinforcement tendency.
-    #
-    # Both terms require the FFN to have access to the PriorBank instance.
-    # The reference is plumbed in model.__init__ via __dict__ assignment to
-    # avoid nn.Module sub-module registration of an already-owned module.
-    #
-    # Master toggle: when False (default), the entire EFE path is bypassed
-    # regardless of weight values.  When True, the pragmatic and epistemic
-    # weights below take effect.  Matches the project convention used by
-    # non_flat_transport and rope_full_gauge.
-                      # Master EFE on/off toggle
-    active_inference_pragmatic_weight: float = 1.0   # λ_prag · H[p(v|μ)]
-    active_inference_epistemic_weight: float = 0.5   # −λ_epi · MI(v; μ | q)
-    active_inference_epistemic_samples: int =  4     # MC samples for BALD MI
-    active_inference_decode_tau: float =       1.0   # Temperature for PriorBank.decode
 
-    active_inference: bool = False
-    
     rope_full_gauge: RopeFullGaugeMode = 'off'  # EXPERIMENTAL tri-state {'off', 'vfe_only', 'both'}.
                                         # When != 'off' (and use_rope=True), implements the
                                         # framework-consistent interpretation of RoPE as a
@@ -647,8 +590,6 @@ class BlockConfig:
             e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
             spd_floor_mode=config.get('spd_floor_mode', 'eigclamp'),
             propagate_kl_nonfinite=config.get('propagate_kl_nonfinite', False),
-            n_picard_steps=config.get('n_picard_steps', 0),
-            picard_trust_region=config.get('picard_trust_region', 5.0),
             e_step_early_exit_tol=config.get('e_step_early_exit_tol', None),
             # Performance
             compile_vfe=config.get('compile_vfe', False),
@@ -671,10 +612,6 @@ class BlockConfig:
             rope_base=config.get('rope_base', 10000.0),
             # Memory efficiency
             ffn_irrep_dims=ffn_irrep_dims,
-            # DEQ
-            use_deq=config.get('use_deq', False),
-            deq_neumann_terms=config.get('deq_neumann_terms', 5),
-            deq_include_phi=config.get('deq_include_phi', False),
             # Pure VFE mode. Defaults match the dataclass declaration (LayerNorm
             # enabled). See 2026-04-08 PR-1 C1 revert note for the rationale.
             use_layernorm=config.get('use_layernorm', True),
@@ -682,16 +619,9 @@ class BlockConfig:
             use_residual=config.get('use_residual', True),
             residual_type=config.get('residual_type', 'additive'),
             skip_attention=config.get('skip_attention', True),
-            closed_form_e_step=config.get('closed_form_e_step', False),
             # Memory efficiency
             gradient_checkpointing=config.get('gradient_checkpointing', False),
             rope_full_gauge=config.get('rope_full_gauge', 'off'),
-            # Active inference / EFE
-            active_inference=config.get('active_inference', False),
-            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 1.0),
-            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.5),
-            active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
-            active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,

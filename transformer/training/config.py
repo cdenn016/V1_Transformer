@@ -240,15 +240,11 @@ class TrainingConfig:
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
     # ==========================================================================
-    # P-Flow & Delta Rule (backprop-free learning)
+    # PriorBank decode slot & shared E-step flag
     # ==========================================================================
-    use_p_flow: bool =           False          # EMA update of token embeddings toward successful beliefs
-    p_flow_ema_decay: float =    0.99
     sigma_ce_scale: float =      0.7      # Checkpoint round-trip slot only; the live runtime value comes from the
                                           # entry-point flat CONFIG['sigma_ce_scale'] consumed by model.py (PriorBank). Tune it there.
     detach_phi: bool =           False           # Detach phi from backprop (enables backprop-free phi)
-    use_delta_rule_w_out: bool = False # Delta rule for W_out (backprop-free)
-    delta_rule_lr: float =       0.001
 
     # ==========================================================================
     # Diagnostics

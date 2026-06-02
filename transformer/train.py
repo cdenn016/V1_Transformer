@@ -792,27 +792,6 @@ def compute_free_energy_loss(
         metrics['attention/kl_model_mean'] = kl_model.mean().item()
 
     # =================================================================
-    # P-FLOW DATA: Include beliefs and per-position CE for optional P-flow updates
-    # =================================================================
-    # Compute per-position CE for weighting P-flow updates (low error = successful belief)
-    with torch.no_grad():
-        ce_per_position = F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)),
-            targets.reshape(-1),
-            reduction='none',
-            ignore_index=pad_token_id,
-        ).reshape(targets.shape)  # (B, N)
-
-    # Store in metrics for optional P-flow in training loop
-    metrics['p_flow/mu_q'] = mu_q.detach()           # (B, N, K) final beliefs
-    metrics['p_flow/ce_per_position'] = ce_per_position  # (B, N) per-position CE
-    if sigma_q is not None:
-        metrics['p_flow/sigma_q'] = sigma_q.detach()  # (B, N, K) or (B, N, K, K) belief variances
-    phi_evolved = attn_info.get('phi')
-    if phi_evolved is not None:
-        metrics['p_flow/phi_evolved'] = phi_evolved.detach()  # (B, N, phi_dim) VFE-evolved phi
-
-    # =================================================================
     # VFE Gradient Decomposition & Dynamics Metrics
     # =================================================================
     # Surface VFE debug dict from E-step (gradient component breakdown)

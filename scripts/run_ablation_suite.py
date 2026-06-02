@@ -95,8 +95,6 @@ BASELINE_CONFIG = {
    'phi_trace_clamp':            0.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
 
 
-   'active_inference':           False,   #requires priorbank true
-   
    'cache_decode_priors':        False,
    'skip_attention':             True,   #skips ad hoc attention sublayer
    
@@ -130,9 +128,6 @@ BASELINE_CONFIG = {
                                                
    'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                         # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
-   
-   'closed_form_e_step':         False,
-   'n_picard_steps':             0,
    
    # === E-step Weights ===
 
@@ -262,12 +257,6 @@ BASELINE_CONFIG = {
    'compile_mode':                'default',  # 'default', 'reduce-overhead', 'max-autotune'
 
 
-   # ===== Active Inference =======
-   'active_inference_pragmatic_weight':  2,   # start small
-   'active_inference_epistemic_weight':  5,   # keep both ON to avoid feedback loop
-   'active_inference_epistemic_samples': 10,     # MC samples for BALD
-   
-   
     'dataset':                    'wikitext-103',
 }
 

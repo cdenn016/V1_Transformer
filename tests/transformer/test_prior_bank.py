@@ -3,7 +3,7 @@ Tests for transformer/core/prior_bank.py
 ==========================================
 
 Tests the PriorBank: encode (prior lookup), decode (fused KL logits),
-rotation (gauge-fixed), and update_from_beliefs (VFE learning).
+and rotation (gauge-fixed).
 """
 
 import pytest
@@ -253,36 +253,3 @@ class TestPriorBankGaugeTransform:
         # Off-diagonal should be nonzero
         off_diag = pairwise[~torch.eye(10, dtype=bool)]
         assert (off_diag > 1e-6).all(), "Some token priors are identical (degenerate phi init)"
-
-
-# ===========================================================================
-# TestPriorBankUpdateFromBeliefs
-# ===========================================================================
-
-class TestPriorBankUpdateFromBeliefs:
-    """Tests for update_from_beliefs()."""
-
-    def test_priors_change_after_update(self):
-        """mu_p changes for tokens with prediction errors."""
-        pb = _make_prior_bank(vocab_size=20, embed_dim=4)
-        token_ids = torch.tensor([[0, 1, 2, 3]])
-        mu_before = pb.prior_mu.data.clone()
-        mu_beliefs = torch.randn(1, 4, 4)
-        sigma_beliefs = torch.rand(1, 4, 4).clamp(min=0.1)
-        prediction_errors = torch.ones(1, 4) * 5.0  # high errors
-        pb.update_from_beliefs(token_ids, mu_beliefs, sigma_beliefs,
-                               prediction_errors, lr=0.5)
-        # Priors for tokens 0-3 should have changed
-        changed = (pb.prior_mu.data[:4] - mu_before[:4]).abs().sum()
-        assert changed > 0, "Priors did not change after update"
-
-    def test_sigma_stays_positive_after_update(self):
-        """sigma_p > 0 after update."""
-        pb = _make_prior_bank(vocab_size=20, embed_dim=4)
-        token_ids = torch.randint(0, 20, (2, 8))
-        mu_beliefs = torch.randn(2, 8, 4)
-        sigma_beliefs = torch.rand(2, 8, 4).clamp(min=0.1)
-        prediction_errors = torch.rand(2, 8)
-        pb.update_from_beliefs(token_ids, mu_beliefs, sigma_beliefs,
-                               prediction_errors, lr=0.1)
-        assert (pb.prior_sigma > 0).all()

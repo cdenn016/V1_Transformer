@@ -29,8 +29,6 @@ from transformer.core.block_config import BlockConfig
 # (compute_attention_weights, etc.) are used by the VFE loss.
 from transformer.core.variational_ffn import VariationalFFNDynamic
 
-from transformer.core.active_inference import configure_ffn_active_inference
-
 # Import gauge connection for non-flat transport
 from transformer.core.connection import (
     GaugeConnection,
@@ -530,9 +528,6 @@ class GaugeTransformerBlock(nn.Module):
             learnable_alpha=cfg.E_learnable_alpha,
             phi_natural_gradient=cfg.phi_natural_gradient,
             killing_center_reg=cfg.killing_center_reg,
-            use_deq=cfg.use_deq,
-            deq_neumann_terms=cfg.deq_neumann_terms,
-            deq_include_phi=cfg.deq_include_phi,
             gauge_mode=cfg.gauge_mode,
             # The FFN is now the sole owner of constant_omega: when
             # gauge_mode='constant' it builds and registers its own per-head
@@ -549,10 +544,7 @@ class GaugeTransformerBlock(nn.Module):
             rope_base=cfg.rope_base,
             gauge_param=cfg.gauge_param,
             detach_phi=cfg.detach_phi,
-            closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
             learnable_head_kappa=cfg.learnable_head_kappa,
-            n_picard_steps=cfg.n_picard_steps,
-            picard_trust_region=cfg.picard_trust_region,
             e_step_early_exit_tol=getattr(cfg, 'e_step_early_exit_tol', None),
             compile_vfe=cfg.compile_vfe,
             gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
@@ -590,12 +582,6 @@ class GaugeTransformerBlock(nn.Module):
                 diagonal_covariance=cfg.diagonal_covariance,
                 gauge_group=gauge_group,
             )
-
-        # Active inference / EFE plumbing — delegated to active_inference.py.
-        # Sets the 13 _ai_* instance attributes and initialises _prior_bank_ref.
-        # The PriorBank reference itself is wired in later by the model via
-        # wire_readout_references() using __dict__ assignment.
-        configure_ffn_active_inference(self.ffn, cfg)
 
         # Per-head learnable temperature κ_h (learnable_head_kappa=True): with the
         # attention sublayer removed, the FFN's own `log_kappa_per_head` parameter

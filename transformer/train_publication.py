@@ -63,7 +63,6 @@ from pathlib import Path
 # Primary modes:
 #   'standard'   - Dot-product attention + MLP baseline (backprop)
 #   'em'         - Gauge VFE + IFT implicit differentiation M-step (backprop)
-#   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
 #   'hybrid'
 
 # =================================================================
@@ -136,7 +135,7 @@ EM_CONFIG = {
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                   10,
+    'gauge_dim':                   20,
     'irrep_spec':        [('fund', 2, 10)],
 
     'use_prior_bank':             False,
@@ -144,7 +143,7 @@ EM_CONFIG = {
     
     'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
-    'causal_lower_triangle':      False,
+    'causal_lower_triangle':      True,
 
     'kappa_beta':                 1,
     'kappa_warmup_steps':         2000,  # freeze kappa for first n steps
@@ -167,8 +166,6 @@ EM_CONFIG = {
     'phi_trace_clamp':            0.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
 
 
-    'active_inference':           False,   #requires priorbank true
-    
     'cache_decode_priors':        False,
     'skip_attention':             True,   #skips ad hoc attention sublayer
     
@@ -181,7 +178,7 @@ EM_CONFIG = {
 
     'use_layernorm':              True,  #breaks gauge equivariance unless mahal
     'use_residual':               False,  #set False if skip-attention=True
-    'use_output_projection':      False,
+    'use_output_projection':      True,
    
     'use_equivariant_head_mixer': False,  # Opt-in principled replacement for W_o
     
@@ -204,9 +201,6 @@ EM_CONFIG = {
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                          # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
     
-    'closed_form_e_step':         False,
-    'n_picard_steps':             0,
-    
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
@@ -220,7 +214,7 @@ EM_CONFIG = {
                                           # Drives the σ retraction directly:
                                           # σ_new = σ · exp(E_sigma_q_lr · decay_t · clamp(δσ/σ, ±E_sigma_q_trust))
     'E_sigma_q_trust':            5.0,    # E-step σ trust-region clamp on |δσ/σ| (separate from step size)
-    'E_phi_lr':                   0.05,   # E-step φ step size
+    'E_phi_lr':                   0,   # E-step φ step size
 
     # === M-step Weights ===        
     
@@ -335,134 +329,6 @@ EM_CONFIG = {
     'use_amp':                     False, 
     'use_compile':                 False,
     'compile_mode':                'default',  # 'default', 'reduce-overhead', 'max-autotune'
-
-
-    # ===== Active Inference =======
-    'active_inference_pragmatic_weight':  2,   # start small
-    'active_inference_epistemic_weight':  5,   # keep both ON to avoid feedback loop
-    'active_inference_epistemic_samples': 10,     # MC samples for BALD
-}
-
-
-# =============================================================================
-# CONFIG: HEBBIAN — Backprop-free learning via P-flow + delta rule (mode='hebbian')
-# =============================================================================
-# Same gauge-VFE model as EM, but ALL parameter learning is local/Hebbian:
-#
-#   E-step: Same VFE natural gradient descent on (μ_q, Σ_q, φ).
-#
-#   M-step (no backprop):
-#     μ_embed, σ_embed: P-flow EMA toward successful beliefs (prediction-error weighted)
-#     φ_embed:          P-flow EMA toward E-step evolved φ (detached from backprop)
-#     W_out:            Delta rule ΔW = η·(target - pred) ⊗ μ^T (Widrow-Hoff)
-#
-#   Loss: CE only (alpha=0, beta=0). VFE regularizers are implicit in the
-#         E-step dynamics, not in the training loss.
-# =============================================================================
-HEBBIAN_CONFIG = {
-    # === Architecture (same model as EM) ===
-    'vocab_size':   50257,
-    'embed_dim':    10,
-    'gauge_dim':    10,
-    'n_layers':     1,
-    'hidden_dim':   508,
-    'max_seq_len':  128,
-
-    # === Training ===
-    'batch_size':   64,
-    'num_workers':  0,
-    'max_steps':    15000,
-    'warmup_steps': 100,
-
-    'ffn_mode':              'VFE_dynamic',
-    'tie_embeddings':        False,
-
-    'use_layernorm':         True,
-    # 'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
-    'use_residual':          True,
-    'use_output_projection': True,
-    'E_learnable_lr':      True,
-
-    # === Gauge group ===
-    'gauge_group':   'GLK',
-    'gauge_mode':    'learned',
-    'gauge_param':   'phi',
-    'irrep_spec':    [('fund', 1, 10)],
-
-    # === E-step dynamics (same as EM) ===
-    'ffn_n_iterations': 1,
-
-    'E_alpha':         1.0,
-    'E_lambda_belief': 1.0,
-
-    'evolve_sigma':        True,
-    'evolve_phi':          True,
-    'evolve_phi_e_step':   True,
-    'diagonal_covariance': True,
-
-    # === Hebbian M-step: no backprop ===
-    'em_mode':              'em_phi_q',  # Detach beliefs at EM boundary; Hebbian uses P-flow + delta-rule for M-step
-
-    # EMA update of embeddings toward successful beliefs
-    'use_p_flow':           True,
-    'use_delta_rule_w_out': True,   # Widrow-Hoff local learning for W_out
-    # phi learns via P-flow only (no backprop)
-    'detach_phi':           True,
-
-    'p_flow_ema_decay':     0.95,
-    'delta_rule_lr':        0.1,
-
-
-    # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
-    'M_alpha':      0.0,
-    'M_beta':       0.0,
-    'mass_phi':     0.0,
-    'lambda_hyper': 0.0,
-    'lambda_gamma': 0.0,
-    'kappa_gamma':  1.0,
-
-    # === Phi gradient geometry ===
-    'phi_natural_gradient':      'killing',
-    'use_killing_form':           True,
-    'killing_form_sym_dampening': 0.1,
-
-    # === Position encoding ===
-    'use_rope':          True,
-    'pos_encoding_mode': 'none',
-
-    # === Embedding init ===
-    'mu_init_std': 1.0,
-    'phi_scale':   1.0,
-    'kappa_beta':  1.0,
-
-    # === Learning rates ===
-    # mu/sigma/phi: 0.0 because P-flow EMA is the sole embedding update mechanism.
-    # Nonzero backprop LR here would create a hybrid (optimizer + P-flow) that
-    # conflicts with the "no backprop" design. Attention/FFN params still need
-    # backprop since they have no P-flow equivalent.
-    'M_mu_p_lr':        0.0,
-    'M_sigma_p_lr':     0.0,
-    'M_phi_lr':         0.0,     # phi learns via phi_flow_update only (detach_phi=True)
-    'M_vfe_hyperparam_lr': 0.05,
-    'M_attention_lr':   0.005,
-    'M_output_lr':      0.0,     # W_out learns via delta rule only
-
-    # === Regularization ===
-    'non_embed_weight_decay': 0.01,
-    'grad_clip':    1.0,
-
-    # === Logging ===
-    'log_interval':        100,
-    'eval_interval':       1000,
-    'checkpoint_interval': 25000,
-    
-    # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     False,
-    'track_iteration_diagnostics': False,
-    'diagnostics_interval':        25,
-  
-    'debug_vfe_grads':             False,
-    'verbose_diagnostics':         False,
 }
 
 
@@ -689,7 +555,7 @@ from transformer.training.experiment_runner import (
 def main():
     # DOCUMENTED EXCEPTION to CLAUDE.md "NO CLI ARGUMENTS" hard constraint.
     # This entry point is the single sanctioned argparse user of the project —
-    # it spans six publication training modes (standard / em / hebbian /
+    # it spans five publication training modes (standard / em /
     # attention-only / ffn-only / hybrid) and switches between
     # them based on the user's --mode selection. New entry points must still
     # follow the click-to-run pattern; this one is grandfathered for
@@ -705,15 +571,13 @@ def main():
                             # Primary modes
                             'standard',                 # Dot-product attention + MLP baseline
                             'em',                       # Gauge VFE + IFT implicit differentiation M-step
-                            # Gauge VFE + P-flow/delta-rule (no backprop)
-                            'hebbian',
                             # Peer review ablations
                             # (M2b) attention-only at d_model=90
                             'standard_attn_only',
                             # Hybrid: gauge KL-attention + PriorBank + standard GELU FFN
                             'hybrid',
                         ],
-                        help='Training mode: standard, em, hebbian, standard_attn_only, hybrid')
+                        help='Training mode: standard, em, standard_attn_only, hybrid')
 
     # System
     parser.add_argument('--device', type=str, default='auto')
@@ -756,10 +620,6 @@ def main():
         config = EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
-    elif mode == 'hebbian':
-        config = HEBBIAN_CONFIG.copy()
-        ffn_mode = 'VFE_dynamic'
-
     elif mode == 'standard_attn_only':
         config = STANDARD_ATTN_ONLY_CONFIG.copy()
         ffn_mode = 'standard'
@@ -770,7 +630,7 @@ def main():
 
     else:
         print(f"\nError: Unknown mode \'{mode}\'")
-        print("Valid modes: standard, em, hebbian, hybrid, standard_attn_only")
+        print("Valid modes: standard, em, hybrid, standard_attn_only")
         return
 
     config['dataset'] = args.dataset

@@ -3,9 +3,8 @@ Advanced Finite-Difference Tests (Phase 6 Audit)
 =================================================
 
 Tests for mathematical correctness of:
-1. DEQ Neumann backward (linear contraction test)
-2. Sandwich product derivative ∂(Ω·Σ·Ω^T)/∂φ
-3. Connection MLP gauge equivariance (negative test)
+1. Sandwich product derivative ∂(Ω·Σ·Ω^T)/∂φ
+2. Connection MLP gauge equivariance (negative test)
 
 All FD tests use float64 central differences with eps=1e-5.
 """
@@ -14,98 +13,6 @@ import math
 import pytest
 import numpy as np
 import torch
-
-
-# ---------------------------------------------------------------------------
-# Test 1: DEQ Neumann Backward (Linear Contraction)
-# ---------------------------------------------------------------------------
-
-class TestDEQNeumannBackward:
-    """Verify DEQ Neumann series backward via linear contraction T(z) = Az + b."""
-
-    def test_neumann_converges_to_exact_inverse(self):
-        r"""For T(z) = Az + b with ||A|| < 1, DEQ backward should give
-        (I - A^T)^{-1} v, which we can compute exactly.
-
-        The DEQ forward is identity at the fixed point z* = (I-A)^{-1} b.
-        The backward replaces straight-through with Neumann correction.
-        """
-        from transformer.core.vfe_deq import DEQFixedPoint
-
-        torch.manual_seed(46)
-        D = 8
-
-        # Build a contraction: A with spectral radius < 1
-        A_raw = torch.randn(D, D, dtype=torch.float64) * 0.3
-        A = A_raw / (torch.linalg.norm(A_raw, ord=2) + 1.0)  # ||A||_2 < 0.5
-        b = torch.randn(D, dtype=torch.float64)
-
-        # Fixed point: z* = (I - A)^{-1} b
-        I = torch.eye(D, dtype=torch.float64)
-        z_star = torch.linalg.solve(I - A, b)
-
-        # Verify it's a fixed point
-        assert torch.allclose(A @ z_star + b, z_star, atol=1e-10)
-
-        # Define step function (linear contraction)
-        def step_fn(mu_in, sigma_in):
-            mu_out = A @ mu_in + b
-            sigma_out = sigma_in  # sigma is dummy for this test
-            return mu_out, sigma_out
-
-        # DEQ forward + backward with increasing Neumann terms
-        # The exact backward gives: (I - A^T)^{-1} v for any v
-        v = torch.randn(D, dtype=torch.float64)
-        exact = torch.linalg.solve(I - A.T, v)
-
-        prev_err = float('inf')
-        for K in [1, 3, 5, 10]:
-            mu_star = z_star.detach().requires_grad_(True)
-            sigma_star = torch.ones(D, dtype=torch.float64).requires_grad_(True)
-
-            mu_out, sigma_out = DEQFixedPoint.apply(
-                mu_star, sigma_star, step_fn, 1, K
-            )
-            # Backward with v as upstream gradient
-            mu_out.backward(v, retain_graph=True)
-            neumann_result = mu_star.grad.clone()
-
-            err = (neumann_result - exact).norm().item()
-            # Error should decrease with more terms (geometric convergence)
-            assert err < prev_err + 1e-10, \
-                f"Neumann error not decreasing: K={K}, err={err:.2e}, prev={prev_err:.2e}"
-            prev_err = err
-
-        # With enough terms, should be close to exact
-        assert prev_err < 1e-4, \
-            f"Neumann series did not converge to exact: final err={prev_err:.2e}"
-
-    def test_weak_contraction(self):
-        """When A≈0, backward should be close to identity (v)."""
-        from transformer.core.vfe_deq import DEQFixedPoint
-
-        torch.manual_seed(47)
-        D = 5
-        # Very weak contraction: A has tiny spectral radius
-        A = torch.randn(D, D, dtype=torch.float64) * 0.001
-        b = torch.randn(D, dtype=torch.float64)
-        I = torch.eye(D, dtype=torch.float64)
-        z_star = torch.linalg.solve(I - A, b)
-
-        def step_fn(mu_in, sigma_in):
-            return A @ mu_in + b, sigma_in
-
-        v = torch.randn(D, dtype=torch.float64)
-        mu_star = z_star.detach().requires_grad_(True)
-        sigma_star = torch.ones(D, dtype=torch.float64).requires_grad_(True)
-
-        mu_out, _ = DEQFixedPoint.apply(mu_star, sigma_star, step_fn, 1, 5)
-        mu_out.backward(v)
-
-        # With A≈0: (I - A^T)^{-1} ≈ I, so backward ≈ v
-        assert torch.allclose(mu_star.grad, v, atol=0.1), \
-            f"With near-zero A, backward should be close to identity. " \
-            f"Diff: {(mu_star.grad - v).norm():.4e}"
 
 
 # ---------------------------------------------------------------------------
