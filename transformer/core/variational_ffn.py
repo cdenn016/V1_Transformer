@@ -16,7 +16,6 @@ Key features:
 - Fused attention+gradient paths for diagonal covariance mode
 - Multi-head VFE: per-head beta_h through VFE iterations (multihead_vfe)
 - Isotropic covariance: force Sigma = sigma^2 I (isotropic_covariance)
-- DEQ mode: implicit differentiation for E-step fixed point (use_deq)
 - Amortized inference: gradient flow through priors for learned E-step init
 - Learnable alpha: Bayesian precision via Gamma-Normal conjugacy
 - PriorBank: token-dependent priors via token_ids (prior_bank / use_prior_bank)
@@ -79,9 +78,6 @@ from transformer.core.vfe_utils import (
     _retract_phi,
 )
 
-from transformer.core.active_inference import compute_ai_gradients
-
-
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights
 
@@ -99,34 +95,6 @@ from transformer.core.vfe_gradients import (
     _compute_rope_full_gauge_gradient_per_head,
 )
 from transformer.core.phi_evolution import precondition_phi_gradient
-
-
-# =============================================================================
-# DEQ Fixed-Point Implicit Differentiation
-# =============================================================================
-# Extracted to transformer/core/vfe_deq.py.  The two autograd Functions
-# below are re-exported here so external callers that do
-#     from transformer.core.variational_ffn import DEQFixedPoint
-# continue to work unchanged.  See vfe_deq.py for the implementations,
-# the Neumann-series derivation, and the divergence safeguards.
-from transformer.core.vfe_deq import (
-    DEQFixedPoint,
-    DEQFixedPointFull,
-    make_deq_step_fn as _make_deq_step_fn_free,
-    make_deq_step_fn_with_phi as _make_deq_step_fn_with_phi_free,
-)
-
-# =============================================================================
-# Closed-form E-step — extracted to transformer/core/vfe_closed_form.py
-# =============================================================================
-# The 500-line _closed_form_e_step method body was moved to its own module
-# as part of the side-quest refactor.  The method remains on
-# VariationalFFNDynamic as a thin delegator so external callers continue
-# to work.  See vfe_closed_form.py for the diagonal / full-cov branches,
-# Picard resolve loops, and phi evolution.
-from transformer.core.vfe_closed_form import (
-    run_closed_form_e_step as _run_closed_form_e_step,
-)
 
 
 # =============================================================================
@@ -157,7 +125,6 @@ class VariationalFFNDynamic(nn.Module):
         - prior_bank / use_prior_bank: token-dependent priors via PriorBank and token_ids
         - learnable_alpha: Bayesian precision via Gamma-Normal conjugacy
         - isotropic_covariance: force Sigma = sigma^2 I
-        - DEQ mode (use_deq): implicit differentiation for E-step fixed point
         - amortized_inference: gradient flow through priors for learned E-step init
         - exact_diagonal_transport: lift diagonal sigma to full for exact transport,
           then extract diagonal from result; disables fused diagonal paths
@@ -227,11 +194,7 @@ class VariationalFFNDynamic(nn.Module):
         # Phi gradient preconditioning mode
         phi_natural_gradient: str =          'killing',  # 'clip'|'cartan'|'killing'|'pullback'
         killing_center_reg: Optional[float] = None,  # Killing form center regularization (None=2K)
-        
-        # DEQ implicit differentiation
-        use_deq: bool =          False,                # Use DEQ backward for E-step fixed point
-        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
-        
+
         # Gauge mode
         gauge_mode: str = 'learned',          # 'learned', 'trivial' (Ω = I), or 'constant'
         # Constant gauge: per-head learnable Ω from the attention module.
@@ -258,18 +221,7 @@ class VariationalFFNDynamic(nn.Module):
                                                # (diagnostic runs; default preserves masking).
         detach_phi: bool =           False,# Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
-        deq_include_phi: bool =      False,# Include phi in DEQ fixed-point variables.
-                                           # When True, the Neumann-series IFT correction applies
-                                           # to the joint (mu, sigma, phi) fixed point, giving the
-                                           # exact M-step phi gradient instead of straight-through.
-                                           # Requires use_deq=True and evolve_phi=True.
-        closed_form_e_step: bool =   False,# Use closed-form precision-weighted fixed point
-                                           # instead of gradient descent. Diagonal path uses
-                                           # the enhanced form that absorbs softmax coupling
-                                           # (S, c terms); full-cov uses linear-only CF.
         learnable_head_kappa: bool =    False,# If True, learn per-head κ_h
-        n_picard_steps: int =           0,  # Re-solve iterations (diagonal) or Picard steps (full-cov)
-        picard_trust_region: float =    5.0,# Whitened trust region for Picard steps
         e_step_early_exit_tol: Optional[float] = None, # Relative change threshold for early E-step exit
         compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
@@ -318,8 +270,6 @@ class VariationalFFNDynamic(nn.Module):
                 Requires irrep_dims.
             phi_natural_gradient: Phi gradient preconditioning mode
                 ('clip'|'cartan'|'killing'|'pullback').
-            use_deq: If True, use DEQ implicit differentiation for E-step fixed point.
-            deq_neumann_terms: Neumann series terms for DEQ backward pass.
             gauge_mode: 'learned', 'trivial' (Omega=I), or 'constant'.
             constant_omega: Per-head learnable Omega from the attention module for
                 gauge_mode='constant'.
@@ -370,11 +320,8 @@ class VariationalFFNDynamic(nn.Module):
         self.enforce_orthogonal = enforce_orthogonal
         self.track_iteration_diagnostics = track_iteration_diagnostics
         self.detach_phi = detach_phi
-        self.closed_form_e_step = closed_form_e_step
         self.e_step_early_exit_tol = e_step_early_exit_tol
         self.gradient_checkpoint_vfe = gradient_checkpoint_vfe
-        self.n_picard_steps = n_picard_steps
-        self.picard_trust_region = picard_trust_region
         # RoPE in the VFE E-step uses a hybrid "attention gauge ≠ value gauge"
         # objective that mirrors the attention sublayer's factorisation:
         #
@@ -554,8 +501,7 @@ class VariationalFFNDynamic(nn.Module):
         #
         # Fix: the VFE FFN now borrows the attention sublayer's parameter
         # via blocks.py:GaugeTransformerBlock.__init__ using __dict__
-        # assignment (same pattern as _prior_bank_ref in
-        # active_inference.py).  This bypasses nn.Module parameter
+        # assignment.  This bypasses nn.Module parameter
         # registration in the FFN so the parameter is not double-counted
         # in the optimizer or state_dict, and both sublayers read from a
         # single source of truth.
@@ -650,10 +596,6 @@ class VariationalFFNDynamic(nn.Module):
         self._collect_vfe_metrics: bool = False
         self.last_vfe_debug: Optional[Dict[str, float]] = None
 
-        # DEQ implicit differentiation
-        self.use_deq = use_deq
-        self.deq_neumann_terms = deq_neumann_terms
-        self.deq_include_phi = deq_include_phi
         # Learnable step sizes (stored in unconstrained space; softplus → positive LR).
         # μ and σ are INDEPENDENT: separate raw parameters, separate softplus+clamp
         # properties, separate gradients when learnable_lr=True. This is the
@@ -1212,12 +1154,10 @@ class VariationalFFNDynamic(nn.Module):
         as constants. When ``exact_phi_grad=True`` and ``amortized_inference=True``,
         beliefs stay attached, giving the gradient through the unrolled E-step
         iteration graph — this is amortized inference [BaiKolterKoltun2019],
-        NOT a true implicit-function-theorem gradient. True IFT (solving
-        ``(I − J_T)^{-T} v`` via a Neumann series) is implemented in
-        ``transformer/core/vfe_deq.py`` and is gated behind
-        ``use_deq=True ∧ deq_include_phi=True``. The historical "IFT-correct"
-        label was retained on the `ift_phi` em_mode for back-compat with
-        saved configs; the actual gradient profile here is amortized.
+        NOT a true implicit-function-theorem gradient. The historical
+        "IFT-correct" label was retained on the `ift_phi` em_mode for
+        back-compat with saved configs; the actual gradient profile here
+        is amortized.
 
         Returns the preconditioned gradient, or None if no gradient could be computed.
         """
@@ -1362,41 +1302,6 @@ class VariationalFFNDynamic(nn.Module):
             return self._precondition_phi_grad(grad_phi, phi_current)
 
         return None
-
-    def _make_deq_step_fn(self, phi_current, mu_p_current, sigma_p,
-                           mask, is_diagonal, eps, dtype):
-        """Create a differentiable (μ, Σ) E-step closure for DEQ backward.
-
-        Thin wrapper around vfe_deq.make_deq_step_fn that passes ``self``
-        as the first argument.  The closure body was extracted in round 8
-        as part of the side-quest refactor; see vfe_deq.py for the full
-        implementation.
-        """
-        return _make_deq_step_fn_free(
-            self, phi_current, mu_p_current, sigma_p,
-            mask, is_diagonal, eps, dtype,
-        )
-
-    def _make_deq_step_fn_with_phi(
-        self,
-        mu_p_current: torch.Tensor,
-        sigma_p: torch.Tensor,
-        mask: Optional[torch.Tensor],
-        is_diagonal: bool,
-        eps: float,
-        dtype: torch.dtype,
-    ):
-        r"""Create a differentiable joint (μ, Σ, φ) E-step closure for DEQ.
-
-        Thin wrapper around vfe_deq.make_deq_step_fn_with_phi that passes
-        ``self`` as the first argument.  The closure body was extracted
-        in round 8 as part of the side-quest refactor; see vfe_deq.py for
-        the full implementation.
-        """
-        return _make_deq_step_fn_with_phi_free(
-            self, mu_p_current, sigma_p,
-            mask, is_diagonal, eps, dtype,
-        )
 
     # =================================================================
     # Helper: Build block exp-pairs for transport operators
@@ -1678,55 +1583,6 @@ class VariationalFFNDynamic(nn.Module):
             '_alpha_c0': _alpha_c0,
             'is_diagonal': is_diagonal,
         }
-
-    # =================================================================
-    # Helper: Closed-form E-step (precision-weighted fixed point)
-    # =================================================================
-
-    def _closed_form_e_step(
-        self,
-        mu_current: torch.Tensor,
-        sigma_current: Optional[torch.Tensor],
-        phi_current: torch.Tensor,
-        omega_current: Optional[torch.Tensor],
-        mu_p_current: torch.Tensor,
-        sigma_p: torch.Tensor,
-        alpha_effective: Union[float, torch.Tensor],
-        _alpha_c0: Optional[torch.Tensor],
-        is_diagonal: bool,
-        B: int,
-        N: int,
-        device: torch.device,
-        dtype: torch.dtype,
-        eps: float,
-        mask: Optional[torch.Tensor],
-        return_beta_history: bool,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[torch.Tensor], list, Optional[list]]:
-        r"""Compute the precision-weighted closed-form VFE fixed point.
-
-        Thin wrapper around vfe_closed_form.run_closed_form_e_step that
-        passes ``self`` as the first argument.  The method body was
-        extracted in round 8 as part of the side-quest refactor; see
-        vfe_closed_form.py for the full 500-line implementation (diagonal
-        + full-covariance branches, Picard resolve loops, and phi
-        evolution).
-        """
-        return _run_closed_form_e_step(
-            self,
-            mu_current=mu_current,
-            sigma_current=sigma_current,
-            phi_current=phi_current,
-            omega_current=omega_current,
-            mu_p_current=mu_p_current,
-            sigma_p=sigma_p,
-            alpha_effective=alpha_effective,
-            _alpha_c0=_alpha_c0,
-            is_diagonal=is_diagonal,
-            B=B, N=N,
-            device=device, dtype=dtype, eps=eps,
-            mask=mask,
-            return_beta_history=return_beta_history,
-        )
 
 
     # =================================================================
@@ -2215,49 +2071,6 @@ class VariationalFFNDynamic(nn.Module):
                 "The single-beta (irrep_dims=None) path has been removed. "
                 "Set ffn_irrep_dims in BlockConfig or pass irrep_dims to the constructor."
             )
-        # =====================================================================
-        # Active inference / EFE gradients (delegated)
-        # =====================================================================
-        # compute_ai_gradients handles the master toggle, weight gates, ref
-        # resolution, and debug dict writes — see active_inference.py.
-        # Returns (None, None) when all AI terms are off (default).
-        # W_out readout is resolved inside compute_ai_gradients from the
-        # _ai_w_out_ref wired by wire_readout_references.
-        _bep_for_ai = _mh_cached_bep
-        (_ai_pending_grad_mu, _ai_pending_grad_sigma) = compute_ai_gradients(
-            ffn=self,
-            mu_current=mu_current,
-            sigma_current=sigma_current,
-            W_out=None,
-            beta_current=beta_current,
-            beta_heads=beta_heads,
-            cached_block_exp_pairs=_bep_for_ai,
-            irrep_dims=self.irrep_dims,
-        )
-
-        # =====================================================================
-        # Unified natural gradient: fold EFE into grad_mu/sigma
-        # =====================================================================
-        # Fold EFE Euclidean grads into grad_mu / grad_sigma BEFORE the
-        # Fisher natural-gradient projection.  The Fisher metric F(θ) is a
-        # property of the belief parameterization q_θ = N(μ, Σ), not the
-        # loss function (Amari 1998).  All scalar functionals of the belief
-        # parameters — KL, entropy, MI — get the same natural gradient:
-        # ∇̃f = F⁻¹·∇f.  The observation CE gradient (discrete_obs_grad,
-        # added above) already gets this treatment; EFE is structurally
-        # identical and must not be treated differently.
-        if _is_final_iter:
-            if _ai_pending_grad_mu is not None:
-                self._e_step_grad_norms['ai_efe_raw_grad_norm'] = (
-                    _ai_pending_grad_mu.detach().norm().item())
-            if _ai_pending_grad_sigma is not None:
-                self._e_step_grad_norms['ai_efe_sigma_raw_grad_norm'] = (
-                    _ai_pending_grad_sigma.detach().norm().item())
-        if _ai_pending_grad_mu is not None:
-            grad_mu = grad_mu + _ai_pending_grad_mu
-        if _ai_pending_grad_sigma is not None:
-            grad_sigma = grad_sigma + _ai_pending_grad_sigma
-
         # Debug: Euclidean totals (after obs + EFE folding, before clip)
         if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
             _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_mu_total'] = _grad_norm(grad_mu)
@@ -2588,33 +2401,9 @@ class VariationalFFNDynamic(nn.Module):
         beta_heads = []
 
         # =====================================================================
-        # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
-        # =====================================================================
-        if self.closed_form_e_step:
-            (mu_current, sigma_current, phi_current, omega_current,
-             beta_heads, _cf_beta_history) = self._closed_form_e_step(
-                mu_current=mu_current,
-                sigma_current=sigma_current,
-                phi_current=phi_current,
-                omega_current=omega_current,
-                mu_p_current=mu_p_current,
-                sigma_p=sigma_p,
-                alpha_effective=alpha_effective,
-                _alpha_c0=_alpha_c0,
-                is_diagonal=is_diagonal,
-                B=B, N=N,
-                device=device, dtype=dtype, eps=eps,
-                mask=mask,
-                return_beta_history=return_beta_history,
-            )
-            if return_beta_history and _cf_beta_history:
-                beta_history = _cf_beta_history
-            beta_current = beta_heads[-1] if beta_heads else None
-        # =====================================================================
         # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
         # =====================================================================
-        # Skip when closed_form_e_step handled the E-step above.
-        _n_iters = 0 if self.closed_form_e_step else self.n_iterations
+        _n_iters = self.n_iterations
 
         # When phi is frozen across iterations, precompute block exp pairs
         # once to avoid redundant matrix exponentials (Finding 23: ~2-3x speedup
@@ -2696,38 +2485,9 @@ class VariationalFFNDynamic(nn.Module):
                 _mu_prev = mu_current.detach()
 
         # =================================================================
-        # DEQ implicit differentiation: replace straight-through backward
-        # with Neumann-series approximation of (I - J)^{-1}
-        # =================================================================
-        if self.use_deq and self.training and torch.is_grad_enabled():
-            if self.deq_include_phi and self.update_phi:
-                # Joint (μ, Σ, φ) fixed-point: IFT corrects ALL three variables,
-                # eliminating the straight-through bias in the M-step φ gradient.
-                step_fn = self._make_deq_step_fn_with_phi(
-                    mu_p_current, sigma_p,
-                    mask, is_diagonal, eps, dtype,
-                )
-                mu_current, sigma_current, phi_current = DEQFixedPointFull.apply(
-                    mu_current, sigma_current, phi_current, step_fn,
-                    self.n_iterations, self.deq_neumann_terms,
-                )
-            else:
-                # Original (μ, Σ)-only fixed point; φ gets straight-through gradient.
-                step_fn = self._make_deq_step_fn(
-                    phi_current, mu_p_current, sigma_p,
-                    mask, is_diagonal, eps, dtype,
-                )
-                mu_current, sigma_current = DEQFixedPoint.apply(
-                    mu_current, sigma_current, step_fn,
-                    self.n_iterations, self.deq_neumann_terms,
-                )
-
-        # =================================================================
         # STEP 5: Optional Gauge Frame Evolution via VFE Gradient (after loop)
         # =================================================================
-        # Skip when closed_form_e_step already handled phi evolution above.
         _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
-        _skip_phi_post = self.closed_form_e_step and is_diagonal  # Already done in closed-form path
         # em_phi_mode == 'M_phi_p' forbids any in-E-step evolution of phi/omega.
         # The per-iter block at ~line 2214 already honors this; the post-loop
         # block used to run unconditionally and silently violated the contract
@@ -2735,8 +2495,7 @@ class VariationalFFNDynamic(nn.Module):
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
                 and self.gauge_mode not in ('trivial', 'constant')
-                and self.em_phi_mode != 'M_phi_p'
-                and not _skip_phi_post):
+                and self.em_phi_mode != 'M_phi_p'):
 
             if _use_omega:
                 # Direct Omega path

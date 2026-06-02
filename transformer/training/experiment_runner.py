@@ -11,7 +11,7 @@ execution (this module).. The entry point sets configs and calls
 run_single_experiment() from here.
 
 Public API:
-    - run_single_experiment()    — Run EM/standard/hebbian experiment
+    - run_single_experiment()    — Run EM/standard experiment
     - PublicationTrainer         — FastTrainer subclass with metrics/diagnostics
     - run_test_evaluation()      — Evaluate model on test set
     - PublicationMetricsTracker  — Step-level metrics collection
@@ -716,8 +716,6 @@ class PublicationTrainer(FastTrainer):
         input_ids: torch.Tensor,
         target_ids: torch.Tensor,
         is_standard: bool,
-        use_delta_rule: bool,
-        _tied_weights: bool,
         effective_beta: float,
     ) -> Tuple[Any, Dict]:
         r"""Run the forward pass, compute the VFE/CE loss, and call backward.
@@ -727,10 +725,6 @@ class PublicationTrainer(FastTrainer):
         ``compute_free_energy_loss`` which computes
 
             F = CE + alpha*KL(q||p) + beta*KL(q||Omega*q) + ...
-
-        When delta rule is active and embeddings are tied, the shared
-        ``out_proj.weight`` gradient is zeroed after backward so that the
-        delta rule is the sole W_out update.
 
         Returns:
             (loss, full_metrics): the scalar loss tensor and the raw metrics
@@ -775,14 +769,6 @@ class PublicationTrainer(FastTrainer):
         if accum_steps > 1:
             loss = loss / accum_steps
         loss.backward()
-
-        # Tied weights + delta rule: zero out W_out gradient component.
-        # With tie_embeddings, out_proj.weight IS mu_embed.weight. In non-amortized
-        # mode mu_embed is detached from VFE, so any gradient on this shared tensor
-        # comes purely from the output projection (logits = W_out @ mu_q). Zero it
-        # so delta rule is the sole W_out update and P-flow is the sole mu update.
-        if _tied_weights and self.model.out_proj.weight.grad is not None:
-            self.model.out_proj.weight.grad.zero_()
 
         return loss, full_metrics
 
@@ -843,20 +829,6 @@ class PublicationTrainer(FastTrainer):
                             pb_phi.data, self._slk_trace_vec
                         )
 
-    def _apply_p_flow_and_delta_rule(
-        self,
-        input_ids: torch.Tensor,
-        target_ids: torch.Tensor,
-        full_metrics: Dict,
-        is_standard: bool,
-        use_delta_rule: bool,
-    ) -> None:
-        """Thin delegator — see ``hebbian.apply_p_flow_and_delta_rule``."""
-        from transformer.core.hebbian import apply_p_flow_and_delta_rule
-        return apply_p_flow_and_delta_rule(
-            self, input_ids, target_ids, full_metrics, is_standard, use_delta_rule,
-        )
-
     def _format_train_metrics(self, full_metrics: Dict, effective_beta: float) -> Dict:
         """Format the raw VFE metrics dict into the standard training metrics dict.
 
@@ -913,11 +885,10 @@ class PublicationTrainer(FastTrainer):
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
         """Train step with comprehensive metrics.
 
-        Orchestrates four sub-operations in sequence:
+        Orchestrates the sub-operations in sequence:
         1. Forward pass + loss + backward (``_run_forward_and_backward``).
         2. Post-backward geometry projections (``_apply_post_backward_projections``).
-        3. P-flow EMA and delta rule W_out updates (``_apply_p_flow_and_delta_rule``).
-        4. Metrics formatting (``_format_train_metrics``).
+        3. Metrics formatting (``_format_train_metrics``).
 
         Also manages optimizer step, gradient clipping, scheduler step, and the
         optional layer/iteration diagnostic forward pass.
@@ -929,23 +900,12 @@ class PublicationTrainer(FastTrainer):
         target_ids = target_ids.to(self.device)
 
         is_standard = isinstance(self.model, StandardTransformerLM)
-        use_delta_rule = getattr(
-            self.config, 'use_delta_rule_w_out', False) and not is_standard
-
-        # When tie_embeddings=True, out_proj.weight IS mu_embed.weight. Do not
-        # disable requires_grad on a tied tensor; zero the gradient post-backward.
-        _tied_weights = (use_delta_rule and hasattr(self.model, 'out_proj')
-                         and hasattr(self.model, 'token_embed')
-                         and hasattr(self.model.token_embed, 'mu_embed')
-                         and self.model.out_proj.weight is self.model.token_embed.mu_embed.weight)
-        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
-            self.model.out_proj.weight.requires_grad = False
 
         effective_beta = self.config.M_beta
 
         # --- 1. Forward + backward ---
         _loss, full_metrics = self._run_forward_and_backward(
-            input_ids, target_ids, is_standard, use_delta_rule, _tied_weights, effective_beta
+            input_ids, target_ids, is_standard, effective_beta
         )
 
         # --- 2a. Pre-optimizer geometry: Killing form preconditioning ---
@@ -1045,16 +1005,7 @@ class PublicationTrainer(FastTrainer):
         # --- 2b. Post-optimizer geometry: kappa clamp + SL(K) projection ---
         self._apply_post_backward_projections()
 
-        # Re-enable requires_grad for W_out if it was disabled (non-tied case)
-        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
-            self.model.out_proj.weight.requires_grad = True
-
-        # --- 3. P-flow + delta rule ---
-        self._apply_p_flow_and_delta_rule(
-            input_ids, target_ids, full_metrics, is_standard, use_delta_rule
-        )
-
-        # --- 4. Format metrics ---
+        # --- 3. Format metrics ---
         metrics = self._format_train_metrics(full_metrics, effective_beta)
 
         # =================================================================
@@ -2003,14 +1954,6 @@ def run_single_experiment(
 
         checkpoint_dir=exp_checkpoint_dir,
 
-        # P-FLOW
-        use_p_flow=config.get('use_p_flow', False),
-        p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
-
-        # DELTA RULE
-        use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
-        delta_rule_lr=config.get('delta_rule_lr', 0.001),
-
         # Layer/iteration diagnostics
         track_layer_diagnostics=config.get('track_layer_diagnostics', False),
         track_iteration_diagnostics=config.get(
@@ -2145,10 +2088,6 @@ def run_single_experiment(
                      f"gamma={train_config.lambda_gamma} | kappa={config.get('kappa_beta', 1.0)}")
     # Non-default features worth noting
     _extras = []
-    if train_config.use_p_flow:
-        _extras.append(f"p-flow(ema={train_config.p_flow_ema_decay})")
-    if train_config.use_delta_rule_w_out:
-        _extras.append(f"delta-rule(lr={train_config.delta_rule_lr})")
     if config.get('use_killing_form', False):
         _extras.append("killing-form")
     if config.get('kappa_warmup_steps', 0) > 0:

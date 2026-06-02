@@ -984,40 +984,6 @@ class PriorBank(nn.Module):
 
         return logits
 
-    # =========================================================================
-    # M-STEP via prediction-error weighted EMA (Hebbian P-flow)
-    # =========================================================================
-    # Implementations live in ``transformer/core/hebbian.py``.  These
-    # methods are thin delegators kept for backward compatibility with
-    # external callers (e.g. ``GaugeTransformerLM.p_flow_update``).
-    def update_from_beliefs(
-        self,
-        token_ids: torch.Tensor,
-        mu_beliefs: torch.Tensor,
-        sigma_beliefs: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        lr: float = 0.01,
-    ):
-        """Thin delegator — see ``hebbian.update_prior_bank_from_beliefs``."""
-        from transformer.core.hebbian import update_prior_bank_from_beliefs
-        return update_prior_bank_from_beliefs(
-            self, token_ids, mu_beliefs, sigma_beliefs, prediction_errors, lr=lr,
-        )
-
-    def _update_gauge_fixed_base_prior(
-        self,
-        token_ids: torch.Tensor,
-        mu_beliefs: torch.Tensor,
-        sigma_beliefs: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        lr: float,
-    ):
-        """Thin delegator — see ``hebbian.update_gauge_fixed_base_prior``."""
-        from transformer.core.hebbian import update_gauge_fixed_base_prior
-        return update_gauge_fixed_base_prior(
-            self, token_ids, mu_beliefs, sigma_beliefs, prediction_errors, lr,
-        )
-
     def forward(
         self,
         token_ids: Optional[torch.Tensor] = None,

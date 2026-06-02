@@ -522,13 +522,9 @@ def resume_training():
         gauge_param=config.get('gauge_param', 'phi'),
         use_rope=config.get('use_rope', True),
 
-        # P-FLOW and delta rule
-        use_p_flow=config.get('use_p_flow', False),
-        p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
+        # PriorBank decode slot & shared E-step flag
         sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
         detach_phi=config.get('detach_phi', False),
-        use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
-        delta_rule_lr=config.get('delta_rule_lr', 0.001),
 
         # Phi preconditioning
         mass_phi=config.get('mass_phi', 0.05),

@@ -11,9 +11,7 @@ Three modes supported:
                  (default; mathematically pure path under
                  ``skip_attention=True``). NOTE: this is amortized
                  inference in the [BaiKolterKoltun2019] sense, NOT a true
-                 implicit-function-theorem gradient. True IFT (Neumann
-                 series `(I − J_T)^{-T} v`) lives behind ``use_deq=True``
-                 in ``transformer/core/vfe_deq.py``; the `ift_phi` label
+                 implicit-function-theorem gradient. The `ift_phi` label
                  is the historical mode name kept for back-compat with
                  saved configs and is not renamed here.
     'em_phi_q' : amortized μ; σ and φ in q; all detached at EM boundary.

@@ -97,8 +97,7 @@ BASE_CONFIG = {
    
    # === EM gradient-flow mode ===
    'em_mode':                    'ift_phi',
-   'active_inference':           False,    #requires priorbank true
-   
+
    'cache_decode_priors':        True,
    'skip_attention':             True,   # attention sublayer removed 2026-06-01; always pure-VFE
    
@@ -246,11 +245,6 @@ BASE_CONFIG = {
    'use_compile':                 False,
    'compile_mode':                'default',  # 'default', 'reduce-overhead', 'max-autotune'
 
-
-   # ===== Active Inference =======
-   'active_inference_pragmatic_weight':  0,   # start small
-   'active_inference_epistemic_weight':  1,   # keep both ON to avoid feedback loop
-   'active_inference_epistemic_samples': 2,     # MC samples for BALD
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
 }

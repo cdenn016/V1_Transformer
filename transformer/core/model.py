@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
 from transformer.core.blocks import GaugeTransformerStack, RMSNorm, MahalanobisNorm
 from transformer.core.block_config import BlockConfig
-from transformer.core.active_inference import wire_readout_references
 
 # Trajectory tracking (core-side protocol — analysis layer registers via set_global_recorder)
 from transformer.core.vfe_utils import get_global_recorder
@@ -367,14 +366,6 @@ class GaugeTransformerLM(nn.Module):
         # Output Projection
         # =================================================================
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
-
-        # =================================================================
-        # Active inference readout wiring — delegated to active_inference.py.
-        # Must run AFTER both self.transformer and self.out_proj are created.
-        # Plumbs PriorBank (or W_out fallback) into each block's FFN and
-        # emits diagnostic warnings for incompatible configurations.
-        # =================================================================
-        wire_readout_references(self.transformer, self.prior_bank, self.out_proj, logger=logger)
 
         # =================================================================
         # Initialize Weights (BEFORE tying embeddings, so that the
@@ -1563,44 +1554,6 @@ class GaugeTransformerLM(nn.Module):
             if was_training:
                 self.train()
 
-    def generate_active_inference(
-        self,
-        prompt_ids: torch.Tensor,
-        max_new_tokens: int,
-        gamma: float = 1.0,
-        top_k: int = 50,
-        preference_mode: str = 'current_belief',
-        include_epistemic: bool = False,
-        epistemic_samples: int = 4,
-        temperature: float = 1.0,
-        verbose: bool = False,
-    ) -> torch.Tensor:
-        """Autoregressive generation using canonical active inference.
-
-        Selects tokens by minimizing expected free energy (EFE) over a
-        top-K candidate set, rather than sampling from temperature-scaled
-        logits.  See ``expected_free_energy.generate_active_inference`` for
-        full documentation.
-
-        NOT decorated with @torch.inference_mode() — uses torch.no_grad()
-        internally.
-        """
-        from transformer.core.expected_free_energy import (
-            generate_active_inference as _gen_ai,
-        )
-        return _gen_ai(
-            model=self,
-            prompt_ids=prompt_ids,
-            max_new_tokens=max_new_tokens,
-            gamma=gamma,
-            top_k=top_k,
-            preference_mode=preference_mode,
-            include_epistemic=include_epistemic,
-            epistemic_samples=epistemic_samples,
-            temperature=temperature,
-            verbose=verbose,
-        )
-
     def get_num_params(self, non_embedding: bool = True) -> int:
         """
         Return number of parameters.
@@ -1630,55 +1583,4 @@ class GaugeTransformerLM(nn.Module):
                     n_params -= self.token_embed.omega_embed.weight.numel()
 
         return n_params
-
-    # =========================================================================
-    # P-FLOW / DELTA RULE: backprop-free Hebbian learning
-    # =========================================================================
-    # The implementations live in ``transformer/core/hebbian.py``.  These
-    # methods are thin delegators kept on the model for backward
-    # compatibility with external callers (e.g. PublicationTrainer).
-    def p_flow_update(
-        self,
-        token_ids: torch.Tensor,
-        mu_beliefs: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        ema_decay: float = 0.99,
-        sigma_beliefs: Optional[torch.Tensor] = None,
-        pad_token_id: int = -100,
-    ) -> None:
-        """Thin delegator — see ``hebbian.p_flow_update_model``."""
-        from transformer.core.hebbian import p_flow_update_model
-        return p_flow_update_model(
-            self, token_ids, mu_beliefs, prediction_errors,
-            ema_decay=ema_decay, sigma_beliefs=sigma_beliefs,
-            pad_token_id=pad_token_id,
-        )
-
-    def phi_flow_update(
-        self,
-        token_ids: torch.Tensor,
-        phi_evolved: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        ema_decay: float = 0.99,
-        pad_token_id: int = -100,
-    ) -> None:
-        """Thin delegator — see ``hebbian.phi_flow_update_model``."""
-        from transformer.core.hebbian import phi_flow_update_model
-        return phi_flow_update_model(
-            self, token_ids, phi_evolved, prediction_errors,
-            ema_decay=ema_decay, pad_token_id=pad_token_id,
-        )
-
-    def delta_rule_update_w_out(
-        self,
-        mu_beliefs: torch.Tensor,
-        targets: torch.Tensor,
-        lr: float = 0.1,
-        pad_token_id: int = -100,
-    ) -> None:
-        """Thin delegator — see ``hebbian.delta_rule_update_w_out_model``."""
-        from transformer.core.hebbian import delta_rule_update_w_out_model
-        return delta_rule_update_w_out_model(
-            self, mu_beliefs, targets, lr=lr, pad_token_id=pad_token_id,
-        )
 

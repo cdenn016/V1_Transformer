@@ -715,54 +715,6 @@ class GaugeTokenEmbedding(nn.Module):
             f"use_positional_embedding={self.use_positional_embedding}"
         )
 
-    # =========================================================================
-    # P-FLOW: EMA update of token embeddings toward successful beliefs
-    # =========================================================================
-    # Implementations live in ``transformer/core/hebbian.py``.  These
-    # methods are thin delegators kept for backward compatibility with
-    # external callers (e.g. ``GaugeTransformerLM.p_flow_update``).
-    def _compute_pflow_weights(
-        self,
-        token_ids: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        pad_token_id: int = -100,
-    ) -> tuple:
-        """Thin delegator — see ``hebbian.compute_pflow_weights``."""
-        from transformer.core.hebbian import compute_pflow_weights
-        return compute_pflow_weights(token_ids, prediction_errors, pad_token_id)
-
-    def update_embeddings_from_beliefs(
-        self,
-        token_ids: torch.Tensor,
-        mu_beliefs: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        ema_decay: float = 0.99,
-        sigma_beliefs: Optional[torch.Tensor] = None,
-        pad_token_id: int = -100,
-    ):
-        """Thin delegator — see ``hebbian.update_embeddings_from_beliefs``."""
-        from transformer.core.hebbian import update_embeddings_from_beliefs
-        return update_embeddings_from_beliefs(
-            self, token_ids, mu_beliefs, prediction_errors,
-            ema_decay=ema_decay, sigma_beliefs=sigma_beliefs,
-            pad_token_id=pad_token_id,
-        )
-
-    def update_phi_from_beliefs(
-        self,
-        token_ids: torch.Tensor,
-        phi_evolved: torch.Tensor,
-        prediction_errors: torch.Tensor,
-        ema_decay: float = 0.99,
-        pad_token_id: int = -100,
-    ):
-        """Thin delegator — see ``hebbian.update_phi_from_beliefs``."""
-        from transformer.core.hebbian import update_phi_from_beliefs
-        return update_phi_from_beliefs(
-            self, token_ids, phi_evolved, prediction_errors,
-            ema_decay=ema_decay, pad_token_id=pad_token_id,
-        )
-
     def get_embedding_stats(self) -> dict:
         """Get statistics about embeddings for logging."""
         with torch.no_grad():
