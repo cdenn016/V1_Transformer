@@ -240,10 +240,6 @@ BASE_CONFIG = {
    
    'warmup_steps':                100,
    'num_workers':                 0,   # 0 is faster on Windows (spawn multiprocessing overhead)
-   
-   'use_amp':                     False, 
-   'use_compile':                 False,
-   'compile_mode':                'default',  # 'default', 'reduce-overhead', 'max-autotune'
 
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps

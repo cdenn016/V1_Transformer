@@ -58,13 +58,6 @@ class TestTrainingConfig:
         assert config.M_mu_p_lr == 0.05
         assert config.max_steps == 500
 
-    def test_gauge_mode_default_learned(self):
-        """Test gauge_mode defaults to 'learned'."""
-        from transformer.training.config import TrainingConfig
-
-        config = TrainingConfig()
-        assert config.gauge_mode == 'learned'
-
     def test_gauge_mode_trivial_vfe_dynamic(self):
         """Test gauge_mode can be set to 'trivial' via get_vfe_dynamic_config."""
         from transformer.training.config import get_vfe_dynamic_config

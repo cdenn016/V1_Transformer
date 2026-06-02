@@ -223,7 +223,6 @@ class VariationalFFNDynamic(nn.Module):
                                            # (enables fully backprop-free training with phi P-flow)
         learnable_head_kappa: bool =    False,# If True, learn per-head κ_h
         e_step_early_exit_tol: Optional[float] = None, # Relative change threshold for early E-step exit
-        compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
         alpha_divergence: float = 1.0,   # Renyi alpha-divergence parameter (1.0 = KL)
         enforce_orthogonal: bool = False,  # If True, project Omega to SO(K) via Newton-Schulz
@@ -613,22 +612,6 @@ class VariationalFFNDynamic(nn.Module):
         # vfe_utils.retract_spd_diagonal_torch default; full-cov path applies
         # an internal ×0.5 factor.
         self.e_step_sigma_trust = sigma_trust
-
-        # torch.compile the VFE iteration inner loop (Finding 25).
-        # Fuses small element-wise ops and reduces kernel launch overhead.
-        # Disabled by default because torch.compile adds compilation latency
-        # on the first forward pass and may interact with dynamic shapes.
-        # Uses mode='default' (not 'reduce-overhead') because _vfe_iteration has
-        # extensive Python control flow (multihead vs single-β, fused vs fallback,
-        # diagonal vs full cov) that is incompatible with CUDA graph capture.
-        self._compile_vfe = compile_vfe
-        if compile_vfe:
-            self._vfe_iteration = torch.compile(
-                self._vfe_iteration,
-                mode='default',
-                fullgraph=False,
-            )
-            logger.info("[VariationalFFNDynamic] torch.compile applied to _vfe_iteration")
 
     @property
     def lr(self) -> torch.Tensor:
@@ -2190,8 +2173,16 @@ class VariationalFFNDynamic(nn.Module):
         # frozen in value during E-step iterations. Earlier code allowed
         # _retract_phi to evolve phi_current here even when em_phi_mode='M_phi_p'
         # (silently violating the contract); excluded explicitly now.
+        # When the φ E-step step size is zero there is nothing to evolve:
+        # _compute_phi_grad would run a full compute_attention_weights pass plus a
+        # localized autograd.grad, and _retract_phi at step_size=0 is a value
+        # no-op. grad_phi is create_graph=False, so it carries no gradient to
+        # phi_embed either; skipping is gradient-equivalent (verified static +
+        # runtime, _verify_phi_gradient_equiv.py, 2026-06-02). Gate on phi_lr to
+        # save that per-iteration compute when E_phi_lr=0.
         if (self.update_phi_per_iteration and torch.is_grad_enabled()
                 and not _skip_phi_update
+                and self.phi_lr != 0
                 and self.em_phi_mode != 'M_phi_p'):
 
             if _use_omega:
@@ -2494,6 +2485,7 @@ class VariationalFFNDynamic(nn.Module):
         # when update_phi_per_iteration=False.
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
+                and self.phi_lr != 0
                 and self.gauge_mode not in ('trivial', 'constant')
                 and self.em_phi_mode != 'M_phi_p'):
 

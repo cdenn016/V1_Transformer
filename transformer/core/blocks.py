@@ -463,7 +463,6 @@ class GaugeTransformerBlock(nn.Module):
         self.diagonal_covariance = cfg.diagonal_covariance
 
         # Pure VFE mode flags
-        self.use_layernorm = cfg.use_layernorm
         self.norm_type = cfg.norm_type
         self.use_residual = cfg.use_residual
         # residual_type: 'additive' (default, matches the 71-PPL 2026-04-07
@@ -546,7 +545,6 @@ class GaugeTransformerBlock(nn.Module):
             detach_phi=cfg.detach_phi,
             learnable_head_kappa=cfg.learnable_head_kappa,
             e_step_early_exit_tol=getattr(cfg, 'e_step_early_exit_tol', None),
-            compile_vfe=cfg.compile_vfe,
             gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
             alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
             enforce_orthogonal=cfg.enforce_orthogonal,
@@ -826,7 +824,7 @@ class GaugeTransformerBlock(nn.Module):
             # E-step. kl_matrix stays None — the FFN does not retain per-
             # iteration KL for plotting and the standard heatmap consumer
             # needs only β.
-            if self.skip_attention and beta is None:
+            if beta is None:
                 beta = getattr(self.ffn, '_last_beta', None)
             return mu_q, sigma_q, phi_out, beta, kl_matrix
         return mu_q, sigma_q, phi_out

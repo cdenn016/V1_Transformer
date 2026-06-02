@@ -1968,7 +1968,6 @@ def run_single_experiment(
         # dropped, causing TrainingConfig defaults to override config values)
         lr_decay=config.get('lr_decay', 'linear'),
         min_lr_ratio=config.get('min_lr_ratio', 0.1),
-        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
 
         # CE loss handling (previously missing — values from config dict were silently
         # dropped at the dict→TrainingConfig boundary, falling back to dataclass defaults)
@@ -1978,12 +1977,6 @@ def run_single_experiment(
 
         # Gradient accumulation
         grad_accumulation_steps=config.get('grad_accumulation_steps', 1),
-
-        # AMP / torch.compile
-        use_amp=config.get('use_amp', False),
-        amp_dtype=config.get('amp_dtype', 'bfloat16'),
-        use_compile=config.get('use_compile', False),
-        compile_mode=config.get('compile_mode', 'default'),
 
         # Suppress FastTrainer init banner — compact summary below covers it
         quiet=True,
